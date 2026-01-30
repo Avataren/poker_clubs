@@ -31,13 +31,13 @@ struct TableBroadcast {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub(crate) struct ClubBroadcast {
+pub struct ClubBroadcast {
     club_id: String,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub(crate) struct GlobalBroadcast {
+pub struct GlobalBroadcast {
     event_type: String, // "club_created", "club_joined", etc.
 }
 
