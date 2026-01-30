@@ -119,22 +119,43 @@ Updated Flutter client to display new backend fields:
 - Top-up button respects format's `canTopUp` setting
 - Backwards compatible with default values
 
+### ✅ Commit 10: Implement Omaha Hand Evaluation
+**Files**: `backend/src/game/hand.rs`, `backend/src/game/variant.rs`
+
+Implemented proper Omaha hand evaluation (must use exactly 2 hole + 3 community cards):
+- Added `evaluate_omaha_hand()` function with combination generation
+- Added `combinations()` helper for generating k-combinations from a slice
+- Overrode `evaluate_hand()` in `OmahaHi` and `OmahaHiLo` variants
+- Added 4 new tests for Omaha evaluation (combinations, two-hole-cards rule, edge cases)
+- Added 1 new test for variant `evaluate_hand()` integration
+
+### ✅ Commit 11: Add API Endpoints for Variant/Format Table Creation
+**Files**: `backend/src/api/tables.rs`, `backend/src/game/format.rs`, `backend/src/game/mod.rs`, `backend/src/ws/handler.rs`, `backend/src/error.rs`
+
+Added REST API endpoints for creating tables with specific variants and formats:
+- Updated `POST /api/tables` to accept optional `variant_id` and `format_id` parameters
+- Added `GET /api/tables/variants` endpoint to list all available poker variants
+- Added `GET /api/tables/formats` endpoint to list all available game formats
+- Added `format_from_id()` and `available_formats()` factory functions
+- Added `create_table_with_options()` to GameServer for variant/format support
+- Added `BadRequest` error variant for validation errors
+
 ---
 
 ## Current Test Status
 
 ```
-running 41 tests
+running 46 tests
 - game::betting::tests (9 tests) ✅
 - game::deck::tests (5 tests) ✅
 - game::error::tests (2 tests) ✅
 - game::format::tests (4 tests) ✅
-- game::hand::tests (4 tests) ✅
+- game::hand::tests (8 tests) ✅   <- 4 NEW (Omaha evaluation)
 - game::pot::tests (4 tests) ✅
-- game::table::tests (8 tests) ✅   <- 3 NEW
-- game::variant::tests (5 tests) ✅
+- game::table::tests (8 tests) ✅
+- game::variant::tests (6 tests) ✅ <- 1 NEW (Omaha evaluate_hand)
 
-test result: ok. 41 passed; 0 failed
+test result: ok. 46 passed; 0 failed
 ```
 
 ---
@@ -152,7 +173,8 @@ Tasks:
 4. ~~Update hand evaluation to use `variant.evaluate_hand()`~~ ✅
 5. ~~Update Flutter client for new fields~~ ✅
 6. Replace inline betting logic with `BettingEngine` (optional - current code works)
-7. Implement Omaha-specific hand evaluation (must use 2 hole + 3 community)
+7. ~~Implement Omaha-specific hand evaluation (must use 2 hole + 3 community)~~ ✅
+8. ~~Add API endpoint to create tables with different variants/formats~~ ✅
 
 ### Phase 2: Actor Model for Table Management
 
@@ -297,9 +319,11 @@ To pick up refactoring from here:
 1. **Run backend tests**: `cd backend && cargo test`
 2. **Run Flutter analyzer**: `cd poker_client && flutter analyze`
 3. **Next tasks**:
-   - Implement Omaha hand evaluation (must use exactly 2 hole + 3 community)
-   - Add API endpoint to create tables with different variants/formats
+   - ~~Implement Omaha hand evaluation (must use exactly 2 hole + 3 community)~~ ✅
+   - ~~Add API endpoint to create tables with different variants/formats~~ ✅
    - Implement SNG tournament flow (registration → play → payout)
+   - Update Flutter client to use new variant/format API endpoints
+   - Add table creation UI with variant/format selection
 
 The new infrastructure modules have comprehensive tests. When integrating, ensure existing tests continue to pass while adding new tests for variant-specific behavior.
 
