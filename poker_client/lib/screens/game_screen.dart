@@ -213,13 +213,15 @@ class _GameScreenState extends State<GameScreen> {
     final isMyTurn =
         myPlayer != null && _gameState?.currentPlayer?.userId == myUserId;
     final isShowdown = _gameState?.phase == 'showdown';
+    final canTopUp = _gameState?.canTopUp ?? true;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.table.name),
         backgroundColor: Colors.green[800],
         actions: [
-          if (_isSeated && myPlayer != null && myPlayer.stack < 10000)
+          // Only show top-up button if format allows it
+          if (_isSeated && canTopUp && myPlayer != null && myPlayer.stack < 10000)
             IconButton(
               icon: const Icon(Icons.add_circle),
               tooltip: 'Top Up',
@@ -251,16 +253,30 @@ class _GameScreenState extends State<GameScreen> {
         ),
         child: Column(
           children: [
-            // Phase indicator
+            // Phase and game type indicator
             Container(
               padding: const EdgeInsets.all(8),
-              child: Text(
-                _gameState?.phase.toUpperCase() ?? 'WAITING',
-                style: const TextStyle(
-                  color: Colors.amber,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
+              child: Column(
+                children: [
+                  // Variant and format info
+                  if (_gameState != null)
+                    Text(
+                      _gameState!.gameTypeDescription,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 14,
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _gameState?.phase.toUpperCase() ?? 'WAITING',
+                    style: const TextStyle(
+                      color: Colors.amber,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
               ),
             ),
 
