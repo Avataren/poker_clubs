@@ -33,9 +33,9 @@ class TableSeatWidget extends StatelessWidget {
   });
 
   bool get _hasCards {
-    return player != null && 
-           player!.holeCards != null && 
-           player!.holeCards!.isNotEmpty;
+    return player != null &&
+        player!.holeCards != null &&
+        player!.holeCards!.isNotEmpty;
   }
 
   bool get _shouldShowCards {
@@ -174,25 +174,32 @@ class TableSeatWidget extends StatelessWidget {
                 bottom: -4,
                 left: -4,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: isDealer
                         ? Colors.white
                         : isSmallBlind
-                            ? Colors.blue[700]
-                            : Colors.orange[700],
+                        ? Colors.blue[700]
+                        : Colors.orange[700],
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: isDealer
                           ? Colors.black54
                           : isSmallBlind
-                              ? Colors.blue[900]!
-                              : Colors.orange[900]!,
+                          ? Colors.blue[900]!
+                          : Colors.orange[900]!,
                       width: 1,
                     ),
                   ),
                   child: Text(
-                    isDealer ? 'D' : isSmallBlind ? 'SB' : 'BB',
+                    isDealer
+                        ? 'D'
+                        : isSmallBlind
+                        ? 'SB'
+                        : 'BB',
                     style: TextStyle(
                       color: isDealer ? Colors.black : Colors.white,
                       fontSize: 9,

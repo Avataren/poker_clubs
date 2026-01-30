@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_clubs_admin ON clubs(admin_id);
 CREATE TABLE IF NOT EXISTS club_members (
     club_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    balance INTEGER NOT NULL DEFAULT 0, -- stored in smallest unit (cents)
+    balance INTEGER NOT NULL DEFAULT 0,
     joined_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (club_id, user_id),
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE,
@@ -46,8 +46,6 @@ CREATE TABLE IF NOT EXISTS tables (
     min_buyin INTEGER NOT NULL,
     max_buyin INTEGER NOT NULL,
     max_players INTEGER NOT NULL CHECK (max_players >= 2 AND max_players <= 9),
-    variant_id TEXT NOT NULL DEFAULT 'holdem',
-    format_id TEXT NOT NULL DEFAULT 'cash',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
 );
@@ -61,13 +59,13 @@ CREATE TABLE IF NOT EXISTS table_sessions (
     user_id TEXT NOT NULL,
     club_id TEXT NOT NULL,
     seat_number INTEGER NOT NULL CHECK (seat_number >= 0 AND seat_number < 9),
-    stack INTEGER NOT NULL, -- current chip stack
+    stack INTEGER NOT NULL,
     joined_at TEXT NOT NULL DEFAULT (datetime('now')),
     left_at TEXT,
     FOREIGN KEY (table_id) REFERENCES tables(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE,
-    UNIQUE (table_id, seat_number) -- only one player per seat
+    UNIQUE (table_id, seat_number)
 );
 
 CREATE INDEX IF NOT EXISTS idx_table_sessions_table ON table_sessions(table_id);

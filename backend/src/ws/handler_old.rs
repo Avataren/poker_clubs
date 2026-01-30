@@ -80,18 +80,29 @@ impl GameServer {
 
     // Load table from database into memory
     async fn load_table_from_db(&self, table_id: &str) -> Result<(), String> {
-        // Query database for table
-        let table_data: Option<(String, String, String, i64, i64)> = sqlx::query_as(
-            "SELECT id, club_id, name, small_blind, big_blind FROM tables WHERE id = ?",
+        // Query database for table with variant and format
+        let table_data: Option<(String, String, String, i64, i64, String, String)> = sqlx::query_as(
+            "SELECT id, club_id, name, small_blind, big_blind, variant_id, format_id FROM tables WHERE id = ?",
         )
         .bind(table_id)
         .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| format!("Database error: {}", e))?;
 
-        if let Some((id, _club_id, name, small_blind, big_blind)) = table_data {
-            // Create in-memory table
-            let table = PokerTable::new(id.clone(), name, small_blind, big_blind);
+        if let Some((id, _club_id, name, small_blind, big_blind, variant_id, _format_id)) = table_data {
+            // Get the variant from ID (default to holdem if not found)
+            let variant = crate::game::variant_from_id(&variant_id)
+                .ok_or_else(|| format!("Unknown variant: {}", variant_id))?;
+            
+            // Create in-memory table with the correct variant
+            let table = PokerTable::with_variant(
+                id.clone(),
+                name,
+                small_blind,
+                big_blind,
+                9, // DEFAULT_MAX_SEATS
+                variant,
+            );
             self.tables.write().await.insert(id.clone(), table);
 
             // Create broadcast channel for this table
