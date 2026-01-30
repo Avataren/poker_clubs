@@ -858,6 +858,23 @@ impl PokerTable {
             format_name: self.format.name().to_string(),
             can_cash_out: self.format.can_cash_out(),
             can_top_up: self.format.can_top_up(),
+            dealer_seat: if self.phase != GamePhase::Waiting && !self.players.is_empty() {
+                Some(self.players[self.dealer_seat].seat)
+            } else {
+                None
+            },
+            small_blind_seat: if self.phase != GamePhase::Waiting && self.players.len() >= 2 {
+                let sb_idx = (self.dealer_seat + 1) % self.players.len();
+                Some(self.players[sb_idx].seat)
+            } else {
+                None
+            },
+            big_blind_seat: if self.phase != GamePhase::Waiting && self.players.len() >= 2 {
+                let bb_idx = (self.dealer_seat + 2) % self.players.len();
+                Some(self.players[bb_idx].seat)
+            } else {
+                None
+            },
         }
     }
 }
@@ -881,6 +898,9 @@ pub struct PublicTableState {
     pub max_seats: usize,
     pub last_winner_message: Option<String>,
     pub winning_hand: Option<String>,
+    pub dealer_seat: Option<usize>,
+    pub small_blind_seat: Option<usize>,
+    pub big_blind_seat: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

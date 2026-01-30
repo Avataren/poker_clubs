@@ -357,6 +357,9 @@ class _GameScreenState extends State<GameScreen> {
                             showingDown: isShowdown,
                             gamePhase: _gameState!.phase,
                             winningHand: _gameState!.winningHand,
+                            dealerSeat: _gameState!.dealerSeat,
+                            smallBlindSeat: _gameState!.smallBlindSeat,
+                            bigBlindSeat: _gameState!.bigBlindSeat,
                           ),
 
                           // Table center overlay (pot and community cards)

@@ -13,6 +13,9 @@ class TableSeatWidget extends StatelessWidget {
   final VoidCallback? onRemoveBot;
   final bool showingDown;
   final String? winningHand;
+  final bool isDealer;
+  final bool isSmallBlind;
+  final bool isBigBlind;
 
   const TableSeatWidget({
     super.key,
@@ -24,6 +27,9 @@ class TableSeatWidget extends StatelessWidget {
     this.onRemoveBot,
     this.showingDown = false,
     this.winningHand,
+    this.isDealer = false,
+    this.isSmallBlind = false,
+    this.isBigBlind = false,
   });
 
   bool get _shouldShowCards {
@@ -170,6 +176,40 @@ class TableSeatWidget extends StatelessWidget {
               ),
             ),
 
+            // Dealer / Blind badge
+            if (!isEmpty && (isDealer || isSmallBlind || isBigBlind))
+              Positioned(
+                bottom: -4,
+                left: -4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isDealer
+                        ? Colors.white
+                        : isSmallBlind
+                            ? Colors.blue[700]
+                            : Colors.orange[700],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isDealer
+                          ? Colors.black54
+                          : isSmallBlind
+                              ? Colors.blue[900]!
+                              : Colors.orange[900]!,
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(
+                    isDealer ? 'D' : isSmallBlind ? 'SB' : 'BB',
+                    style: TextStyle(
+                      color: isDealer ? Colors.black : Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+
             // Bot indicator
             if (player != null && player!.isBot)
               Positioned(
@@ -283,6 +323,9 @@ class PokerTableWidget extends StatelessWidget {
   final bool showingDown;
   final String gamePhase;
   final String? winningHand;
+  final int? dealerSeat;
+  final int? smallBlindSeat;
+  final int? bigBlindSeat;
 
   const PokerTableWidget({
     super.key,
@@ -295,6 +338,9 @@ class PokerTableWidget extends StatelessWidget {
     this.showingDown = false,
     this.gamePhase = 'waiting',
     this.winningHand,
+    this.dealerSeat,
+    this.smallBlindSeat,
+    this.bigBlindSeat,
   });
 
   @override
@@ -396,6 +442,9 @@ class PokerTableWidget extends StatelessWidget {
             : null,
         showingDown: showingDown,
         winningHand: winningHand,
+        isDealer: dealerSeat == seatIndex,
+        isSmallBlind: smallBlindSeat == seatIndex,
+        isBigBlind: bigBlindSeat == seatIndex,
       ),
     );
   }

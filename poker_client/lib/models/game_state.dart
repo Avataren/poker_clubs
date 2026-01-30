@@ -19,6 +19,9 @@ class GameState {
   final int maxSeats;
   final String? lastWinnerMessage;
   final String? winningHand;
+  final int? dealerSeat;
+  final int? smallBlindSeat;
+  final int? bigBlindSeat;
 
   GameState({
     required this.tableId,
@@ -38,6 +41,9 @@ class GameState {
     required this.maxSeats,
     this.lastWinnerMessage,
     this.winningHand,
+    this.dealerSeat,
+    this.smallBlindSeat,
+    this.bigBlindSeat,
   });
 
   factory GameState.fromJson(Map<String, dynamic> json) {
@@ -63,6 +69,9 @@ class GameState {
       maxSeats: json['max_seats'] as int? ?? 9,
       lastWinnerMessage: json['last_winner_message'] as String?,
       winningHand: json['winning_hand'] as String?,
+      dealerSeat: json['dealer_seat'] as int?,
+      smallBlindSeat: json['small_blind_seat'] as int?,
+      bigBlindSeat: json['big_blind_seat'] as int?,
     );
   }
 
