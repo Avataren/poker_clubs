@@ -767,3 +767,79 @@ pub struct PublicPlayerState {
     pub hole_cards: Option<Vec<Card>>, // Only visible to the player themselves
     pub is_winner: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::variant::{OmahaHi, variant_from_id};
+
+    #[test]
+    fn test_table_default_variant() {
+        let table = PokerTable::new(
+            "t1".to_string(),
+            "Test Table".to_string(),
+            5,
+            10,
+        );
+        assert_eq!(table.variant_id(), "holdem");
+        assert_eq!(table.variant_name(), "Texas Hold'em");
+    }
+
+    #[test]
+    fn test_table_with_omaha_variant() {
+        let table = PokerTable::with_variant(
+            "t2".to_string(),
+            "Omaha Table".to_string(),
+            5,
+            10,
+            9,
+            Box::new(OmahaHi),
+        );
+        assert_eq!(table.variant_id(), "omaha");
+        assert_eq!(table.variant_name(), "Omaha");
+    }
+
+    #[test]
+    fn test_table_with_variant_factory() {
+        let variant = variant_from_id("omaha_hilo").expect("Should find variant");
+        let table = PokerTable::with_variant(
+            "t3".to_string(),
+            "Omaha Hi-Lo Table".to_string(),
+            5,
+            10,
+            9,
+            variant,
+        );
+        assert_eq!(table.variant_id(), "omaha_hilo");
+    }
+
+    #[test]
+    fn test_public_state_includes_variant() {
+        let table = PokerTable::with_variant(
+            "t4".to_string(),
+            "Test".to_string(),
+            5,
+            10,
+            6,
+            Box::new(OmahaHi),
+        );
+        let state = table.get_public_state(None);
+        assert_eq!(state.variant_id, "omaha");
+        assert_eq!(state.variant_name, "Omaha");
+    }
+
+    #[test]
+    fn test_table_clone_preserves_variant() {
+        let table = PokerTable::with_variant(
+            "t5".to_string(),
+            "Clone Test".to_string(),
+            5,
+            10,
+            9,
+            Box::new(OmahaHi),
+        );
+        let cloned = table.clone();
+        assert_eq!(cloned.variant_id(), "omaha");
+        assert_eq!(cloned.variant_name(), "Omaha");
+    }
+}

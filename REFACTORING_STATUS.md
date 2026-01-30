@@ -85,39 +85,54 @@ Created abstraction for game structures:
 ### ✅ Commit 6: Clean Up Warnings
 Added appropriate `#[allow(dead_code)]` attributes to new infrastructure modules and pre-existing code designed for future features. Fixed visibility issues. Result: **zero compiler warnings**.
 
+### ✅ Commit 7: Integrate PokerVariant into PokerTable
+**Files**: `backend/src/game/table.rs`, `backend/src/game/variant.rs`, `backend/src/game/mod.rs`
+
+Wired the `PokerVariant` trait into the main game loop:
+- Added `clone_box()` and `Debug` to `PokerVariant` trait for trait object support
+- Added `variant: Box<dyn PokerVariant>` field to `PokerTable`
+- New constructor `with_variant()` to create tables with specific variants
+- Updated `deal_hole_cards()` to use `variant.hole_cards_count()`
+- Updated `resolve_showdown()` to use `variant.evaluate_hand()`
+- Added `variant_id` and `variant_name` to `PublicTableState` for clients
+- Exported variant types from `game/mod.rs`
+- Added 5 new tests for variant integration
+
 ---
 
 ## Current Test Status
 
 ```
-running 33 tests
+running 38 tests
 - game::betting::tests (9 tests) ✅
 - game::deck::tests (5 tests) ✅
 - game::error::tests (2 tests) ✅
 - game::format::tests (4 tests) ✅
 - game::hand::tests (4 tests) ✅
 - game::pot::tests (4 tests) ✅
+- game::table::tests (5 tests) ✅   <- NEW
 - game::variant::tests (5 tests) ✅
 
-test result: ok. 33 passed; 0 failed
+test result: ok. 38 passed; 0 failed
 ```
 
 ---
 
 ## Future Refactoring Goals
 
-### Phase 1: Integrate New Infrastructure into PokerTable
+### Phase 1: Integrate New Infrastructure into PokerTable (IN PROGRESS)
 
 **Priority: HIGH**
 
-The new modules (BettingEngine, PokerVariant, GameFormat) are built but not yet wired into the main `PokerTable`. This is the next step.
+~~The new modules (BettingEngine, PokerVariant, GameFormat) are built but not yet wired into the main `PokerTable`. This is the next step.~~
 
 Tasks:
-1. Add `PokerVariant` field to `PokerTable`
+1. ~~Add `PokerVariant` field to `PokerTable`~~ ✅
 2. Replace inline betting logic with `BettingEngine`
 3. Add `GameFormat` to control game rules
-4. Update `deal_hole_cards()` to use `variant.hole_cards_count()`
-5. Update hand evaluation to respect `HandRequirements`
+4. ~~Update `deal_hole_cards()` to use `variant.hole_cards_count()`~~ ✅
+5. ~~Update hand evaluation to respect `HandRequirements`~~ ✅ (via `variant.evaluate_hand()`)
+6. Implement Omaha-specific hand evaluation (must use 2 hole + 3 community)
 
 ### Phase 2: Actor Model for Table Management
 
@@ -261,7 +276,7 @@ To pick up refactoring from here:
 
 1. **Run tests**: `cd backend && cargo test`
 2. **Check warnings**: `cargo check 2>&1 | grep warning`
-3. **Next task**: Integrate `PokerVariant` into `PokerTable.new()`
+3. **Next task**: Integrate `BettingEngine` into `PokerTable` or implement Omaha hand evaluation
 
 The new infrastructure modules have comprehensive tests. When integrating, ensure existing tests continue to pass while adding new tests for variant-specific behavior.
 
