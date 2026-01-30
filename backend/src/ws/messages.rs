@@ -1,0 +1,35 @@
+use crate::game::{PlayerAction, PublicTableState};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum ClientMessage {
+    // Screen subscriptions
+    ViewingClubsList,
+    ViewingClub { club_id: String },
+    LeavingView,
+
+    // Table actions
+    JoinTable { table_id: String, buyin: i64 },
+    TakeSeat { table_id: String, seat: usize, buyin: i64 },
+    LeaveTable,
+    StandUp,
+    TopUp { amount: i64 },
+    PlayerAction { action: PlayerAction },
+    GetTableState,
+    Ping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum ServerMessage {
+    Connected,
+    TableState(PublicTableState),
+    PlayerJoined { username: String, seat: usize },
+    PlayerLeft { username: String },
+    ActionRequired { your_turn: bool },
+    Error { message: String },
+    Pong,
+    ClubUpdate,
+    GlobalUpdate,
+}

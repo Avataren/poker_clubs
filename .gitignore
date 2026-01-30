@@ -1,0 +1,107 @@
+# Rust/Cargo (backend)
+backend/target/
+backend/**/*.rs.bk
+backend/Cargo.lock
+
+# Flutter/Dart (poker_client)
+poker_client/.dart_tool/
+poker_client/.flutter-plugins
+poker_client/.flutter-plugins-dependencies
+poker_client/.packages
+poker_client/.pub-cache/
+poker_client/.pub/
+poker_client/build/
+poker_client/.idea/
+poker_client/*.iml
+
+# iOS
+poker_client/ios/Pods/
+poker_client/ios/.symlinks/
+poker_client/ios/Flutter/Flutter.framework
+poker_client/ios/Flutter/Flutter.podspec
+poker_client/ios/.generated/
+poker_client/ios/Runner.xcworkspace/xcshareddata/
+
+# Android
+poker_client/android/.gradle/
+poker_client/android/app/build/
+poker_client/android/app/src/main/java/io/flutter/plugins/
+poker_client/android/local.properties
+poker_client/android/gradle/
+poker_client/android/.idea/
+
+# macOS
+poker_client/macos/Pods/
+poker_client/macos/.symlinks/
+poker_client/macos/Flutter/ephemeral/
+
+# Linux
+poker_client/linux/flutter/ephemeral/
+
+# Windows
+poker_client/windows/flutter/ephemeral/
+
+# Web
+poker_client/.dart_tool/
+poker_client/web/firebase-debug.log
+
+# IDE - VSCode
+.vscode/
+.history/
+
+# IDE - IntelliJ/Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+.gradle/
+local.properties
+
+# IDE - Fleet
+.fleet/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.swp
+*.swo
+*~
+.tmp/
+temp/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.backup
+*.bak
+*.old
+backend/src/game/*.backup*
+backend/src/ws/*.old
+
+# Client old files
+client/
+
+# Test coverage
+coverage/
