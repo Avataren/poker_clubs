@@ -39,5 +39,5 @@ pub use variant::{
 pub use format::{
     GameFormat, CashGame, SitAndGo, MultiTableTournament,
     FormatConfig, BlindLevel, BlindSchedule, PrizeStructure,
-    TournamentStatus,
+    TournamentStatus, format_from_id, available_formats,
 };

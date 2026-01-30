@@ -2,7 +2,11 @@ use crate::{
     auth::{AuthUser, JwtManager},
     db::models::Table,
     error::Result,
-    game::constants::{DEFAULT_MAX_SEATS, DEFAULT_MAX_BUYIN_BB, DEFAULT_MIN_BUYIN_BB},
+    game::{
+        constants::{DEFAULT_MAX_SEATS, DEFAULT_MAX_BUYIN_BB, DEFAULT_MIN_BUYIN_BB},
+        variant_from_id, available_variants,
+        format::{format_from_id, available_formats},
+    },
     ws::GameServer,
 };
 use axum::{
@@ -26,6 +30,10 @@ pub struct CreateTableRequest {
     pub name: String,
     pub small_blind: i64,
     pub big_blind: i64,
+    /// Optional variant ID (default: "holdem")
+    pub variant_id: Option<String>,
+    /// Optional format ID (default: "cash")
+    pub format_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,10 +41,36 @@ pub struct TableListResponse {
     pub tables: Vec<Table>,
 }
 
+/// Response for available game variants
+#[derive(Debug, Serialize)]
+pub struct VariantsResponse {
+    pub variants: Vec<VariantInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VariantInfo {
+    pub id: String,
+    pub name: String,
+}
+
+/// Response for available game formats
+#[derive(Debug, Serialize)]
+pub struct FormatsResponse {
+    pub formats: Vec<FormatInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FormatInfo {
+    pub id: String,
+    pub name: String,
+}
+
 pub fn router() -> Router<Arc<TableAppState>> {
     Router::new()
         .route("/", post(create_table))
         .route("/club/:club_id", get(list_tables))
+        .route("/variants", get(list_variants))
+        .route("/formats", get(list_formats))
 }
 
 async fn create_table(
@@ -48,6 +82,17 @@ async fn create_table(
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let _auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    // Get variant (default to Texas Hold'em)
+    let variant_id = req.variant_id.as_deref().unwrap_or("holdem");
+    let variant = variant_from_id(variant_id)
+        .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown variant: {}", variant_id)))?;
+
+    // Get format (default to Cash Game)
+    let format_id = req.format_id.as_deref().unwrap_or("cash");
+    let format = format_from_id(format_id, req.small_blind, req.big_blind, DEFAULT_MAX_SEATS)
+        .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown format: {}", format_id)))?;
+
     let table = Table::new(
         req.club_id,
         req.name.clone(),
@@ -75,18 +120,57 @@ async fn create_table(
     .execute(&state.pool)
     .await?;
 
-    // Create in-memory game table
-    state.game_server.create_table(
+    // Create in-memory game table with variant and format
+    state.game_server.create_table_with_options(
         table.id.clone(),
         req.name,
         req.small_blind,
         req.big_blind,
+        variant,
+        format,
     ).await;
 
     // Notify all users viewing this club that a new table was created
     state.game_server.notify_club(&table.club_id).await;
 
     Ok(Json(table))
+}
+
+/// List all available poker variants
+async fn list_variants() -> Json<VariantsResponse> {
+    let variants: Vec<VariantInfo> = available_variants()
+        .into_iter()
+        .filter_map(|id| {
+            variant_from_id(id).map(|v| VariantInfo {
+                id: id.to_string(),
+                name: v.name().to_string(),
+            })
+        })
+        .collect();
+    
+    Json(VariantsResponse { variants })
+}
+
+/// List all available game formats
+async fn list_formats() -> Json<FormatsResponse> {
+    let formats: Vec<FormatInfo> = available_formats()
+        .into_iter()
+        .map(|id| {
+            // Create a dummy format to get its name
+            let name = match id {
+                "cash" => "Cash Game",
+                "sng" => "Sit & Go",
+                "mtt" => "Multi-Table Tournament",
+                _ => id,
+            };
+            FormatInfo {
+                id: id.to_string(),
+                name: name.to_string(),
+            }
+        })
+        .collect();
+    
+    Json(FormatsResponse { formats })
 }
 
 async fn list_tables(

@@ -477,6 +477,33 @@ impl GameFormat for MultiTableTournament {
     }
 }
 
+/// Factory function to create a format from its ID
+/// Note: SNG and MTT require specific parameters, so this creates with defaults
+/// For cash games, caller should typically use CashGame::new() directly with blinds
+pub fn format_from_id(id: &str, small_blind: i64, big_blind: i64, max_seats: usize) -> Option<Box<dyn GameFormat>> {
+    match id {
+        "cash" => Some(Box::new(CashGame::new(small_blind, big_blind, max_seats))),
+        "sng" => Some(Box::new(SitAndGo::new(
+            big_blind * 100,  // Default buy-in = 100 big blinds
+            big_blind * 100,  // Starting stack = buy-in
+            max_seats,
+            300,              // 5 minute levels
+        ))),
+        "mtt" => Some(Box::new(MultiTableTournament::new(
+            "Tournament".to_string(),
+            big_blind * 100,
+            big_blind * 100,
+            600,              // 10 minute levels
+        ))),
+        _ => None,
+    }
+}
+
+/// Get all available format IDs
+pub fn available_formats() -> Vec<&'static str> {
+    vec!["cash", "sng", "mtt"]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

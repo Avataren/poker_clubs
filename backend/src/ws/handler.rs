@@ -1,6 +1,10 @@
 use crate::{
     auth::JwtManager,
-    game::{constants::BROADCAST_CHANNEL_CAPACITY, PokerTable},
+    game::{
+        constants::BROADCAST_CHANNEL_CAPACITY,
+        PokerTable, PokerVariant, GameFormat,
+        constants::DEFAULT_MAX_SEATS,
+    },
     ws::messages::{ClientMessage, ServerMessage},
 };
 use axum::{
@@ -98,8 +102,35 @@ impl GameServer {
         }
     }
 
+    #[allow(dead_code)] // Keep for backwards compatibility, new code uses create_table_with_options
     pub async fn create_table(&self, table_id: String, name: String, small_blind: i64, big_blind: i64) {
         let table = PokerTable::new(table_id.clone(), name, small_blind, big_blind);
+        self.tables.write().await.insert(table_id.clone(), table);
+
+        // Create broadcast channel for this table
+        let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+        self.table_broadcasts.write().await.insert(table_id, tx);
+    }
+
+    /// Create a table with a specific variant and format
+    pub async fn create_table_with_options(
+        &self,
+        table_id: String,
+        name: String,
+        small_blind: i64,
+        big_blind: i64,
+        variant: Box<dyn PokerVariant>,
+        format: Box<dyn GameFormat>,
+    ) {
+        let table = PokerTable::with_variant_and_format(
+            table_id.clone(),
+            name,
+            small_blind,
+            big_blind,
+            DEFAULT_MAX_SEATS,
+            variant,
+            format,
+        );
         self.tables.write().await.insert(table_id.clone(), table);
 
         // Create broadcast channel for this table

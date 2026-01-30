@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("Invalid input: {0}")]
     Validation(String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
     #[allow(dead_code)] // Prepared for future API endpoints
     #[error("Not found: {0}")]
     NotFound(String),
@@ -41,6 +44,7 @@ impl IntoResponse for AppError {
             }
             AppError::Auth(ref msg) => (StatusCode::UNAUTHORIZED, msg.as_str()),
             AppError::Validation(ref msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
+            AppError::BadRequest(ref msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
             AppError::NotFound(ref msg) => (StatusCode::NOT_FOUND, msg.as_str()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "Forbidden"),
