@@ -10,6 +10,7 @@ class TableSeatWidget extends StatelessWidget {
   final bool isCurrentTurn;
   final bool isMe;
   final VoidCallback? onTakeSeat;
+  final VoidCallback? onRemoveBot;
   final bool showingDown;
   final String? winningHand;
 
@@ -20,6 +21,7 @@ class TableSeatWidget extends StatelessWidget {
     this.isCurrentTurn = false,
     this.isMe = false,
     this.onTakeSeat,
+    this.onRemoveBot,
     this.showingDown = false,
     this.winningHand,
   });
@@ -88,6 +90,9 @@ class TableSeatWidget extends StatelessWidget {
             // Seat circle
             GestureDetector(
               onTap: isEmpty ? onTakeSeat : null,
+              onLongPress: (!isEmpty && player!.isBot && onRemoveBot != null)
+                  ? onRemoveBot
+                  : null,
               child: Container(
                 width: 80,
                 height: 80,
@@ -165,6 +170,26 @@ class TableSeatWidget extends StatelessWidget {
               ),
             ),
 
+            // Bot indicator
+            if (player != null && player!.isBot)
+              Positioned(
+                top: -4,
+                right: -4,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[800],
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white54, width: 1),
+                  ),
+                  child: const Icon(
+                    Icons.smart_toy,
+                    size: 12,
+                    color: Colors.white70,
+                  ),
+                ),
+              ),
+
             // Winner badge overlay (on top of circle)
             if (player != null && player!.isWinner && showingDown)
               Positioned(
@@ -222,6 +247,27 @@ class TableSeatWidget extends StatelessWidget {
               ),
             ),
           ),
+
+        // Last action indicator
+        if (!isEmpty && player!.lastAction != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                player!.lastAction!,
+                style: const TextStyle(
+                  color: Colors.amber,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -233,6 +279,7 @@ class PokerTableWidget extends StatelessWidget {
   final int currentPlayerSeat;
   final String? myUserId;
   final Function(int)? onTakeSeat;
+  final Function(String)? onRemoveBot;
   final bool showingDown;
   final String gamePhase;
   final String? winningHand;
@@ -244,6 +291,7 @@ class PokerTableWidget extends StatelessWidget {
     required this.currentPlayerSeat,
     this.myUserId,
     this.onTakeSeat,
+    this.onRemoveBot,
     this.showingDown = false,
     this.gamePhase = 'waiting',
     this.winningHand,
@@ -342,6 +390,9 @@ class PokerTableWidget extends StatelessWidget {
         isMe: isMe,
         onTakeSeat: player == null && onTakeSeat != null
             ? () => onTakeSeat!(seatIndex)
+            : null,
+        onRemoveBot: player != null && player.isBot && onRemoveBot != null
+            ? () => onRemoveBot!(player.userId)
             : null,
         showingDown: showingDown,
         winningHand: winningHand,

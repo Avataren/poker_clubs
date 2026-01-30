@@ -50,6 +50,16 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Spawn background task for bot actions (check every 500ms)
+    let game_server_bots = game_server.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            game_server_bots.check_bot_actions().await;
+        }
+    });
+
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.server_addr()).await?;
     tracing::info!("Server listening on {}", config.server_addr());

@@ -18,6 +18,10 @@ pub enum ClientMessage {
     PlayerAction { action: PlayerAction },
     GetTableState,
     Ping,
+
+    // Bot management
+    AddBot { table_id: String, name: Option<String>, strategy: Option<String> },
+    RemoveBot { table_id: String, bot_user_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

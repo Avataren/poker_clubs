@@ -1,29 +1,40 @@
 use crate::game::deck::Card;
-use rs_poker::core::{Hand, Rankable};
+use rs_poker::core::{Hand, Rank as RsRank, Rankable};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandRank {
     pub rank_value: i32,
+    /// Sub-rank within the hand category for proper comparison
+    /// (e.g., AAQQ vs AA66 within TwoPair)
+    sub_rank: u32,
     pub description: String,
     pub best_cards: Vec<Card>,  // The 5 cards that make up the best hand
 }
 
+/// Equality is based on hand strength only (rank_value + sub_rank),
+/// not on which specific cards/suits are used.
+impl PartialEq for HandRank {
+    fn eq(&self, other: &Self) -> bool {
+        self.rank_value == other.rank_value && self.sub_rank == other.sub_rank
+    }
+}
+
+impl Eq for HandRank {}
+
 impl HandRank {
     pub fn from_hand(hand: &Hand) -> Self {
-        use rs_poker::core::Rank as RsRank;
-
         let rs_rank = hand.rank();
-        let (rank_value, description) = match rs_rank {
-            RsRank::HighCard(_) => (0, "High Card"),
-            RsRank::OnePair(_) => (1, "Pair"),
-            RsRank::TwoPair(_) => (2, "Two Pair"),
-            RsRank::ThreeOfAKind(_) => (3, "Three of a Kind"),
-            RsRank::Straight(_) => (4, "Straight"),
-            RsRank::Flush(_) => (5, "Flush"),
-            RsRank::FullHouse(_) => (6, "Full House"),
-            RsRank::FourOfAKind(_) => (7, "Four of a Kind"),
-            RsRank::StraightFlush(_) => (8, "Straight Flush"),
+        let (rank_value, sub_rank, description) = match &rs_rank {
+            RsRank::HighCard(v) => (0, *v, "High Card"),
+            RsRank::OnePair(v) => (1, *v, "Pair"),
+            RsRank::TwoPair(v) => (2, *v, "Two Pair"),
+            RsRank::ThreeOfAKind(v) => (3, *v, "Three of a Kind"),
+            RsRank::Straight(v) => (4, *v, "Straight"),
+            RsRank::Flush(v) => (5, *v, "Flush"),
+            RsRank::FullHouse(v) => (6, *v, "Full House"),
+            RsRank::FourOfAKind(v) => (7, *v, "Four of a Kind"),
+            RsRank::StraightFlush(v) => (8, *v, "Straight Flush"),
         };
 
         // Get the best 5 cards from the hand
@@ -34,6 +45,7 @@ impl HandRank {
 
         Self {
             rank_value,
+            sub_rank,
             description: description.to_string(),
             best_cards,
         }
@@ -49,6 +61,7 @@ impl PartialOrd for HandRank {
 impl Ord for HandRank {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.rank_value.cmp(&other.rank_value)
+            .then_with(|| self.sub_rank.cmp(&other.sub_rank))
     }
 }
 
@@ -192,9 +205,9 @@ mod tests {
     fn test_determine_winners_single() {
         // Higher rank_value means better hand
         let hands = vec![
-            (0, HandRank { rank_value: 5000, description: "Three of a Kind".to_string(), best_cards: vec![] }),
-            (1, HandRank { rank_value: 1000, description: "Pair".to_string(), best_cards: vec![] }),
-            (2, HandRank { rank_value: 3000, description: "Two Pair".to_string(), best_cards: vec![] }),
+            (0, HandRank { rank_value: 3, sub_rank: 0, description: "Three of a Kind".to_string(), best_cards: vec![] }),
+            (1, HandRank { rank_value: 1, sub_rank: 0, description: "Pair".to_string(), best_cards: vec![] }),
+            (2, HandRank { rank_value: 2, sub_rank: 0, description: "Two Pair".to_string(), best_cards: vec![] }),
         ];
 
         let winners = determine_winners(hands);
@@ -204,14 +217,41 @@ mod tests {
     #[test]
     fn test_determine_winners_tie() {
         let hands = vec![
-            (0, HandRank { rank_value: 1000, description: "Three of a Kind".to_string(), best_cards: vec![] }),
-            (1, HandRank { rank_value: 1000, description: "Three of a Kind".to_string(), best_cards: vec![] }),
+            (0, HandRank { rank_value: 3, sub_rank: 100, description: "Three of a Kind".to_string(), best_cards: vec![] }),
+            (1, HandRank { rank_value: 3, sub_rank: 100, description: "Three of a Kind".to_string(), best_cards: vec![] }),
         ];
 
         let winners = determine_winners(hands);
         assert_eq!(winners.len(), 2);
         assert!(winners.contains(&0));
         assert!(winners.contains(&1));
+    }
+
+    #[test]
+    fn test_two_pair_comparison() {
+        // QQ on board A3A86 should beat 76 on same board
+        // QQ → best hand: AAQQ8 (two pair, aces and queens)
+        // 76 → best hand: AA668 (two pair, aces and sixes)
+        let community = vec![
+            Card::new(14, 0), // A
+            Card::new(3, 1),  // 3
+            Card::new(14, 2), // A
+            Card::new(8, 3),  // 8
+            Card::new(6, 0),  // 6
+        ];
+
+        let qq_hand = evaluate_hand(
+            &[Card::new(12, 1), Card::new(12, 3)], // QQ
+            &community,
+        );
+        let s76_hand = evaluate_hand(
+            &[Card::new(7, 1), Card::new(6, 2)], // 76
+            &community,
+        );
+
+        assert_eq!(qq_hand.description, "Two Pair");
+        assert_eq!(s76_hand.description, "Two Pair");
+        assert!(qq_hand > s76_hand, "AAQQ should beat AA66: qq={:?} vs 76={:?}", qq_hand, s76_hand);
     }
 
     #[test]

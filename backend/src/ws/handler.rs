@@ -1,5 +1,6 @@
 use crate::{
     auth::JwtManager,
+    bot::BotManager,
     game::{
         constants::BROADCAST_CHANNEL_CAPACITY,
         PokerTable, PokerVariant, GameFormat,
@@ -56,6 +57,8 @@ pub struct GameServer {
     club_broadcasts: Arc<RwLock<HashMap<String, broadcast::Sender<ClubBroadcast>>>>,
     // Global broadcast - for new clubs, global events
     global_broadcast: broadcast::Sender<GlobalBroadcast>,
+    // Bot manager - tracks server-side bot players
+    bot_manager: Arc<RwLock<BotManager>>,
 }
 
 impl GameServer {
@@ -68,6 +71,7 @@ impl GameServer {
             table_broadcasts: Arc::new(RwLock::new(HashMap::new())),
             club_broadcasts: Arc::new(RwLock::new(HashMap::new())),
             global_broadcast: global_tx,
+            bot_manager: Arc::new(RwLock::new(BotManager::new())),
         }
     }
 
@@ -178,6 +182,95 @@ impl GameServer {
         for table_id in tables_to_notify {
             self.notify_table_update(&table_id).await;
         }
+    }
+
+    /// Check all tables for bots whose turn it is and execute their actions.
+    pub async fn check_bot_actions(&self) {
+        // Phase 1: read tables + bot manager to collect actions
+        let actions = {
+            let tables = self.tables.read().await;
+            let bot_mgr = self.bot_manager.read().await;
+            bot_mgr.collect_bot_actions(&tables)
+        };
+
+        if actions.is_empty() {
+            return;
+        }
+
+        // Phase 2: execute each action (needs write lock)
+        for (table_id, user_id, action) in actions {
+            let result = {
+                let mut tables = self.tables.write().await;
+                if let Some(table) = tables.get_mut(&table_id) {
+                    table.handle_action(&user_id, action).ok()
+                } else {
+                    None
+                }
+            };
+
+            if result.is_some() {
+                self.notify_table_update(&table_id).await;
+            }
+        }
+    }
+
+    /// Add a bot to a table. Returns (bot_user_id, bot_username) or error.
+    pub async fn add_bot_to_table(
+        &self,
+        table_id: &str,
+        buyin: i64,
+        name: Option<String>,
+        strategy: Option<&str>,
+    ) -> Result<(String, String), String> {
+        // Register bot in manager
+        let (bot_user_id, bot_username) = {
+            let mut bot_mgr = self.bot_manager.write().await;
+            bot_mgr.add_bot(table_id, name, strategy)
+        };
+
+        // Seat the bot at the table
+        {
+            let mut tables = self.tables.write().await;
+            let table = tables.get_mut(table_id)
+                .ok_or_else(|| "Table not found".to_string())?;
+            table.add_player(bot_user_id.clone(), bot_username.clone(), buyin)
+                .map_err(|e| {
+                    // Clean up bot registration on failure
+                    // (can't await here, so we'll do a blocking attempt)
+                    e.to_string()
+                })?;
+        }
+
+        self.notify_table_update(table_id).await;
+
+        tracing::info!("Bot {} ({}) added to table {} with {} chips",
+            bot_username, bot_user_id, table_id, buyin);
+
+        Ok((bot_user_id, bot_username))
+    }
+
+    /// Remove a bot from a table.
+    pub async fn remove_bot_from_table(&self, table_id: &str, bot_user_id: &str) -> Result<(), String> {
+        // Remove from bot manager
+        {
+            let mut bot_mgr = self.bot_manager.write().await;
+            if !bot_mgr.remove_bot(table_id, bot_user_id) {
+                return Err("Bot not found".to_string());
+            }
+        }
+
+        // Remove from table
+        {
+            let mut tables = self.tables.write().await;
+            if let Some(table) = tables.get_mut(table_id) {
+                table.remove_player(bot_user_id);
+            }
+        }
+
+        self.notify_table_update(table_id).await;
+
+        tracing::info!("Bot {} removed from table {}", bot_user_id, table_id);
+        Ok(())
     }
 
     // Load table from database into memory
@@ -583,5 +676,48 @@ async fn handle_client_message(
         }
 
         ClientMessage::Ping => ServerMessage::Pong,
+
+        ClientMessage::AddBot { table_id, name, strategy } => {
+            // Default buyin: use table's big blind * 100
+            let buyin = {
+                let tables = game_server.tables.read().await;
+                tables.get(&table_id).map(|t| t.big_blind * 100).unwrap_or(1000)
+            };
+
+            match game_server.add_bot_to_table(
+                &table_id,
+                buyin,
+                name,
+                strategy.as_deref(),
+            ).await {
+                Ok((bot_id, bot_name)) => {
+                    tracing::info!("User {} added bot {} ({}) to table {}", username, bot_name, bot_id, table_id);
+                    // Return current table state
+                    let tables = game_server.tables.read().await;
+                    if let Some(table) = tables.get(&table_id) {
+                        let state = table.get_public_state(Some(user_id));
+                        ServerMessage::TableState(state)
+                    } else {
+                        ServerMessage::Connected
+                    }
+                }
+                Err(e) => ServerMessage::Error { message: e },
+            }
+        }
+
+        ClientMessage::RemoveBot { table_id, bot_user_id } => {
+            match game_server.remove_bot_from_table(&table_id, &bot_user_id).await {
+                Ok(()) => {
+                    let tables = game_server.tables.read().await;
+                    if let Some(table) = tables.get(&table_id) {
+                        let state = table.get_public_state(Some(user_id));
+                        ServerMessage::TableState(state)
+                    } else {
+                        ServerMessage::Connected
+                    }
+                }
+                Err(e) => ServerMessage::Error { message: e },
+            }
+        }
     }
 }

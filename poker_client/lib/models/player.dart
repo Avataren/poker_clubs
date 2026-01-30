@@ -9,6 +9,7 @@ class Player {
   final String state;
   final List<PokerCard>? holeCards;
   final bool isWinner;
+  final String? lastAction;
 
   Player({
     required this.userId,
@@ -19,6 +20,7 @@ class Player {
     required this.state,
     this.holeCards,
     this.isWinner = false,
+    this.lastAction,
   });
 
   factory Player.fromJson(Map<String, dynamic> json) {
@@ -38,10 +40,12 @@ class Player {
       state: json['state'] as String,
       holeCards: cards,
       isWinner: json['is_winner'] as bool? ?? false,
+      lastAction: json['last_action'] as String?,
     );
   }
 
   bool get isActive => state == 'Active';
   bool get isFolded => state == 'Folded';
   bool get isAllIn => state == 'AllIn';
+  bool get isBot => userId.startsWith('bot_');
 }

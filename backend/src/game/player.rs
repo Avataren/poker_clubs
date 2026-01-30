@@ -22,6 +22,7 @@ pub struct Player {
     pub total_bet_this_hand: i64, // Track total bet for pot calculation
     pub has_acted_this_round: bool, // Track if player acted this betting round
     pub is_winner: bool, // Whether this player won the last showdown
+    pub last_action: Option<String>, // Last action taken (for display), cleared on new round
 }
 
 impl Player {
@@ -37,6 +38,7 @@ impl Player {
             total_bet_this_hand: 0,
             has_acted_this_round: false,
             is_winner: false,
+            last_action: None,
         }
     }
 
@@ -64,6 +66,7 @@ impl Player {
     pub fn reset_for_new_round(&mut self) {
         self.current_bet = 0;
         self.has_acted_this_round = false;
+        self.last_action = None;
     }
 
     pub fn reset_for_new_hand(&mut self) {
@@ -72,6 +75,7 @@ impl Player {
         self.total_bet_this_hand = 0;
         self.has_acted_this_round = false;
         self.is_winner = false;
+        self.last_action = None;
 
         // Activate players who have chips and aren't voluntarily sitting out
         if self.stack > 0 && self.state != PlayerState::SittingOut {

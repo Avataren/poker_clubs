@@ -194,6 +194,57 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
+  void _showAddBotDialog() {
+    String selectedStrategy = 'balanced';
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add Bot'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Select bot strategy:'),
+              const SizedBox(height: 8),
+              DropdownButton<String>(
+                value: selectedStrategy,
+                isExpanded: true,
+                items: const [
+                  DropdownMenuItem(value: 'balanced', child: Text('Balanced')),
+                  DropdownMenuItem(value: 'tight', child: Text('Tight')),
+                  DropdownMenuItem(value: 'aggressive', child: Text('Aggressive')),
+                  DropdownMenuItem(value: 'calling_station', child: Text('Calling Station')),
+                ],
+                onChanged: (value) {
+                  setDialogState(() => selectedStrategy = value!);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                _wsService.addBot(widget.table.id, strategy: selectedStrategy);
+                Navigator.pop(context);
+              },
+              child: const Text('Add Bot'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _removeBot(String botUserId) {
+    _wsService.removeBot(widget.table.id, botUserId);
+  }
+
   void _playerAction(String action, {int? amount}) {
     try {
       _wsService.playerAction(action, amount: amount);
@@ -236,6 +287,11 @@ class _GameScreenState extends State<GameScreen> {
               tooltip: 'Stand Up',
               onPressed: _standUp,
             ),
+          IconButton(
+            icon: const Icon(Icons.smart_toy),
+            tooltip: 'Add Bot',
+            onPressed: _showAddBotDialog,
+          ),
           IconButton(
             icon: const Icon(Icons.exit_to_app),
             onPressed: () {
@@ -297,13 +353,15 @@ class _GameScreenState extends State<GameScreen> {
                             currentPlayerSeat: _gameState!.currentPlayerSeat,
                             myUserId: myUserId,
                             onTakeSeat: !_isSeated ? _takeSeat : null,
+                            onRemoveBot: _removeBot,
                             showingDown: isShowdown,
                             gamePhase: _gameState!.phase,
                             winningHand: _gameState!.winningHand,
                           ),
 
                           // Table center overlay (pot and community cards)
-                          Container(
+                          IgnorePointer(
+                          child: Container(
                             constraints: const BoxConstraints(
                               maxWidth: 400,
                               maxHeight: 200,
@@ -359,6 +417,7 @@ class _GameScreenState extends State<GameScreen> {
                                   ),
                               ],
                             ),
+                          ),
                           ),
                         ],
                       )

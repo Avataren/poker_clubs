@@ -478,6 +478,21 @@ impl PokerTable {
             }
         }
 
+        // Record last action for display
+        self.players[self.current_player].last_action = Some(match &action {
+            PlayerAction::Fold => "Fold".to_string(),
+            PlayerAction::Check => "Check".to_string(),
+            PlayerAction::Call => {
+                let bet = self.players[self.current_player].current_bet;
+                format!("Call ${}", bet)
+            }
+            PlayerAction::Raise(amt) => format!("Raise ${}", amt),
+            PlayerAction::AllIn => {
+                let bet = self.players[self.current_player].current_bet;
+                format!("All In ${}", bet)
+            }
+        });
+
         // Mark player as having acted
         self.players[self.current_player].has_acted_this_round = true;
 
@@ -733,9 +748,14 @@ impl PokerTable {
 
     // Check if enough time has passed to auto-advance to next phase
     pub fn check_auto_advance(&mut self) -> bool {
-        // Only auto-advance if no players can act (all all-in or folded)
-        if self.players.iter().any(|p| p.can_act()) {
-            return false;
+        // During Showdown, always allow auto-advance (start new hand after delay).
+        // For other phases, auto-advance only if fewer than 2 players can act
+        // (everyone all-in or folded, no meaningful betting possible).
+        if self.phase != GamePhase::Showdown {
+            let can_act_count = self.players.iter().filter(|p| p.can_act()).count();
+            if can_act_count >= 2 {
+                return false;
+            }
         }
 
         // Check if we're in a phase that needs delay
@@ -828,6 +848,7 @@ impl PokerTable {
                         None
                     },
                     is_winner: p.is_winner,
+                    last_action: p.last_action.clone(),
                 }
             }).collect(),
             max_seats: self.max_seats,
@@ -872,6 +893,7 @@ pub struct PublicPlayerState {
     pub state: PlayerState,
     pub hole_cards: Option<Vec<Card>>, // Only visible to the player themselves
     pub is_winner: bool,
+    pub last_action: Option<String>,
 }
 
 #[cfg(test)]

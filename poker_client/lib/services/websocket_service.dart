@@ -171,6 +171,30 @@ class WebSocketService {
     _channel!.sink.add(message);
   }
 
+  void addBot(String tableId, {String? name, String? strategy}) {
+    if (_channel == null) return;
+
+    final payload = <String, dynamic>{'table_id': tableId};
+    if (name != null) payload['name'] = name;
+    if (strategy != null) payload['strategy'] = strategy;
+
+    final message = jsonEncode({
+      'type': 'AddBot',
+      'payload': payload,
+    });
+    _channel!.sink.add(message);
+  }
+
+  void removeBot(String tableId, String botUserId) {
+    if (_channel == null) return;
+
+    final message = jsonEncode({
+      'type': 'RemoveBot',
+      'payload': {'table_id': tableId, 'bot_user_id': botUserId},
+    });
+    _channel!.sink.add(message);
+  }
+
   void disconnect() {
     _channel?.sink.close();
     _channel = null;
