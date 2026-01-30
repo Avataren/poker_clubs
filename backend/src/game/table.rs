@@ -5,6 +5,7 @@ use super::{
     },
     deck::{Card, Deck},
     error::{GameError, GameResult},
+    format::{CashGame, GameFormat},
     hand::{determine_winners, evaluate_hand, HandRank},
     player::{Player, PlayerAction, PlayerState},
     pot::PotManager,
@@ -46,10 +47,16 @@ pub struct PokerTable {
     pub showdown_delay_ms: u64, // Delay to show results
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
+    #[serde(skip, default = "default_format")]
+    format: Box<dyn GameFormat>,
 }
 
 fn default_variant() -> Box<dyn PokerVariant> {
     Box::new(TexasHoldem)
+}
+
+fn default_format() -> Box<dyn GameFormat> {
+    Box::new(CashGame::new(50, 100, DEFAULT_MAX_SEATS))
 }
 
 impl Clone for PokerTable {
@@ -75,6 +82,7 @@ impl Clone for PokerTable {
             street_delay_ms: self.street_delay_ms,
             showdown_delay_ms: self.showdown_delay_ms,
             variant: self.variant.clone_box(),
+            format: self.format.clone_box(),
         }
     }
 }
@@ -97,6 +105,20 @@ impl PokerTable {
         max_seats: usize,
         variant: Box<dyn PokerVariant>,
     ) -> Self {
+        let format = Box::new(CashGame::new(small_blind, big_blind, max_seats));
+        Self::with_variant_and_format(table_id, name, small_blind, big_blind, max_seats, variant, format)
+    }
+
+    /// Create a table with a specific variant and game format
+    pub fn with_variant_and_format(
+        table_id: String,
+        name: String,
+        small_blind: i64,
+        big_blind: i64,
+        max_seats: usize,
+        variant: Box<dyn PokerVariant>,
+        format: Box<dyn GameFormat>,
+    ) -> Self {
         Self {
             table_id,
             name,
@@ -118,6 +140,7 @@ impl PokerTable {
             street_delay_ms: DEFAULT_STREET_DELAY_MS,
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
             variant,
+            format,
         }
     }
 
@@ -131,6 +154,30 @@ impl PokerTable {
     #[allow(dead_code)]
     pub fn variant_name(&self) -> &'static str {
         self.variant.name()
+    }
+
+    /// Get the format ID of this table
+    #[allow(dead_code)]
+    pub fn format_id(&self) -> &'static str {
+        self.format.format_id()
+    }
+
+    /// Get the format name of this table
+    #[allow(dead_code)]
+    pub fn format_name(&self) -> &str {
+        self.format.name()
+    }
+
+    /// Check if the format allows players to cash out
+    #[allow(dead_code)]
+    pub fn can_cash_out(&self) -> bool {
+        self.format.can_cash_out()
+    }
+
+    /// Check if the format allows top-ups
+    #[allow(dead_code)]
+    pub fn can_top_up(&self) -> bool {
+        self.format.can_top_up()
     }
 
     pub fn add_player(&mut self, user_id: String, username: String, buyin: i64) -> GameResult<usize> {
@@ -735,6 +782,10 @@ impl PokerTable {
             max_seats: self.max_seats,
             last_winner_message: self.last_winner_message.clone(),
             winning_hand: self.winning_hand.clone(),
+            format_id: self.format.format_id().to_string(),
+            format_name: self.format.name().to_string(),
+            can_cash_out: self.format.can_cash_out(),
+            can_top_up: self.format.can_top_up(),
         }
     }
 }
@@ -745,6 +796,10 @@ pub struct PublicTableState {
     pub name: String,
     pub variant_id: String,
     pub variant_name: String,
+    pub format_id: String,
+    pub format_name: String,
+    pub can_cash_out: bool,
+    pub can_top_up: bool,
     pub phase: GamePhase,
     pub community_cards: Vec<Card>,
     pub pot_total: i64,
@@ -841,5 +896,52 @@ mod tests {
         let cloned = table.clone();
         assert_eq!(cloned.variant_id(), "omaha");
         assert_eq!(cloned.variant_name(), "Omaha");
+    }
+
+    #[test]
+    fn test_table_default_format() {
+        let table = PokerTable::new(
+            "t6".to_string(),
+            "Test".to_string(),
+            5,
+            10,
+        );
+        assert_eq!(table.format_id(), "cash");
+        assert!(table.can_cash_out());
+        assert!(table.can_top_up());
+    }
+
+    #[test]
+    fn test_public_state_includes_format() {
+        let table = PokerTable::new(
+            "t7".to_string(),
+            "Test".to_string(),
+            25,
+            50,
+        );
+        let state = table.get_public_state(None);
+        assert_eq!(state.format_id, "cash");
+        assert!(state.can_cash_out);
+        assert!(state.can_top_up);
+    }
+
+    #[test]
+    fn test_table_with_sng_format() {
+        use crate::game::format::SitAndGo;
+        
+        let sng = SitAndGo::new(100, 1500, 6, 300);
+        let table = PokerTable::with_variant_and_format(
+            "t8".to_string(),
+            "SNG Test".to_string(),
+            25,
+            50,
+            6,
+            Box::new(TexasHoldem),
+            Box::new(sng),
+        );
+        
+        assert_eq!(table.format_id(), "sng");
+        assert!(!table.can_cash_out());
+        assert!(!table.can_top_up());
     }
 }

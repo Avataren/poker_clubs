@@ -34,3 +34,10 @@ pub use variant::{
     TexasHoldem, OmahaHi, OmahaHiLo, ShortDeckHoldem,
     BettingStructure, StreetConfig, HandRequirements,
 };
+
+// Format types
+pub use format::{
+    GameFormat, CashGame, SitAndGo, MultiTableTournament,
+    FormatConfig, BlindLevel, BlindSchedule, PrizeStructure,
+    TournamentStatus,
+};

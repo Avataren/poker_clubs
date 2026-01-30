@@ -191,9 +191,12 @@ pub enum TournamentStatus {
 }
 
 /// Core trait for game formats
-pub trait GameFormat: Send + Sync {
+pub trait GameFormat: Send + Sync + std::fmt::Debug {
     /// Get the format name
     fn name(&self) -> &str;
+
+    /// Get the format type ID (cash, sng, mtt)
+    fn format_id(&self) -> &'static str;
 
     /// Get the format configuration
     fn config(&self) -> &FormatConfig;
@@ -220,6 +223,9 @@ pub trait GameFormat: Send + Sync {
     fn players_to_end(&self) -> usize {
         1
     }
+
+    /// Clone into a boxed trait object
+    fn clone_box(&self) -> Box<dyn GameFormat>;
 }
 
 /// Cash game format - open entry, no eliminations
@@ -244,6 +250,10 @@ impl CashGame {
 impl GameFormat for CashGame {
     fn name(&self) -> &str {
         &self.config.name
+    }
+
+    fn format_id(&self) -> &'static str {
+        "cash"
     }
 
     fn config(&self) -> &FormatConfig {
@@ -273,6 +283,10 @@ impl GameFormat for CashGame {
 
     fn eliminates_players(&self) -> bool {
         false // Players can rebuy in cash games
+    }
+
+    fn clone_box(&self) -> Box<dyn GameFormat> {
+        Box::new(self.clone())
     }
 }
 
@@ -340,6 +354,10 @@ impl GameFormat for SitAndGo {
         &self.config.name
     }
 
+    fn format_id(&self) -> &'static str {
+        "sng"
+    }
+
     fn config(&self) -> &FormatConfig {
         &self.config
     }
@@ -367,6 +385,10 @@ impl GameFormat for SitAndGo {
 
     fn eliminates_players(&self) -> bool {
         true
+    }
+
+    fn clone_box(&self) -> Box<dyn GameFormat> {
+        Box::new(self.clone())
     }
 }
 
@@ -417,6 +439,10 @@ impl GameFormat for MultiTableTournament {
         &self.config.name
     }
 
+    fn format_id(&self) -> &'static str {
+        "mtt"
+    }
+
     fn config(&self) -> &FormatConfig {
         &self.config
     }
@@ -444,6 +470,10 @@ impl GameFormat for MultiTableTournament {
 
     fn eliminates_players(&self) -> bool {
         true
+    }
+
+    fn clone_box(&self) -> Box<dyn GameFormat> {
+        Box::new(self.clone())
     }
 }
 
