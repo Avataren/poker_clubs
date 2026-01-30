@@ -205,6 +205,38 @@ Infrastructure:
 - Created `spawn_server()` and `spawn_server_with_two_users()` helpers
 - Created `create_club_and_table()` helper for test setup
 
+### ✅ Commit 16: Fix Clippy Warnings
+**Files**: `backend/src/game/deck.rs`, `backend/src/game/hand.rs`, `backend/src/db/models.rs`
+
+Fixed clippy warnings for better idiomatic Rust:
+- Added `Display` implementation for `Card` struct (was using `to_string()` method)
+- Added `Default` derivation for `Deck` struct
+- Added `FromStr` implementation for `TransactionType` enum (was using `from_string()` method)
+- Added `#[derive(Default)]` to `HandRequirements` struct
+
+### ✅ Commit 17: Add Comprehensive Game Action Tests
+**Files**: `backend/tests/ws_tests.rs`
+
+Added 9 new integration tests for game actions:
+- **Action Tests**:
+  - `test_ws_player_action_call`: Verify call action works
+  - `test_ws_player_action_raise`: Verify raise increases pot
+  - `test_ws_player_action_check`: Verify check advances game
+  - `test_ws_player_action_allin`: Verify all-in bets full stack
+- **Game Completion Tests**:
+  - `test_ws_game_completes_after_fold`: Verify chips conserved after fold
+  - `test_ws_game_to_showdown`: Verify game can play through all streets
+  - `test_ws_allin_showdown`: Verify chips conserved in all-in showdown
+- **Error Handling Tests**:
+  - `test_ws_invalid_action_not_your_turn`: Verify wrong player can't act
+  - `test_ws_cannot_check_when_facing_bet`: Verify invalid check rejected
+
+Infrastructure:
+- Added `TwoPlayerGame` helper struct for managing two-player game sessions
+  - Timeout-based message receiving to handle async broadcast timing
+  - `drain_messages()` to clear pending broadcasts between actions
+  - `send_action_current_player()` to automatically route actions to correct player
+
 ---
 
 ## Current Test Status
@@ -239,7 +271,7 @@ running 17 HTTP API integration tests
 - test_list_formats ✅
 - test_get_club_tables ✅
 
-running 15 WebSocket integration tests
+running 24 WebSocket integration tests
 - test_ws_connect_and_receive_connected_message ✅
 - test_ws_connect_with_invalid_token ✅
 - test_ws_ping_pong ✅
@@ -252,11 +284,20 @@ running 15 WebSocket integration tests
 - test_ws_leave_table ✅
 - test_ws_two_players_start_game ✅
 - test_ws_player_action_fold ✅
+- test_ws_player_action_call ✅
+- test_ws_player_action_raise ✅
+- test_ws_player_action_check ✅
+- test_ws_player_action_allin ✅
+- test_ws_game_completes_after_fold ✅
+- test_ws_game_to_showdown ✅
+- test_ws_allin_showdown ✅
+- test_ws_invalid_action_not_your_turn ✅
+- test_ws_cannot_check_when_facing_bet ✅
 - test_ws_viewing_clubs_list ✅
 - test_ws_viewing_club ✅
 - test_ws_leaving_view ✅
 
-test result: ok. 78 passed; 0 failed
+test result: ok. 87 passed; 0 failed
 ```
 
 ---
