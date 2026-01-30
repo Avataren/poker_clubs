@@ -285,6 +285,18 @@ impl PokerTable {
             tracing::info!("Player {} topped up ${} and is now waiting for next hand", player.username, amount);
         }
 
+        // If we're in Waiting phase, check if we can now start a new hand
+        if self.phase == GamePhase::Waiting {
+            let playable_count = self.players.iter()
+                .filter(|p| p.stack > 0)
+                .count();
+            
+            if playable_count >= MIN_PLAYERS_TO_START {
+                tracing::info!("Enough players with chips after top-up, starting new hand");
+                self.start_new_hand();
+            }
+        }
+
         Ok(())
     }
 
