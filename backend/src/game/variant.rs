@@ -172,6 +172,12 @@ impl PokerVariant for OmahaHi {
         }
     }
 
+    fn evaluate_hand(&self, hole_cards: &[Card], community_cards: &[Card]) -> HandRank {
+        // Omaha requires exactly 2 hole cards + 3 community cards
+        super::hand::evaluate_omaha_hand(hole_cards, community_cards)
+            .unwrap_or_else(|| super::hand::evaluate_hand(hole_cards, community_cards))
+    }
+
     fn max_players(&self) -> usize {
         9 // Omaha with 4 cards per player supports fewer players
     }
@@ -215,6 +221,12 @@ impl PokerVariant for OmahaHiLo {
             must_use_hole_cards: Some(2),
             must_use_community_cards: Some(3),
         }
+    }
+
+    fn evaluate_hand(&self, hole_cards: &[Card], community_cards: &[Card]) -> HandRank {
+        // Omaha Hi-Lo uses same evaluation for hi hand (lo hand evaluation would be separate)
+        super::hand::evaluate_omaha_hand(hole_cards, community_cards)
+            .unwrap_or_else(|| super::hand::evaluate_hand(hole_cards, community_cards))
     }
 
     fn is_hi_lo(&self) -> bool {
@@ -329,5 +341,32 @@ mod tests {
         assert!(variants.contains(&"holdem"));
         assert!(variants.contains(&"omaha"));
         assert!(variants.contains(&"omaha_hilo"));
+    }
+
+    #[test]
+    fn test_omaha_evaluate_hand() {
+        use super::super::deck::Card;
+        
+        let variant = OmahaHi;
+        // Hole: AA23 (four cards)
+        // Board: KKKQ7 (five community)
+        // In Omaha, must use exactly 2 hole + 3 community
+        // Best: Full House (AA + KKK)
+        let hole_cards = vec![
+            Card::new(14, 0), // Ace
+            Card::new(14, 1), // Ace
+            Card::new(2, 2),  // Two
+            Card::new(3, 3),  // Three
+        ];
+        let community_cards = vec![
+            Card::new(13, 0), // King
+            Card::new(13, 1), // King
+            Card::new(13, 2), // King
+            Card::new(12, 3), // Queen
+            Card::new(7, 0),  // Seven
+        ];
+
+        let rank = variant.evaluate_hand(&hole_cards, &community_cards);
+        assert_eq!(rank.description, "Full House");
     }
 }

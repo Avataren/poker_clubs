@@ -62,6 +62,68 @@ pub fn evaluate_hand(hole_cards: &[Card], community_cards: &[Card]) -> HandRank 
     HandRank::from_hand(&hand)
 }
 
+/// Evaluates the best Omaha hand: MUST use exactly 2 hole cards and 3 community cards
+/// Returns None if not enough cards to make a valid hand
+pub fn evaluate_omaha_hand(hole_cards: &[Card], community_cards: &[Card]) -> Option<HandRank> {
+    // Omaha requires at least 4 hole cards and 3 community cards for a valid hand
+    if hole_cards.len() < 2 || community_cards.len() < 3 {
+        return None;
+    }
+
+    let mut best_rank: Option<HandRank> = None;
+
+    // Generate all 2-card combinations from hole cards
+    let hole_combos = combinations(hole_cards, 2);
+    // Generate all 3-card combinations from community cards  
+    let community_combos = combinations(community_cards, 3);
+
+    // Try every combination of 2 hole + 3 community
+    for hole_combo in &hole_combos {
+        for community_combo in &community_combos {
+            let mut hand_cards: Vec<rs_poker::core::Card> = Vec::with_capacity(5);
+            hand_cards.extend(hole_combo.iter().map(|c| c.to_rs_poker()));
+            hand_cards.extend(community_combo.iter().map(|c| c.to_rs_poker()));
+
+            let hand = Hand::new_with_cards(hand_cards);
+            let rank = HandRank::from_hand(&hand);
+
+            best_rank = match best_rank {
+                None => Some(rank),
+                Some(ref current) if rank > *current => Some(rank),
+                _ => best_rank,
+            };
+        }
+    }
+
+    best_rank
+}
+
+/// Generate all k-combinations from a slice
+fn combinations<T: Clone>(items: &[T], k: usize) -> Vec<Vec<T>> {
+    if k == 0 {
+        return vec![vec![]];
+    }
+    if items.len() < k {
+        return vec![];
+    }
+    
+    let mut result = Vec::new();
+    
+    // Take the first item and combine with (k-1) combinations from rest
+    let first = &items[0];
+    let rest = &items[1..];
+    
+    for mut combo in combinations(rest, k - 1) {
+        combo.insert(0, first.clone());
+        result.push(combo);
+    }
+    
+    // Also get combinations that don't include the first item
+    result.extend(combinations(rest, k));
+    
+    result
+}
+
 /// Determines the winner(s) from multiple hands
 /// Returns indices of winning players
 pub fn determine_winners(hands: Vec<(usize, HandRank)>) -> Vec<usize> {
@@ -141,5 +203,82 @@ mod tests {
         assert_eq!(winners.len(), 2);
         assert!(winners.contains(&0));
         assert!(winners.contains(&1));
+    }
+
+    #[test]
+    fn test_combinations() {
+        let items = vec![1, 2, 3, 4];
+        let combos = combinations(&items, 2);
+        assert_eq!(combos.len(), 6); // C(4,2) = 6
+        assert!(combos.contains(&vec![1, 2]));
+        assert!(combos.contains(&vec![1, 3]));
+        assert!(combos.contains(&vec![1, 4]));
+        assert!(combos.contains(&vec![2, 3]));
+        assert!(combos.contains(&vec![2, 4]));
+        assert!(combos.contains(&vec![3, 4]));
+    }
+
+    #[test]
+    fn test_omaha_hand_must_use_two_hole_cards() {
+        // Omaha scenario: Player has AA in hole but board has KKKK
+        // In Hold'em, this would be quads (K). In Omaha, player MUST use 2 hole cards
+        // so the best hand is AAAKK (full house using 2 aces + 3 kings)
+        let hole_cards = vec![
+            Card::new(14, 0), // Ace of Clubs
+            Card::new(14, 1), // Ace of Diamonds
+            Card::new(2, 2),  // Two of Hearts  
+            Card::new(3, 3),  // Three of Spades
+        ];
+        let community_cards = vec![
+            Card::new(13, 0), // King of Clubs
+            Card::new(13, 1), // King of Diamonds
+            Card::new(13, 2), // King of Hearts
+            Card::new(13, 3), // King of Spades
+            Card::new(7, 0),  // Seven of Clubs
+        ];
+
+        let omaha_rank = evaluate_omaha_hand(&hole_cards, &community_cards).unwrap();
+        // In Omaha, best is Full House (AA + KKK) using 2 aces from hole + 3 kings from board
+        assert_eq!(omaha_rank.description, "Full House");
+    }
+
+    #[test]
+    fn test_omaha_vs_holdem_different_results() {
+        // Scenario where Omaha and Hold'em give different results
+        // Hole: Ah Kh 2c 3d - has A-high flush draw in hearts
+        // Board: Qh Jh Th 5s 6s - has heart flush on board
+        // Hold'em would use just the Ah for A-high flush
+        // Omaha MUST use 2 hole cards, so uses Ah + Kh for A-K high flush
+        let hole_cards = vec![
+            Card::new(14, 2), // Ace of Hearts
+            Card::new(13, 2), // King of Hearts
+            Card::new(2, 0),  // Two of Clubs
+            Card::new(3, 1),  // Three of Diamonds
+        ];
+        let community_cards = vec![
+            Card::new(12, 2), // Queen of Hearts
+            Card::new(11, 2), // Jack of Hearts  
+            Card::new(10, 2), // Ten of Hearts
+            Card::new(5, 3),  // Five of Spades
+            Card::new(6, 3),  // Six of Spades
+        ];
+
+        let omaha_rank = evaluate_omaha_hand(&hole_cards, &community_cards).unwrap();
+        // Royal flush: A K Q J T all hearts - player uses Ah Kh + QhJhTh
+        assert_eq!(omaha_rank.description, "Straight Flush");
+    }
+
+    #[test]
+    fn test_omaha_returns_none_with_insufficient_cards() {
+        let hole_cards = vec![
+            Card::new(14, 0), // Ace
+        ];
+        let community_cards = vec![
+            Card::new(13, 0), // King
+            Card::new(12, 0), // Queen
+        ];
+
+        // Not enough cards for Omaha
+        assert!(evaluate_omaha_hand(&hole_cards, &community_cards).is_none());
     }
 }

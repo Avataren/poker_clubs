@@ -221,7 +221,10 @@ class _GameScreenState extends State<GameScreen> {
         backgroundColor: Colors.green[800],
         actions: [
           // Only show top-up button if format allows it
-          if (_isSeated && canTopUp && myPlayer != null && myPlayer.stack < 10000)
+          if (_isSeated &&
+              canTopUp &&
+              myPlayer != null &&
+              myPlayer.stack < 10000)
             IconButton(
               icon: const Icon(Icons.add_circle),
               tooltip: 'Top Up',
