@@ -167,6 +167,44 @@ Added integration test infrastructure for HTTP API endpoints:
   - Authorization enforcement (401 for protected routes)
   - Validation errors (400 for invalid input)
 
+### ✅ Commit 14: Fix Visibility Warnings
+**Files**: `backend/src/ws/handler.rs`
+
+Fixed compiler warnings for visibility mismatches:
+- Made `ClubBroadcast` and `GlobalBroadcast` structs public to match their usage in public methods `subscribe_club` and `subscribe_global`
+- Result: zero compiler warnings
+
+### ✅ Commit 15: Add WebSocket Integration Tests
+**Files**: `backend/Cargo.toml`, `backend/tests/ws_tests.rs`
+
+Added 15 integration tests for real-time WebSocket game flow:
+- **Connection Tests**:
+  - `test_ws_connect_and_receive_connected_message`
+  - `test_ws_connect_with_invalid_token` (401 rejection)
+  - `test_ws_ping_pong`
+- **Table Join/Seat Tests**:
+  - `test_ws_join_table_as_observer` (buyin=0)
+  - `test_ws_join_table_with_buyin` (auto-seat)
+  - `test_ws_take_seat_at_table` (specific seat)
+  - `test_ws_join_nonexistent_table` (error handling)
+- **Game State Tests**:
+  - `test_ws_get_table_state`
+  - `test_ws_get_table_state_not_at_table`
+- **Leave/Exit Tests**:
+  - `test_ws_leave_table`
+- **Multi-Player Game Flow Tests**:
+  - `test_ws_two_players_start_game` (verifies game starts at PreFlop)
+  - `test_ws_player_action_fold`
+- **Club/View Subscription Tests**:
+  - `test_ws_viewing_clubs_list`
+  - `test_ws_viewing_club`
+  - `test_ws_leaving_view`
+
+Infrastructure:
+- Added `reqwest` dev-dependency for HTTP setup in tests
+- Created `spawn_server()` and `spawn_server_with_two_users()` helpers
+- Created `create_club_and_table()` helper for test setup
+
 ---
 
 ## Current Test Status
@@ -182,7 +220,7 @@ running 46 unit tests
 - game::table::tests (8 tests) ✅
 - game::variant::tests (6 tests) ✅
 
-running 17 integration tests
+running 17 HTTP API integration tests
 - test_health_endpoint ✅
 - test_root_endpoint ✅
 - test_register_new_user ✅
@@ -201,7 +239,24 @@ running 17 integration tests
 - test_list_formats ✅
 - test_get_club_tables ✅
 
-test result: ok. 63 passed; 0 failed
+running 15 WebSocket integration tests
+- test_ws_connect_and_receive_connected_message ✅
+- test_ws_connect_with_invalid_token ✅
+- test_ws_ping_pong ✅
+- test_ws_join_table_as_observer ✅
+- test_ws_join_table_with_buyin ✅
+- test_ws_take_seat_at_table ✅
+- test_ws_join_nonexistent_table ✅
+- test_ws_get_table_state ✅
+- test_ws_get_table_state_not_at_table ✅
+- test_ws_leave_table ✅
+- test_ws_two_players_start_game ✅
+- test_ws_player_action_fold ✅
+- test_ws_viewing_clubs_list ✅
+- test_ws_viewing_club ✅
+- test_ws_leaving_view ✅
+
+test result: ok. 78 passed; 0 failed
 ```
 
 ---
@@ -313,6 +368,7 @@ Current schema is minimal. Improvements needed:
 
 3. **Testing**:
    - ~~Integration tests for HTTP API flows~~ ✅ (Commit 13)
+   - ~~Integration tests for WebSocket game flows~~ ✅ (Commit 15)
    - Integration tests for WebSocket game flows
    - Load testing with k6 or similar
    - Fuzzing for game logic edge cases
@@ -358,7 +414,8 @@ backend/
 │       ├── handler.rs
 │       └── messages.rs
 └── tests/
-    └── api_tests.rs          # NEW: Integration tests
+    ├── api_tests.rs          # HTTP API integration tests
+    └── ws_tests.rs           # WebSocket integration tests
 ```
 
 ---
@@ -367,12 +424,12 @@ backend/
 
 To pick up refactoring from here:
 
-1. **Run backend tests**: `cd backend && cargo test` (runs 63 tests)
+1. **Run backend tests**: `cd backend && cargo test` (runs 78 tests)
 2. **Run Flutter analyzer**: `cd poker_client && flutter analyze`
 3. **Next tasks**:
-   - Add WebSocket integration tests for game flow
    - Implement SNG tournament flow (registration → play → payout)
    - Consider Actor model for table management (Phase 2)
+   - Add more comprehensive game action tests (raise, all-in, showdown)
 
 The new infrastructure modules have comprehensive tests. When integrating, ensure existing tests continue to pass while adding new tests for variant-specific behavior.
 
