@@ -8,6 +8,7 @@ use super::{
     hand::{determine_winners, evaluate_hand, HandRank},
     player::{Player, PlayerAction, PlayerState},
     pot::PotManager,
+    variant::{PokerVariant, TexasHoldem},
 };
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,7 +23,7 @@ pub enum GamePhase {
     Showdown,   // Reveal and determine winner
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PokerTable {
     pub table_id: String,
     pub name: String,
@@ -43,6 +44,39 @@ pub struct PokerTable {
     pub last_phase_change_time: Option<u64>,
     pub street_delay_ms: u64,  // Delay between flop/turn/river
     pub showdown_delay_ms: u64, // Delay to show results
+    #[serde(skip, default = "default_variant")]
+    variant: Box<dyn PokerVariant>,
+}
+
+fn default_variant() -> Box<dyn PokerVariant> {
+    Box::new(TexasHoldem)
+}
+
+impl Clone for PokerTable {
+    fn clone(&self) -> Self {
+        Self {
+            table_id: self.table_id.clone(),
+            name: self.name.clone(),
+            small_blind: self.small_blind,
+            big_blind: self.big_blind,
+            players: self.players.clone(),
+            max_seats: self.max_seats,
+            last_winner_message: self.last_winner_message.clone(),
+            winning_hand: self.winning_hand.clone(),
+            dealer_seat: self.dealer_seat,
+            current_player: self.current_player,
+            phase: self.phase.clone(),
+            community_cards: self.community_cards.clone(),
+            deck: self.deck.clone(),
+            pot: self.pot.clone(),
+            current_bet: self.current_bet,
+            min_raise: self.min_raise,
+            last_phase_change_time: self.last_phase_change_time,
+            street_delay_ms: self.street_delay_ms,
+            showdown_delay_ms: self.showdown_delay_ms,
+            variant: self.variant.clone_box(),
+        }
+    }
 }
 
 impl PokerTable {
@@ -51,6 +85,18 @@ impl PokerTable {
     }
 
     pub fn with_max_seats(table_id: String, name: String, small_blind: i64, big_blind: i64, max_seats: usize) -> Self {
+        Self::with_variant(table_id, name, small_blind, big_blind, max_seats, Box::new(TexasHoldem))
+    }
+
+    /// Create a table with a specific poker variant
+    pub fn with_variant(
+        table_id: String,
+        name: String,
+        small_blind: i64,
+        big_blind: i64,
+        max_seats: usize,
+        variant: Box<dyn PokerVariant>,
+    ) -> Self {
         Self {
             table_id,
             name,
@@ -71,7 +117,20 @@ impl PokerTable {
             last_phase_change_time: None,
             street_delay_ms: DEFAULT_STREET_DELAY_MS,
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
+            variant,
         }
+    }
+
+    /// Get the variant ID of this table
+    #[allow(dead_code)]
+    pub fn variant_id(&self) -> &'static str {
+        self.variant.id()
+    }
+
+    /// Get the variant name of this table
+    #[allow(dead_code)]
+    pub fn variant_name(&self) -> &'static str {
+        self.variant.name()
     }
 
     pub fn add_player(&mut self, user_id: String, username: String, buyin: i64) -> GameResult<usize> {

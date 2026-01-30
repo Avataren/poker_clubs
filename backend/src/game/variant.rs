@@ -51,7 +51,7 @@ impl Default for HandRequirements {
 }
 
 /// Core trait that defines a poker game variant
-pub trait PokerVariant: Send + Sync {
+pub trait PokerVariant: Send + Sync + std::fmt::Debug {
     /// The display name of this variant
     fn name(&self) -> &'static str;
 
@@ -93,6 +93,9 @@ pub trait PokerVariant: Send + Sync {
     fn max_players(&self) -> usize {
         9
     }
+
+    /// Clone the variant into a boxed trait object
+    fn clone_box(&self) -> Box<dyn PokerVariant>;
 }
 
 /// Texas Hold'em - the most popular poker variant
@@ -126,6 +129,10 @@ impl PokerVariant for TexasHoldem {
 
     fn max_players(&self) -> usize {
         10 // Holdem supports up to 10 players
+    }
+
+    fn clone_box(&self) -> Box<dyn PokerVariant> {
+        Box::new(self.clone())
     }
 }
 
@@ -167,6 +174,10 @@ impl PokerVariant for OmahaHi {
 
     fn max_players(&self) -> usize {
         9 // Omaha with 4 cards per player supports fewer players
+    }
+
+    fn clone_box(&self) -> Box<dyn PokerVariant> {
+        Box::new(self.clone())
     }
 }
 
@@ -213,6 +224,10 @@ impl PokerVariant for OmahaHiLo {
     fn max_players(&self) -> usize {
         9
     }
+
+    fn clone_box(&self) -> Box<dyn PokerVariant> {
+        Box::new(self.clone())
+    }
 }
 
 /// Short Deck (6+) Hold'em - cards 2-5 removed
@@ -246,6 +261,10 @@ impl PokerVariant for ShortDeckHoldem {
 
     fn max_players(&self) -> usize {
         9
+    }
+
+    fn clone_box(&self) -> Box<dyn PokerVariant> {
+        Box::new(self.clone())
     }
 }
 
