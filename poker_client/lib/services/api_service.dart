@@ -147,9 +147,25 @@ class ApiService {
     String clubId,
     String name,
     int smallBlind,
-    int bigBlind,
-  ) async {
+    int bigBlind, {
+    String? variantId,
+    String? formatId,
+  }) async {
     if (!isAuthenticated) throw Exception('Not authenticated');
+
+    final body = {
+      'club_id': clubId,
+      'name': name,
+      'small_blind': smallBlind,
+      'big_blind': bigBlind,
+    };
+    
+    if (variantId != null) {
+      body['variant_id'] = variantId;
+    }
+    if (formatId != null) {
+      body['format_id'] = formatId;
+    }
 
     final response = await http.post(
       Uri.parse('$baseUrl/api/tables'),
@@ -157,12 +173,7 @@ class ApiService {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $_token',
       },
-      body: jsonEncode({
-        'club_id': clubId,
-        'name': name,
-        'small_blind': smallBlind,
-        'big_blind': bigBlind,
-      }),
+      body: jsonEncode(body),
     );
 
     if (response.statusCode == 200) {
@@ -170,5 +181,65 @@ class ApiService {
     } else {
       throw Exception('Failed to create table');
     }
+  }
+
+  /// Get all available poker variants
+  Future<List<VariantInfo>> getVariants() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/tables/variants'),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final List<dynamic> variants = data['variants'];
+      return variants.map((json) => VariantInfo.fromJson(json)).toList();
+    } else {
+      throw Exception('Failed to load variants');
+    }
+  }
+
+  /// Get all available game formats
+  Future<List<FormatInfo>> getFormats() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/tables/formats'),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final List<dynamic> formats = data['formats'];
+      return formats.map((json) => FormatInfo.fromJson(json)).toList();
+    } else {
+      throw Exception('Failed to load formats');
+    }
+  }
+}
+
+/// Poker variant information
+class VariantInfo {
+  final String id;
+  final String name;
+
+  VariantInfo({required this.id, required this.name});
+
+  factory VariantInfo.fromJson(Map<String, dynamic> json) {
+    return VariantInfo(
+      id: json['id'],
+      name: json['name'],
+    );
+  }
+}
+
+/// Game format information
+class FormatInfo {
+  final String id;
+  final String name;
+
+  FormatInfo({required this.id, required this.name});
+
+  factory FormatInfo.fromJson(Map<String, dynamic> json) {
+    return FormatInfo(
+      id: json['id'],
+      name: json['name'],
+    );
   }
 }

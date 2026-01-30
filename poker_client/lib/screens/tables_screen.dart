@@ -16,15 +16,19 @@ class TablesScreen extends StatefulWidget {
 
 class _TablesScreenState extends State<TablesScreen> {
   List<PokerTable> _tables = [];
+  List<VariantInfo> _variants = [];
+  List<FormatInfo> _formats = [];
   bool _isLoading = true;
   final _tableNameController = TextEditingController();
   final _smallBlindController = TextEditingController(text: '50');
   final _bigBlindController = TextEditingController(text: '100');
+  String _selectedVariantId = 'holdem';
+  String _selectedFormatId = 'cash';
 
   @override
   void initState() {
     super.initState();
-    _loadTables();
+    _loadData();
 
     // Subscribe to club broadcasts for new tables
     final wsService = context.read<WebSocketService>();
@@ -33,6 +37,25 @@ class _TablesScreenState extends State<TablesScreen> {
       _loadTables();
     };
     wsService.viewingClub(widget.club.id);
+  }
+
+  Future<void> _loadData() async {
+    try {
+      final apiService = context.read<ApiService>();
+      final results = await Future.wait([
+        apiService.getClubTables(widget.club.id),
+        apiService.getVariants(),
+        apiService.getFormats(),
+      ]);
+      setState(() {
+        _tables = results[0] as List<PokerTable>;
+        _variants = results[1] as List<VariantInfo>;
+        _formats = results[2] as List<FormatInfo>;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _loadTables() async {
@@ -56,6 +79,8 @@ class _TablesScreenState extends State<TablesScreen> {
             _tableNameController.text,
             int.parse(_smallBlindController.text),
             int.parse(_bigBlindController.text),
+            variantId: _selectedVariantId,
+            formatId: _selectedFormatId,
           );
       _tableNameController.clear();
       _loadTables();
@@ -111,6 +136,53 @@ class _TablesScreenState extends State<TablesScreen> {
                           border: OutlineInputBorder(),
                         ),
                         keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Variant and Format selection
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _selectedVariantId,
+                        decoration: const InputDecoration(
+                          labelText: 'Game Variant',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _variants.isEmpty
+                            ? [const DropdownMenuItem(value: 'holdem', child: Text('Texas Hold\'em'))]
+                            : _variants.map((v) => DropdownMenuItem(
+                                value: v.id,
+                                child: Text(v.name),
+                              )).toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _selectedVariantId = value);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _selectedFormatId,
+                        decoration: const InputDecoration(
+                          labelText: 'Game Format',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _formats.isEmpty
+                            ? [const DropdownMenuItem(value: 'cash', child: Text('Cash Game'))]
+                            : _formats.map((f) => DropdownMenuItem(
+                                value: f.id,
+                                child: Text(f.name),
+                              )).toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _selectedFormatId = value);
+                          }
+                        },
                       ),
                     ),
                   ],
