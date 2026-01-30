@@ -1207,3 +1207,133 @@ async fn test_ws_broke_player_topup_resumes_game() {
     }
 }
 
+#[tokio::test]
+async fn test_ws_fold_against_allin_ends_immediately() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+
+    // Get initial state
+    let state = game.get_state_p1().await.unwrap();
+    let total_chips: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    assert!(matches!(state.phase, GamePhase::PreFlop));
+
+    // Player goes all-in
+    game.send_action_current_player(PlayerAction::AllIn).await;
+
+    // Other player folds
+    game.send_action_current_player(PlayerAction::Fold).await;
+
+    // Wait briefly for the hand to resolve
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    game.drain_messages().await;
+
+    let state = game.get_state_p1().await.unwrap();
+
+    // The hand should have ended immediately — no community cards should be dealt
+    // because fold against all-in resolves via advance_phase's early exit, not showdown
+    assert!(
+        state.community_cards.is_empty()
+            || matches!(state.phase, GamePhase::PreFlop),
+        "Fold vs all-in should end hand without dealing community cards, got {} community cards in phase {:?}",
+        state.community_cards.len(),
+        state.phase
+    );
+
+    // Chips must be conserved
+    let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    assert_eq!(final_total, total_chips, "Chips must be conserved after fold vs all-in");
+
+    // There should be a winner message
+    assert!(
+        state.last_winner_message.is_some()
+            || matches!(state.phase, GamePhase::PreFlop),
+        "Should have a winner message or already be in next hand"
+    );
+}
+
+#[tokio::test]
+async fn test_ws_unequal_allin_side_pots_conserve_chips() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+
+    // Player 1 buys in for 500, Player 2 buys in for 1000 (unequal stacks)
+    // Connect player 1
+    let ws_url1 = format!("ws://{}/ws?token={}", addr, token1);
+    let (ws1_stream, _) = connect_async(&ws_url1).await.unwrap();
+    let (ws1_sink, mut ws1) = ws1_stream.split();
+    ws1.next().await.unwrap().unwrap(); // Connected
+
+    let ws_url2 = format!("ws://{}/ws?token={}", addr, token2);
+    let (ws2_stream, _) = connect_async(&ws_url2).await.unwrap();
+    let (ws2_sink, mut ws2) = ws2_stream.split();
+    ws2.next().await.unwrap().unwrap(); // Connected
+
+    let mut game = TwoPlayerGame { ws1, ws1_sink, ws2, ws2_sink, table_id: table_id.clone() };
+
+    // Player 1 takes seat with 500 chips
+    game.send_p1(&ClientMessage::TakeSeat {
+        table_id: table_id.clone(),
+        seat: 0,
+        buyin: 500,
+    }).await;
+    let _ = game.recv_p1_timeout().await;
+
+    // Player 2 takes seat with 1000 chips — game starts
+    game.send_p2(&ClientMessage::TakeSeat {
+        table_id: table_id.clone(),
+        seat: 1,
+        buyin: 1000,
+    }).await;
+    let _ = game.recv_p2_timeout().await;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    game.drain_messages().await;
+
+    // Record initial total chips (stacks + pot from blinds)
+    let state = game.get_state_p1().await.unwrap();
+    let total_chips: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    assert_eq!(total_chips, 1500, "Total chips should be 500 + 1000");
+
+    // Both players go all-in
+    game.send_action_current_player(PlayerAction::AllIn).await;
+    game.send_action_current_player(PlayerAction::AllIn).await;
+
+    // Wait for all streets to auto-advance and showdown to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(9000)).await;
+    game.drain_messages().await;
+
+    let state = game.get_state_p1().await.unwrap();
+
+    // Chips must be conserved regardless of who won
+    let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    assert_eq!(
+        final_total, total_chips,
+        "Chips must be conserved with unequal all-ins: initial={}, final={}",
+        total_chips, final_total
+    );
+
+    // The short-stack player (500) should NOT be able to win more than 1000
+    // (500 from each player in the main pot). The remaining 500 from the big stack
+    // should go back to the big stack via side pot.
+    // Since the game is non-deterministic, we check a structural invariant:
+    // no player can end up with more than total_chips
+    for p in &state.players {
+        assert!(
+            p.stack <= total_chips,
+            "Player {} has {} chips which exceeds total {} in play",
+            p.username, p.stack, total_chips
+        );
+    }
+
+    // If the game already started a new hand, at least verify conservation
+    // If still in showdown, verify winner message exists
+    if matches!(state.phase, GamePhase::Showdown) {
+        assert!(
+            state.last_winner_message.is_some(),
+            "Showdown should have a winner message"
+        );
+    }
+}
+

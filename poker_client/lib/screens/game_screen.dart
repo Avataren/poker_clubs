@@ -212,7 +212,7 @@ class _GameScreenState extends State<GameScreen> {
         .firstOrNull;
     final isMyTurn =
         myPlayer != null && _gameState?.currentPlayer?.userId == myUserId;
-    final isShowdown = _gameState?.phase == 'showdown';
+    final isShowdown = _gameState?.phase.toLowerCase() == 'showdown';
     final canTopUp = _gameState?.canTopUp ?? true;
 
     return Scaffold(

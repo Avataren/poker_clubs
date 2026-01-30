@@ -552,6 +552,30 @@ impl PokerTable {
         self.pot.end_betting_round();
         self.current_bet = 0;
 
+        // If only one player is active in hand, they win immediately (no showdown)
+        let active_in_hand: Vec<usize> = self.players.iter().enumerate()
+            .filter(|(_, p)| p.is_active_in_hand())
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if active_in_hand.len() == 1 {
+            let winner_idx = active_in_hand[0];
+            let total = self.pot.total();
+            self.players[winner_idx].add_chips(total);
+            self.players[winner_idx].is_winner = true;
+            self.last_winner_message = Some(format!(
+                "{} wins ${}",
+                self.players[winner_idx].username, total
+            ));
+            self.pot.reset();
+            self.phase = GamePhase::Showdown;
+            tracing::info!(
+                "Hand over: {} wins ${} (all others folded)",
+                self.players[winner_idx].username, total
+            );
+            return;
+        }
+
         match self.phase {
             GamePhase::PreFlop => {
                 // Deal flop
@@ -612,13 +636,8 @@ impl PokerTable {
             if let Some((_, winning_hand_rank)) = hands.iter().find(|(idx, _)| *idx == first_winner_idx) {
                 self.winning_hand = Some(winning_hand_rank.description.clone());
                 
-                // Process each winner
+                // Process each winner for card highlighting
                 for &winner_idx in &winner_indices {
-                    // Mark player as winner
-                    if let Some(winner) = self.players.get_mut(winner_idx) {
-                        winner.is_winner = true;
-                    }
-                    
                     // Get the best cards for this winner
                     if let Some((_, hand_rank)) = hands.iter().find(|(idx, _)| *idx == winner_idx) {
                         let best_cards = &hand_rank.best_cards;
@@ -647,16 +666,36 @@ impl PokerTable {
             }
         }
 
-        // Award pot
-        let payouts = self.pot.award_pots(vec![winner_indices]);
+        // Calculate side pots based on each player's total contribution
+        let player_bets: Vec<(usize, i64, bool)> = self.players.iter().enumerate()
+            .filter(|(_, p)| p.total_bet_this_hand > 0)
+            .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
+            .collect();
+        self.pot.calculate_side_pots(&player_bets);
 
-        // Build winner message
+        // Determine winners for each pot based on eligible players
+        let mut winners_by_pot = Vec::new();
+        for pot in &self.pot.pots {
+            let eligible_hands: Vec<(usize, HandRank)> = hands.iter()
+                .filter(|(idx, _)| pot.eligible_players.contains(idx))
+                .cloned()
+                .collect();
+            let pot_winners = determine_winners(eligible_hands);
+            winners_by_pot.push(pot_winners);
+        }
+
+        // Award pots
+        let payouts = self.pot.award_pots(winners_by_pot);
+
+        // Mark all payout recipients as winners and build message
         let mut winner_names = Vec::new();
         for (player_idx, amount) in &payouts {
             self.players[*player_idx].add_chips(*amount);
+            self.players[*player_idx].is_winner = true;
             winner_names.push(format!("{} wins ${}", self.players[*player_idx].username, amount));
         }
-        
+
+        self.pot.reset();
         self.last_winner_message = Some(winner_names.join(", "));
 
         // Record showdown time for delay before new hand

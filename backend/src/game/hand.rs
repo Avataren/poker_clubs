@@ -55,11 +55,20 @@ impl Ord for HandRank {
 /// Evaluates the best 5-card hand from a player's hole cards and community cards
 pub fn evaluate_hand(hole_cards: &[Card], community_cards: &[Card]) -> HandRank {
     let mut all_cards = Vec::new();
-    all_cards.extend(hole_cards.iter().map(|c| c.to_rs_poker()));
-    all_cards.extend(community_cards.iter().map(|c| c.to_rs_poker()));
+    all_cards.extend_from_slice(hole_cards);
+    all_cards.extend_from_slice(community_cards);
 
-    let hand = Hand::new_with_cards(all_cards);
-    HandRank::from_hand(&hand)
+    // Find the best 5-card combination out of all available cards
+    // Use rs_poker's native Rank comparison for proper ordering within hand categories
+    let combos = combinations(&all_cards, 5);
+    let best_hand = combos.into_iter()
+        .map(|five_cards| {
+            let rs_cards: Vec<rs_poker::core::Card> = five_cards.iter().map(|c| c.to_rs_poker()).collect();
+            Hand::new_with_cards(rs_cards)
+        })
+        .max_by_key(|hand| hand.rank())
+        .expect("should have at least one 5-card combination");
+    HandRank::from_hand(&best_hand)
 }
 
 /// Evaluates the best Omaha hand: MUST use exactly 2 hole cards and 3 community cards

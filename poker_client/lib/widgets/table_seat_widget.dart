@@ -30,10 +30,9 @@ class TableSeatWidget extends StatelessWidget {
 
     // Show cards if:
     // - It's me
-    // - Player is in showdown phase
-    // - Player is not folded, not sitting out, and not waiting
+    // - Player is in showdown phase and is still in the hand (Active or AllIn)
     if (isMe) return true;
-    if (showingDown && player!.isActive) return true;
+    if (showingDown && (player!.isActive || player!.isAllIn)) return true;
 
     return false;
   }
@@ -190,13 +189,13 @@ class TableSeatWidget extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text('🏆', style: TextStyle(fontSize: 14)),
+                      const Text('🏆', style: TextStyle(fontSize: 16)),
                       if (winningHand != null)
                         Text(
                           winningHand!,
                           style: const TextStyle(
                             color: Colors.black,
-                            fontSize: 7,
+                            fontSize: 9,
                             fontWeight: FontWeight.bold,
                           ),
                           textAlign: TextAlign.center,
