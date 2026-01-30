@@ -337,9 +337,10 @@ impl PokerTable {
     }
 
     fn deal_hole_cards(&mut self) {
+        let hole_cards_count = self.variant.hole_cards_count();
         for player in &mut self.players {
             if player.can_act() {
-                let cards = self.deck.deal_multiple(2);
+                let cards = self.deck.deal_multiple(hole_cards_count);
                 player.deal_cards(cards);
             }
         }
