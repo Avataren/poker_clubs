@@ -346,6 +346,7 @@ async fn handle_socket(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // These parameters represent connection state
 async fn handle_client_message(
     msg: ClientMessage,
     user_id: &str,

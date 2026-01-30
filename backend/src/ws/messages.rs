@@ -22,6 +22,7 @@ pub enum ClientMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
+#[allow(clippy::large_enum_variant)] // TableState is the primary message, size difference is intentional
 pub enum ServerMessage {
     Connected,
     TableState(PublicTableState),

@@ -33,21 +33,12 @@ pub struct StreetConfig {
 }
 
 /// Requirements for making a valid hand
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HandRequirements {
     /// Number of hole cards that MUST be used (e.g., 2 for Omaha)
     pub must_use_hole_cards: Option<usize>,
     /// Number of community cards that MUST be used (e.g., 3 for Omaha)
     pub must_use_community_cards: Option<usize>,
-}
-
-impl Default for HandRequirements {
-    fn default() -> Self {
-        Self {
-            must_use_hole_cards: None,
-            must_use_community_cards: None,
-        }
-    }
 }
 
 /// Core trait that defines a poker game variant

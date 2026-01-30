@@ -2,6 +2,7 @@ use rand::seq::SliceRandom;
 use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 // Simple card representation for our poker game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,19 +17,6 @@ impl Card {
         Self { rank, suit, highlighted: false }
     }
 
-    #[allow(dead_code)] // Useful for debugging and logging
-    pub fn to_string(&self) -> String {
-        let rank_str = match self.rank {
-            11 => "J",
-            12 => "Q",
-            13 => "K",
-            14 => "A",
-            _ => return format!("{}{}", self.rank, Self::suit_char(self.suit)),
-        };
-        format!("{}{}", rank_str, Self::suit_char(self.suit))
-    }
-
-    #[allow(dead_code)]
     fn suit_char(suit: u8) -> char {
         match suit {
             0 => '♣',
@@ -102,9 +90,28 @@ impl Card {
     }
 }
 
+impl fmt::Display for Card {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let rank_str = match self.rank {
+            11 => "J".to_string(),
+            12 => "Q".to_string(),
+            13 => "K".to_string(),
+            14 => "A".to_string(),
+            n => n.to_string(),
+        };
+        write!(f, "{}{}", rank_str, Self::suit_char(self.suit))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Deck {
     cards: Vec<Card>,
+}
+
+impl Default for Deck {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Deck {

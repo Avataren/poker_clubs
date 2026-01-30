@@ -155,14 +155,18 @@ impl TransactionType {
             TransactionType::Cashout => "cashout",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for TransactionType {
+    type Err = ();
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "admin_credit" => Some(TransactionType::AdminCredit),
-            "admin_debit" => Some(TransactionType::AdminDebit),
-            "buyin" => Some(TransactionType::Buyin),
-            "cashout" => Some(TransactionType::Cashout),
-            _ => None,
+            "admin_credit" => Ok(TransactionType::AdminCredit),
+            "admin_debit" => Ok(TransactionType::AdminDebit),
+            "buyin" => Ok(TransactionType::Buyin),
+            "cashout" => Ok(TransactionType::Cashout),
+            _ => Err(()),
         }
     }
 }
