@@ -40,10 +40,7 @@ class ApiService {
     final response = await http.post(
       Uri.parse('$baseUrl/api/auth/login'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'username': username,
-        'password': password,
-      }),
+      body: jsonEncode({'username': username, 'password': password}),
     );
 
     if (response.statusCode == 200) {
@@ -159,7 +156,7 @@ class ApiService {
       'small_blind': smallBlind,
       'big_blind': bigBlind,
     };
-    
+
     if (variantId != null) {
       body['variant_id'] = variantId;
     }
@@ -185,9 +182,7 @@ class ApiService {
 
   /// Get all available poker variants
   Future<List<VariantInfo>> getVariants() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/tables/variants'),
-    );
+    final response = await http.get(Uri.parse('$baseUrl/api/tables/variants'));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -200,9 +195,7 @@ class ApiService {
 
   /// Get all available game formats
   Future<List<FormatInfo>> getFormats() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/tables/formats'),
-    );
+    final response = await http.get(Uri.parse('$baseUrl/api/tables/formats'));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -222,10 +215,7 @@ class VariantInfo {
   VariantInfo({required this.id, required this.name});
 
   factory VariantInfo.fromJson(Map<String, dynamic> json) {
-    return VariantInfo(
-      id: json['id'],
-      name: json['name'],
-    );
+    return VariantInfo(id: json['id'], name: json['name']);
   }
 }
 
@@ -237,9 +227,6 @@ class FormatInfo {
   FormatInfo({required this.id, required this.name});
 
   factory FormatInfo.fromJson(Map<String, dynamic> json) {
-    return FormatInfo(
-      id: json['id'],
-      name: json['name'],
-    );
+    return FormatInfo(id: json['id'], name: json['name']);
   }
 }

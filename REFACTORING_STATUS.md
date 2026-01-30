@@ -140,6 +140,16 @@ Added REST API endpoints for creating tables with specific variants and formats:
 - Added `create_table_with_options()` to GameServer for variant/format support
 - Added `BadRequest` error variant for validation errors
 
+### ✅ Commit 12: Update Flutter Client with Variant/Format Support
+**Files**: `poker_client/lib/services/api_service.dart`, `poker_client/lib/screens/tables_screen.dart`
+
+Updated Flutter client to support variant/format selection:
+- Added `getVariants()` and `getFormats()` methods to ApiService
+- Added `VariantInfo` and `FormatInfo` model classes
+- Updated `createTable()` to accept optional `variantId` and `formatId`
+- Added variant/format dropdown selectors in TablesScreen
+- Uses new initialValue pattern for dropdowns (avoid deprecation warnings)
+
 ---
 
 ## Current Test Status
@@ -321,9 +331,9 @@ To pick up refactoring from here:
 3. **Next tasks**:
    - ~~Implement Omaha hand evaluation (must use exactly 2 hole + 3 community)~~ ✅
    - ~~Add API endpoint to create tables with different variants/formats~~ ✅
+   - ~~Update Flutter client to use new variant/format API endpoints~~ ✅
    - Implement SNG tournament flow (registration → play → payout)
-   - Update Flutter client to use new variant/format API endpoints
-   - Add table creation UI with variant/format selection
+   - Add table creation UI with variant/format selection (done in Commit 12)
 
 The new infrastructure modules have comprehensive tests. When integrating, ensure existing tests continue to pass while adding new tests for variant-specific behavior.
 

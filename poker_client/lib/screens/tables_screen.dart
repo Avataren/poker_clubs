@@ -60,7 +60,9 @@ class _TablesScreenState extends State<TablesScreen> {
 
   Future<void> _loadTables() async {
     try {
-      final tables = await context.read<ApiService>().getClubTables(widget.club.id);
+      final tables = await context.read<ApiService>().getClubTables(
+        widget.club.id,
+      );
       setState(() {
         _tables = tables;
         _isLoading = false;
@@ -75,20 +77,20 @@ class _TablesScreenState extends State<TablesScreen> {
 
     try {
       await context.read<ApiService>().createTable(
-            widget.club.id,
-            _tableNameController.text,
-            int.parse(_smallBlindController.text),
-            int.parse(_bigBlindController.text),
-            variantId: _selectedVariantId,
-            formatId: _selectedFormatId,
-          );
+        widget.club.id,
+        _tableNameController.text,
+        int.parse(_smallBlindController.text),
+        int.parse(_bigBlindController.text),
+        variantId: _selectedVariantId,
+        formatId: _selectedFormatId,
+      );
       _tableNameController.clear();
       _loadTables();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
@@ -152,11 +154,20 @@ class _TablesScreenState extends State<TablesScreen> {
                           border: OutlineInputBorder(),
                         ),
                         items: _variants.isEmpty
-                            ? [const DropdownMenuItem(value: 'holdem', child: Text('Texas Hold\'em'))]
-                            : _variants.map((v) => DropdownMenuItem(
-                                value: v.id,
-                                child: Text(v.name),
-                              )).toList(),
+                            ? [
+                                const DropdownMenuItem(
+                                  value: 'holdem',
+                                  child: Text('Texas Hold\'em'),
+                                ),
+                              ]
+                            : _variants
+                                  .map(
+                                    (v) => DropdownMenuItem(
+                                      value: v.id,
+                                      child: Text(v.name),
+                                    ),
+                                  )
+                                  .toList(),
                         onChanged: (value) {
                           if (value != null) {
                             setState(() => _selectedVariantId = value);
@@ -173,11 +184,20 @@ class _TablesScreenState extends State<TablesScreen> {
                           border: OutlineInputBorder(),
                         ),
                         items: _formats.isEmpty
-                            ? [const DropdownMenuItem(value: 'cash', child: Text('Cash Game'))]
-                            : _formats.map((f) => DropdownMenuItem(
-                                value: f.id,
-                                child: Text(f.name),
-                              )).toList(),
+                            ? [
+                                const DropdownMenuItem(
+                                  value: 'cash',
+                                  child: Text('Cash Game'),
+                                ),
+                              ]
+                            : _formats
+                                  .map(
+                                    (f) => DropdownMenuItem(
+                                      value: f.id,
+                                      child: Text(f.name),
+                                    ),
+                                  )
+                                  .toList(),
                         onChanged: (value) {
                           if (value != null) {
                             setState(() => _selectedFormatId = value);
