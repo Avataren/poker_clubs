@@ -538,7 +538,8 @@ impl PokerTable {
 
         for (idx, player) in self.players.iter().enumerate() {
             if player.is_active_in_hand() {
-                let hand_rank = evaluate_hand(&player.hole_cards, &self.community_cards);
+                // Use variant-specific hand evaluation (e.g., Omaha requires using exactly 2 hole cards)
+                let hand_rank = self.variant.evaluate_hand(&player.hole_cards, &self.community_cards);
                 hands.push((idx, hand_rank));
             }
         }
