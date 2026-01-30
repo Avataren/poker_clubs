@@ -150,22 +150,58 @@ Updated Flutter client to support variant/format selection:
 - Added variant/format dropdown selectors in TablesScreen
 - Uses new initialValue pattern for dropdowns (avoid deprecation warnings)
 
+### ✅ Commit 13: Add Integration Tests for HTTP API
+**Files**: `backend/Cargo.toml`, `backend/src/lib.rs`, `backend/src/main.rs`, `backend/tests/api_tests.rs`
+
+Added integration test infrastructure for HTTP API endpoints:
+- Added `axum-test`, `tokio-tungstenite`, and `tempfile` dev-dependencies
+- Created `lib.rs` to expose modules and provide test utilities
+- Added `create_test_app()` and `create_test_db()` helper functions
+- Refactored `main.rs` to use the shared `create_app()` function
+- Created 17 integration tests covering:
+  - Health check endpoints (`/health`, `/`)
+  - User registration and login flows
+  - Club creation and listing
+  - Table creation with variants/formats
+  - Variant and format listing endpoints
+  - Authorization enforcement (401 for protected routes)
+  - Validation errors (400 for invalid input)
+
 ---
 
 ## Current Test Status
 
 ```
-running 46 tests
+running 46 unit tests
 - game::betting::tests (9 tests) ✅
 - game::deck::tests (5 tests) ✅
 - game::error::tests (2 tests) ✅
 - game::format::tests (4 tests) ✅
-- game::hand::tests (8 tests) ✅   <- 4 NEW (Omaha evaluation)
+- game::hand::tests (8 tests) ✅
 - game::pot::tests (4 tests) ✅
 - game::table::tests (8 tests) ✅
-- game::variant::tests (6 tests) ✅ <- 1 NEW (Omaha evaluate_hand)
+- game::variant::tests (6 tests) ✅
 
-test result: ok. 46 passed; 0 failed
+running 17 integration tests
+- test_health_endpoint ✅
+- test_root_endpoint ✅
+- test_register_new_user ✅
+- test_register_duplicate_username ✅
+- test_register_short_password ✅
+- test_login_success ✅
+- test_login_wrong_password ✅
+- test_login_nonexistent_user ✅
+- test_create_club ✅
+- test_create_club_unauthorized ✅
+- test_get_my_clubs ✅
+- test_create_table_with_default_variant ✅
+- test_create_table_with_omaha_variant ✅
+- test_create_table_with_invalid_variant ✅
+- test_list_variants ✅
+- test_list_formats ✅
+- test_get_club_tables ✅
+
+test result: ok. 63 passed; 0 failed
 ```
 
 ---
@@ -276,7 +312,8 @@ Current schema is minimal. Improvements needed:
    - Error tracking with Sentry
 
 3. **Testing**:
-   - Integration tests for WebSocket flows
+   - ~~Integration tests for HTTP API flows~~ ✅ (Commit 13)
+   - Integration tests for WebSocket game flows
    - Load testing with k6 or similar
    - Fuzzing for game logic edge cases
 
@@ -285,39 +322,43 @@ Current schema is minimal. Improvements needed:
 ## File Structure After Refactoring
 
 ```
-backend/src/
-├── main.rs
-├── config.rs
-├── error.rs              # App-level errors
-├── api/
-│   ├── mod.rs
-│   ├── admin.rs
-│   ├── auth.rs
-│   ├── clubs.rs
-│   └── tables.rs
-├── auth/
-│   ├── mod.rs
-│   └── jwt.rs
-├── db/
-│   ├── mod.rs
-│   ├── models.rs
-│   └── migrations/
-├── game/
-│   ├── mod.rs
-│   ├── betting.rs       # NEW: Separated betting logic
-│   ├── constants.rs     # NEW: Centralized constants
-│   ├── deck.rs
-│   ├── error.rs         # NEW: Typed game errors
-│   ├── format.rs        # NEW: Cash/SNG/MTT formats
-│   ├── hand.rs
-│   ├── player.rs
-│   ├── pot.rs
-│   ├── table.rs
-│   └── variant.rs       # NEW: Holdem/Omaha variants
-└── ws/
-    ├── mod.rs
-    ├── handler.rs
-    └── messages.rs
+backend/
+├── src/
+│   ├── lib.rs            # NEW: Library exports + test helpers
+│   ├── main.rs
+│   ├── config.rs
+│   ├── error.rs              # App-level errors
+│   ├── api/
+│   │   ├── mod.rs
+│   │   ├── admin.rs
+│   │   ├── auth.rs
+│   │   ├── clubs.rs
+│   │   └── tables.rs
+│   ├── auth/
+│   │   ├── mod.rs
+│   │   └── jwt.rs
+│   ├── db/
+│   │   ├── mod.rs
+│   │   ├── models.rs
+│   │   └── migrations/
+│   ├── game/
+│   │   ├── mod.rs
+│   │   ├── betting.rs       # Separated betting logic
+│   │   ├── constants.rs     # Centralized constants
+│   │   ├── deck.rs
+│   │   ├── error.rs         # Typed game errors
+│   │   ├── format.rs        # Cash/SNG/MTT formats
+│   │   ├── hand.rs
+│   │   ├── player.rs
+│   │   ├── pot.rs
+│   │   ├── table.rs
+│   │   └── variant.rs       # Holdem/Omaha variants
+│   └── ws/
+│       ├── mod.rs
+│       ├── handler.rs
+│       └── messages.rs
+└── tests/
+    └── api_tests.rs          # NEW: Integration tests
 ```
 
 ---
@@ -326,14 +367,12 @@ backend/src/
 
 To pick up refactoring from here:
 
-1. **Run backend tests**: `cd backend && cargo test`
+1. **Run backend tests**: `cd backend && cargo test` (runs 63 tests)
 2. **Run Flutter analyzer**: `cd poker_client && flutter analyze`
 3. **Next tasks**:
-   - ~~Implement Omaha hand evaluation (must use exactly 2 hole + 3 community)~~ ✅
-   - ~~Add API endpoint to create tables with different variants/formats~~ ✅
-   - ~~Update Flutter client to use new variant/format API endpoints~~ ✅
+   - Add WebSocket integration tests for game flow
    - Implement SNG tournament flow (registration → play → payout)
-   - Add table creation UI with variant/format selection (done in Commit 12)
+   - Consider Actor model for table management (Phase 2)
 
 The new infrastructure modules have comprehensive tests. When integrating, ensure existing tests continue to pass while adding new tests for variant-specific behavior.
 
