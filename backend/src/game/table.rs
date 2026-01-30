@@ -356,8 +356,8 @@ impl PokerTable {
         self.current_bet = 0;
         self.min_raise = self.big_blind;
 
-        // Move dealer button
-        self.dealer_seat = (self.dealer_seat + 1) % self.players.len();
+        // Move dealer button to next eligible player (skip sitting out/broke players)
+        self.dealer_seat = self.next_eligible_player_for_button(self.dealer_seat);
 
         // Post blinds
         self.post_blinds();
@@ -371,16 +371,14 @@ impl PokerTable {
     }
 
     fn post_blinds(&mut self) {
-        let num_players = self.players.len();
-
-        // Small blind (next player after dealer)
-        let sb_seat = (self.dealer_seat + 1) % num_players;
+        // Small blind is the next eligible player after dealer
+        let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
         let sb_amount = self.players[sb_seat].place_bet(self.small_blind);
         self.pot.add_bet(sb_seat, sb_amount);
         // Posting blind does NOT count as acting - player can still raise
 
-        // Big blind
-        let bb_seat = (self.dealer_seat + 2) % num_players;
+        // Big blind is the next eligible player after small blind
+        let bb_seat = self.next_eligible_player_for_button(sb_seat);
         let bb_amount = self.players[bb_seat].place_bet(self.big_blind);
         self.pot.add_bet(bb_seat, bb_amount);
         // Posting blind does NOT count as acting - BB has option to raise
@@ -388,7 +386,7 @@ impl PokerTable {
         self.current_bet = self.big_blind;
 
         // First to act is after big blind
-        self.current_player = (bb_seat + 1) % num_players;
+        self.current_player = self.next_active_player(bb_seat);
         
         tracing::info!("Blinds posted: SB=${} at seat {}, BB=${} at seat {}. SB state={:?}, BB state={:?}",
                       sb_amount, sb_seat, bb_amount, bb_seat,
@@ -746,6 +744,33 @@ impl PokerTable {
         after // Fallback
     }
 
+    /// Find the next player eligible for dealer/blind positions
+    /// (must have chips and not be sitting out voluntarily)
+    fn next_eligible_player_for_button(&self, after: usize) -> usize {
+        let mut idx = (after + 1) % self.players.len();
+        let start = idx;
+
+        tracing::debug!("next_eligible_player_for_button: after={}, num_players={}", after, self.players.len());
+
+        loop {
+            let player = &self.players[idx];
+            // Player is eligible if they have chips and aren't voluntarily sitting out
+            if player.stack > 0 && player.state != PlayerState::SittingOut {
+                tracing::info!("next_eligible_player_for_button: returning idx={} ({})", idx, player.username);
+                return idx;
+            }
+            tracing::debug!("  Skipping idx={}: username={}, stack={}, state={:?}",
+                           idx, player.username, player.stack, player.state);
+            idx = (idx + 1) % self.players.len();
+            if idx == start {
+                tracing::warn!("next_eligible_player_for_button: No eligible players found! Returning fallback {}", after);
+                break; // No eligible players found
+            }
+        }
+
+        after // Fallback
+    }
+
     // Check if enough time has passed to auto-advance to next phase
     pub fn check_auto_advance(&mut self) -> bool {
         // During Showdown, always allow auto-advance (start new hand after delay).
@@ -841,10 +866,22 @@ impl PokerTable {
                     stack: p.stack,
                     current_bet: p.current_bet,
                     state: p.state.clone(),
-                    hole_cards: if Some(p.user_id.as_str()) == for_user_id 
-                        || (self.phase == GamePhase::Showdown && p.is_active_in_hand()) {
+                    hole_cards: if Some(p.user_id.as_str()) == for_user_id {
+                        // Show own cards face-up
                         Some(p.hole_cards.clone())
+                    } else if self.phase == GamePhase::Showdown && p.is_active_in_hand() {
+                        // During showdown, show all active players' cards face-up
+                        Some(p.hole_cards.clone())
+                    } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
+                        // For other players still in the hand, send placeholder face-down cards
+                        // WITHOUT revealing the actual rank/suit (security: prevent cheating via network inspection)
+                        let num_cards = p.hole_cards.len();
+                        Some(vec![
+                            Card { rank: 0, suit: 0, highlighted: false, face_up: false };
+                            num_cards
+                        ])
                     } else {
+                        // No cards for folded/sitting out players
                         None
                     },
                     is_winner: p.is_winner,
@@ -864,13 +901,14 @@ impl PokerTable {
                 None
             },
             small_blind_seat: if self.phase != GamePhase::Waiting && self.players.len() >= 2 {
-                let sb_idx = (self.dealer_seat + 1) % self.players.len();
+                let sb_idx = self.next_eligible_player_for_button(self.dealer_seat);
                 Some(self.players[sb_idx].seat)
             } else {
                 None
             },
             big_blind_seat: if self.phase != GamePhase::Waiting && self.players.len() >= 2 {
-                let bb_idx = (self.dealer_seat + 2) % self.players.len();
+                let sb_idx = self.next_eligible_player_for_button(self.dealer_seat);
+                let bb_idx = self.next_eligible_player_for_button(sb_idx);
                 Some(self.players[bb_idx].seat)
             } else {
                 None

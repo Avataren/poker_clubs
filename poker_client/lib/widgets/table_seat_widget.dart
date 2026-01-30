@@ -32,25 +32,25 @@ class TableSeatWidget extends StatelessWidget {
     this.isBigBlind = false,
   });
 
+  bool get _hasCards {
+    return player != null && 
+           player!.holeCards != null && 
+           player!.holeCards!.isNotEmpty;
+  }
+
   bool get _shouldShowCards {
-    if (player == null) return false;
-    if (player!.holeCards == null || player!.holeCards!.isEmpty) return false;
+    if (!_hasCards) return false;
 
-    // Show cards if:
-    // - It's me
-    // - Player is in showdown phase and is still in the hand (Active or AllIn)
-    if (isMe) return true;
-    if (showingDown && (player!.isActive || player!.isAllIn)) return true;
-
-    return false;
+    // Show face-up cards (the backend sends face-up cards for the viewing player
+    // and face-down cards for other active players)
+    return player!.holeCards!.any((card) => card.faceUp);
   }
 
   bool get _shouldShowCardBacks {
-    if (player == null) return false;
-    if (player!.holeCards == null || player!.holeCards!.isEmpty) return false;
+    if (!_hasCards) return false;
 
-    // Show card backs if player has cards but we shouldn't reveal them
-    return !_shouldShowCards && (player!.isActive || player!.isAllIn);
+    // Show face-down cards
+    return player!.holeCards!.any((card) => !card.faceUp);
   }
 
   @override
@@ -61,7 +61,7 @@ class TableSeatWidget extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         // Cards (above the seat circle)
-        if (_shouldShowCards)
+        if (_hasCards)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: player!.holeCards!
@@ -74,14 +74,6 @@ class TableSeatWidget extends StatelessWidget {
                   ),
                 )
                 .toList(),
-          )
-        else if (_shouldShowCardBacks)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CardWidget(card: PokerCard.faceDown(), width: 35, height: 50),
-              CardWidget(card: PokerCard.faceDown(), width: 35, height: 50),
-            ],
           )
         else
           const SizedBox(height: 50),

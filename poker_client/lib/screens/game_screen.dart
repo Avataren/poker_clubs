@@ -307,7 +307,7 @@ class _GameScreenState extends State<GameScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Colors.green[900]!, Colors.green[700]!],
+            colors: [const Color(0xFF1a1a2e), const Color(0xFF16213e)],
           ),
         ),
         child: Column(

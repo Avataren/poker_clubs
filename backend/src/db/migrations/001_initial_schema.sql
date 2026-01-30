@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS tables (
     min_buyin INTEGER NOT NULL,
     max_buyin INTEGER NOT NULL,
     max_players INTEGER NOT NULL CHECK (max_players >= 2 AND max_players <= 9),
+    variant_id TEXT NOT NULL DEFAULT 'holdem',
+    format_id TEXT NOT NULL DEFAULT 'cash',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
 );

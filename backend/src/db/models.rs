@@ -73,6 +73,8 @@ pub struct Table {
     pub min_buyin: i64,
     pub max_buyin: i64,
     pub max_players: i32,
+    pub variant_id: String,
+    pub format_id: String,
     pub created_at: String,
 }
 
@@ -86,6 +88,30 @@ impl Table {
         max_buyin: i64,
         max_players: i32,
     ) -> Self {
+        Self::with_variant_and_format(
+            club_id,
+            name,
+            small_blind,
+            big_blind,
+            min_buyin,
+            max_buyin,
+            max_players,
+            "holdem".to_string(),
+            "cash".to_string(),
+        )
+    }
+
+    pub fn with_variant_and_format(
+        club_id: String,
+        name: String,
+        small_blind: i64,
+        big_blind: i64,
+        min_buyin: i64,
+        max_buyin: i64,
+        max_players: i32,
+        variant_id: String,
+        format_id: String,
+    ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             club_id,
@@ -95,6 +121,8 @@ impl Table {
             min_buyin,
             max_buyin,
             max_players,
+            variant_id,
+            format_id,
             created_at: Utc::now().to_rfc3339(),
         }
     }

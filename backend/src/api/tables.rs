@@ -84,16 +84,16 @@ async fn create_table(
     let _auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
 
     // Get variant (default to Texas Hold'em)
-    let variant_id = req.variant_id.as_deref().unwrap_or("holdem");
-    let variant = variant_from_id(variant_id)
+    let variant_id = req.variant_id.as_deref().unwrap_or("holdem").to_string();
+    let variant = variant_from_id(&variant_id)
         .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown variant: {}", variant_id)))?;
 
     // Get format (default to Cash Game)
-    let format_id = req.format_id.as_deref().unwrap_or("cash");
-    let format = format_from_id(format_id, req.small_blind, req.big_blind, DEFAULT_MAX_SEATS)
+    let format_id = req.format_id.as_deref().unwrap_or("cash").to_string();
+    let format = format_from_id(&format_id, req.small_blind, req.big_blind, DEFAULT_MAX_SEATS)
         .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown format: {}", format_id)))?;
 
-    let table = Table::new(
+    let table = Table::with_variant_and_format(
         req.club_id,
         req.name.clone(),
         req.small_blind,
@@ -101,12 +101,14 @@ async fn create_table(
         req.small_blind * DEFAULT_MIN_BUYIN_BB,
         req.big_blind * DEFAULT_MAX_BUYIN_BB,
         DEFAULT_MAX_SEATS as i32,
+        variant_id.clone(),
+        format_id.clone(),
     );
 
     // Insert into database
     sqlx::query(
-        "INSERT INTO tables (id, club_id, name, small_blind, big_blind, min_buyin, max_buyin, max_players, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tables (id, club_id, name, small_blind, big_blind, min_buyin, max_buyin, max_players, variant_id, format_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&table.id)
     .bind(&table.club_id)
@@ -116,6 +118,8 @@ async fn create_table(
     .bind(table.min_buyin)
     .bind(table.max_buyin)
     .bind(table.max_players)
+    .bind(&table.variant_id)
+    .bind(&table.format_id)
     .bind(&table.created_at)
     .execute(&state.pool)
     .await?;
