@@ -707,6 +707,8 @@ impl PokerTable {
         PublicTableState {
             table_id: self.table_id.clone(),
             name: self.name.clone(),
+            variant_id: self.variant.id().to_string(),
+            variant_name: self.variant.name().to_string(),
             phase: self.phase.clone(),
             community_cards: self.community_cards.clone(),
             pot_total: self.pot.total(),
@@ -740,6 +742,8 @@ impl PokerTable {
 pub struct PublicTableState {
     pub table_id: String,
     pub name: String,
+    pub variant_id: String,
+    pub variant_name: String,
     pub phase: GamePhase,
     pub community_cards: Vec<Card>,
     pub pot_total: i64,

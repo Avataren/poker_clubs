@@ -27,3 +27,10 @@ pub use deck::Card;
 
 // Pot management
 pub use pot::PotManager;
+
+// Variant types
+pub use variant::{
+    PokerVariant, variant_from_id, available_variants,
+    TexasHoldem, OmahaHi, OmahaHiLo, ShortDeckHoldem,
+    BettingStructure, StreetConfig, HandRequirements,
+};
