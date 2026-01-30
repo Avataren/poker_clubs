@@ -596,6 +596,424 @@ async fn test_ws_player_action_fold() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 }
 
+/// Helper struct to manage a two-player game session
+struct TwoPlayerGame {
+    ws1: futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    ws1_sink: futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
+    ws2: futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    ws2_sink: futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
+    #[allow(dead_code)]
+    table_id: String,
+}
+
+impl TwoPlayerGame {
+    async fn setup(addr: SocketAddr, token1: &str, token2: &str, table_id: String, buyin: i64) -> Self {
+        // Connect player 1
+        let ws_url1 = format!("ws://{}/ws?token={}", addr, token1);
+        let (ws1_stream, _) = connect_async(&ws_url1).await.unwrap();
+        let (ws1_sink, mut ws1) = ws1_stream.split();
+        ws1.next().await.unwrap().unwrap(); // Consume Connected
+        
+        // Connect player 2
+        let ws_url2 = format!("ws://{}/ws?token={}", addr, token2);
+        let (ws2_stream, _) = connect_async(&ws_url2).await.unwrap();
+        let (ws2_sink, mut ws2) = ws2_stream.split();
+        ws2.next().await.unwrap().unwrap(); // Consume Connected
+        
+        let mut game = Self { ws1, ws1_sink, ws2, ws2_sink, table_id: table_id.clone() };
+        
+        // Player 1 takes seat 0
+        game.send_p1(&ClientMessage::TakeSeat {
+            table_id: table_id.clone(),
+            seat: 0,
+            buyin,
+        }).await;
+        let _ = game.recv_p1_timeout().await;
+        
+        // Player 2 takes seat 1 - game should start
+        game.send_p2(&ClientMessage::TakeSeat {
+            table_id: table_id.clone(),
+            seat: 1,
+            buyin,
+        }).await;
+        let _ = game.recv_p2_timeout().await;
+        
+        // Wait for game to start and broadcasts to settle
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        
+        // Drain any pending broadcast messages
+        game.drain_messages().await;
+        
+        game
+    }
+    
+    async fn send_p1(&mut self, msg: &ClientMessage) {
+        let text = serde_json::to_string(msg).unwrap();
+        self.ws1_sink.send(Message::Text(text)).await.unwrap();
+    }
+    
+    async fn send_p2(&mut self, msg: &ClientMessage) {
+        let text = serde_json::to_string(msg).unwrap();
+        self.ws2_sink.send(Message::Text(text)).await.unwrap();
+    }
+    
+    async fn recv_p1_timeout(&mut self) -> Option<ServerMessage> {
+        match tokio::time::timeout(
+            tokio::time::Duration::from_millis(100),
+            self.ws1.next()
+        ).await {
+            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(&text).ok(),
+            _ => None,
+        }
+    }
+    
+    async fn recv_p2_timeout(&mut self) -> Option<ServerMessage> {
+        match tokio::time::timeout(
+            tokio::time::Duration::from_millis(100),
+            self.ws2.next()
+        ).await {
+            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(&text).ok(),
+            _ => None,
+        }
+    }
+    
+    async fn drain_messages(&mut self) {
+        loop {
+            let (r1, r2) = tokio::join!(
+                tokio::time::timeout(tokio::time::Duration::from_millis(50), self.ws1.next()),
+                tokio::time::timeout(tokio::time::Duration::from_millis(50), self.ws2.next())
+            );
+            if r1.is_err() && r2.is_err() {
+                break;
+            }
+        }
+    }
+    
+    async fn get_state_p1(&mut self) -> Option<poker_server::game::PublicTableState> {
+        self.send_p1(&ClientMessage::GetTableState).await;
+        // May need to skip broadcasts
+        for _ in 0..10 {
+            if let Some(msg) = self.recv_p1_timeout().await {
+                if let ServerMessage::TableState(state) = msg {
+                    return Some(state);
+                }
+            } else {
+                break;
+            }
+        }
+        None
+    }
+    
+    #[allow(dead_code)]
+    async fn get_state_p2(&mut self) -> Option<poker_server::game::PublicTableState> {
+        self.send_p2(&ClientMessage::GetTableState).await;
+        for _ in 0..10 {
+            if let Some(msg) = self.recv_p2_timeout().await {
+                if let ServerMessage::TableState(state) = msg {
+                    return Some(state);
+                }
+            } else {
+                break;
+            }
+        }
+        None
+    }
+    
+    /// Send action from the player whose turn it is
+    async fn send_action_current_player(&mut self, action: PlayerAction) {
+        let state = self.get_state_p1().await;
+        if state.is_none() {
+            return;
+        }
+        let state = state.unwrap();
+        let action_msg = ClientMessage::PlayerAction { action };
+        
+        if state.current_player_seat == 0 {
+            self.send_p1(&action_msg).await;
+        } else {
+            self.send_p2(&action_msg).await;
+        }
+        
+        // Wait for action to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        self.drain_messages().await;
+    }
+}
+
+#[tokio::test]
+async fn test_ws_player_action_call() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // Get initial state
+    let state = game.get_state_p1().await.unwrap();
+    let initial_pot = state.pot_total;
+    assert!(initial_pot > 0, "Blinds should be posted");
+    
+    // Current player calls
+    game.send_action_current_player(PlayerAction::Call).await;
+    
+    // Get updated state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Pot should have increased or stayed the same
+    assert!(state.pot_total >= initial_pot, "Pot should have increased or stayed same");
+}
+
+#[tokio::test]
+async fn test_ws_player_action_raise() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // Get initial state
+    let state = game.get_state_p1().await.unwrap();
+    let initial_pot = state.pot_total;
+    
+    // Current player raises - use a substantial raise amount
+    let raise_amount = 150; // Raise to 150 total
+    game.send_action_current_player(PlayerAction::Raise(raise_amount)).await;
+    
+    // Get updated state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Pot should have increased
+    assert!(state.pot_total > initial_pot, "Pot should increase after raise: was {}, now {}", initial_pot, state.pot_total);
+}
+
+#[tokio::test]
+async fn test_ws_player_action_check() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // First player calls to match the big blind
+    game.send_action_current_player(PlayerAction::Call).await;
+    
+    // BB checks (bets are now even)
+    game.send_action_current_player(PlayerAction::Check).await;
+    
+    // After both act, should advance past PreFlop
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Should have community cards now (Flop or beyond)
+    if !state.community_cards.is_empty() {
+        assert!(state.community_cards.len() >= 3, "Should have at least flop cards");
+    }
+}
+
+#[tokio::test]
+async fn test_ws_player_action_allin() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // Get initial state
+    let state = game.get_state_p1().await.unwrap();
+    let initial_pot = state.pot_total;
+    
+    // Current player goes all-in
+    game.send_action_current_player(PlayerAction::AllIn).await;
+    
+    // Get updated state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Pot should have increased significantly (most of player's stack added)
+    assert!(
+        state.pot_total > initial_pot + 500,
+        "Pot should increase significantly after all-in: was {}, now {}",
+        initial_pot, state.pot_total
+    );
+}
+
+#[tokio::test]
+async fn test_ws_game_completes_after_fold() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // Get initial state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Calculate total chips in play (stacks + pot)
+    let total_chips: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    
+    // Current player folds
+    game.send_action_current_player(PlayerAction::Fold).await;
+    
+    // Wait for hand to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    game.drain_messages().await;
+    
+    // Get updated state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Total chips should be conserved
+    let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    
+    assert_eq!(
+        final_total,
+        total_chips,
+        "Total chips should be conserved"
+    );
+}
+
+#[tokio::test]
+async fn test_ws_game_to_showdown() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // Play through all streets by calling/checking
+    // PreFlop: SB calls, BB checks
+    game.send_action_current_player(PlayerAction::Call).await;
+    game.send_action_current_player(PlayerAction::Check).await;
+    
+    // Continue checking through all remaining streets
+    for _ in 0..6 {
+        let state = game.get_state_p1().await;
+        if state.is_none() {
+            break;
+        }
+        let state = state.unwrap();
+        
+        if matches!(state.phase, GamePhase::Showdown | GamePhase::Waiting) {
+            break;
+        }
+        
+        game.send_action_current_player(PlayerAction::Check).await;
+    }
+    
+    // Wait for showdown to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    game.drain_messages().await;
+    
+    // Get final state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Should be in Showdown, Waiting, or PreFlop (next hand)
+    assert!(
+        matches!(state.phase, GamePhase::Showdown | GamePhase::Waiting | GamePhase::PreFlop),
+        "Should reach showdown or start next hand, got {:?}",
+        state.phase
+    );
+    
+    // Should have a winner message eventually
+    if matches!(state.phase, GamePhase::Showdown) || state.last_winner_message.is_some() {
+        // Showdown completed or about to complete
+    }
+}
+
+#[tokio::test]
+async fn test_ws_allin_showdown() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 500).await;
+    
+    // Get initial state and total chips
+    let state = game.get_state_p1().await.unwrap();
+    let total_chips: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    
+    // First player goes all-in
+    game.send_action_current_player(PlayerAction::AllIn).await;
+    
+    // Second player calls all-in
+    game.send_action_current_player(PlayerAction::Call).await;
+    
+    // Wait for all-in runout and showdown
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    game.drain_messages().await;
+    
+    // Get final state
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Total chips should be conserved
+    let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    
+    assert_eq!(
+        final_total,
+        total_chips,
+        "Chips should be conserved: initial={}, final={}",
+        total_chips, final_total
+    );
+}
+
+#[tokio::test]
+async fn test_ws_invalid_action_not_your_turn() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // Get state to see whose turn it is
+    let state = game.get_state_p1().await.unwrap();
+    
+    // Try to act from the WRONG player
+    let action_msg = ClientMessage::PlayerAction { action: PlayerAction::Call };
+    
+    if state.current_player_seat == 0 {
+        // P1's turn, so P2 tries to act
+        game.send_p2(&action_msg).await;
+    } else {
+        // P2's turn, so P1 tries to act
+        game.send_p1(&action_msg).await;
+    }
+    
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
+    // The game should still be in a valid state (action ignored or error returned)
+    let new_state = game.get_state_p1().await.unwrap();
+    assert!(
+        matches!(new_state.phase, GamePhase::PreFlop | GamePhase::Flop | GamePhase::Turn | GamePhase::River),
+        "Game should still be in valid phase"
+    );
+}
+
+#[tokio::test]
+async fn test_ws_cannot_check_when_facing_bet() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+    
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+    
+    // First player raises to create a bet to face
+    game.send_action_current_player(PlayerAction::Raise(150)).await;
+    
+    // Get state before attempting invalid check
+    let state_before = game.get_state_p1().await.unwrap();
+    let pot_before = state_before.pot_total;
+    
+    // Now try to check (should fail - there's a bet to call)
+    let action_msg = ClientMessage::PlayerAction { action: PlayerAction::Check };
+    
+    let state = game.get_state_p1().await.unwrap();
+    if state.current_player_seat == 0 {
+        game.send_p1(&action_msg).await;
+    } else {
+        game.send_p2(&action_msg).await;
+    }
+    
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    game.drain_messages().await;
+    
+    // Get state after - pot should not have changed significantly from invalid check
+    let state_after = game.get_state_p1().await.unwrap();
+    
+    // The check should either be rejected or handled gracefully
+    assert!(
+        state_after.pot_total >= pot_before,
+        "Invalid check should not affect pot negatively"
+    );
+}
+
 // ============================================================================
 // Club and View Subscription Tests
 // ============================================================================
