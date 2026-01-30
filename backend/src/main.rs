@@ -1,18 +1,5 @@
-mod api;
-mod auth;
-mod config;
-mod db;
-mod error;
-mod game;
-mod ws;
-
-use axum::{
-    routing::get,
-    Router,
-};
+use poker_server::{api, auth, config, db, ws, create_app};
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -50,21 +37,8 @@ async fn main() -> anyhow::Result<()> {
         jwt_manager: jwt_manager.clone(),
     });
 
-    // Configure CORS
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    // Build router
-    let app = Router::new()
-        .route("/", get(|| async { "Poker Server" }))
-        .route("/health", get(|| async { "OK" }))
-        .nest("/api/auth", api::auth_router().with_state(auth_state.clone()))
-        .nest("/api/clubs", api::clubs_router().with_state(auth_state.clone()))
-        .nest("/api/tables", api::tables_router().with_state(table_state))
-        .route("/ws", get(ws::ws_handler).with_state(game_server.clone()))
-        .layer(cors);
+    // Build router using lib function
+    let app = create_app(auth_state, table_state, game_server.clone());
 
     // Spawn background task to check for auto-advances
     let game_server_clone = game_server.clone();
