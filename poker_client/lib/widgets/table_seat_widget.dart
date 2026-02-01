@@ -17,6 +17,7 @@ class TableSeatWidget extends StatelessWidget {
   final bool isSmallBlind;
   final bool isBigBlind;
   final int smallBlind;
+  final bool isDealingCards;
 
   const TableSeatWidget({
     super.key,
@@ -32,6 +33,7 @@ class TableSeatWidget extends StatelessWidget {
     this.isSmallBlind = false,
     this.isBigBlind = false,
     this.smallBlind = 10,
+    this.isDealingCards = false,
   });
 
   bool get _hasCards {
@@ -52,22 +54,29 @@ class TableSeatWidget extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // Cards (above the seat circle)
-            if (_hasCards)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: player!.holeCards!
-                    .map(
-                      (card) => CardWidget(
-                        card: card,
-                        width: 35,
-                        height: 50,
-                        isShowdown: showingDown,
+            // Hide cards during dealing animation to avoid showing both animated and static cards
+            // Use Opacity instead of conditionally rendering to prevent layout shifts
+            SizedBox(
+              height: 50,
+              child: _hasCards
+                  ? Opacity(
+                      opacity: isDealingCards ? 0.0 : 1.0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: player!.holeCards!
+                            .map(
+                              (card) => CardWidget(
+                                card: card,
+                                width: 35,
+                                height: 50,
+                                isShowdown: showingDown,
+                              ),
+                            )
+                            .toList(),
                       ),
                     )
-                    .toList(),
-              )
-            else
-              const SizedBox(height: 50),
+                  : null,
+            ),
 
             const SizedBox(height: 4),
 
@@ -355,19 +364,20 @@ class PokerTableWidget extends StatefulWidget {
 class _PokerTableWidgetState extends State<PokerTableWidget> {
   bool _animatingPot = false;
   bool _lastShowingDown = false;
-  Offset? _potTargetOffset; // Where the pot should move to
   Map<String, int> _winnerPots = {}; // Map of userId to pot amount won
-  String? _lastPhase;
+  double _lastTableWidth = 0;
+  double _lastTableHeight = 0;
 
   // Card dealing animation
-  final Set<String> _dealingCardsTo =
-      {}; // Set of player IDs currently being dealt cards
-  String? _lastPhaseForCards;
+  final Map<String, int> _dealingCardsTo =
+      {}; // Map of player ID to card number (1 or 2) being dealt
+  final Map<String, bool> _cardAnimationStarted = {}; // Track if animation has started for player's current card
+  String? _lastPhase;
 
   @override
   void initState() {
     super.initState();
-    _lastPhaseForCards = widget.gamePhase;
+    _lastPhase = widget.gamePhase;
   }
 
   @override
@@ -379,59 +389,133 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   void didUpdateWidget(PokerTableWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Detect new hand starting - reset pot animation and trigger card dealing animation
-    if (_lastPhaseForCards != 'PreFlop' && widget.gamePhase == 'PreFlop') {
+    // Trigger animation when entering PreFlop phase
+    if (_lastPhase != 'PreFlop' && widget.gamePhase == 'PreFlop') {
+      print('DEBUG: Entering PreFlop - starting card dealing animation');
+
       // Reset pot animation state for new hand
       setState(() {
         _animatingPot = false;
-        _potTargetOffset = null;
         _winnerPots.clear();
       });
 
       // Clear any existing animation state
       _dealingCardsTo.clear();
+      _cardAnimationStarted.clear();
 
       // Schedule card dealing animation with stagger
+      // Note: shuffle sound plays immediately in game_screen.dart
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
 
-        // Add a delay for shuffle sound to play (250ms)
-        Future.delayed(const Duration(milliseconds: 250), () {
-          if (!mounted) return;
+        // Get players with cards sorted by dealing order (starting from small blind)
+        final playersWithCards = widget.players
+            .where((p) => p.holeCards != null && p.holeCards!.isNotEmpty)
+            .toList();
 
-          // Deal cards to each player with staggered timing
-          for (int i = 0; i < widget.players.length; i++) {
-            final player = widget.players[i];
-            if (player.holeCards != null && player.holeCards!.isNotEmpty) {
-              Future.delayed(Duration(milliseconds: i * 30), () {
+        if (playersWithCards.isEmpty) {
+          print('DEBUG: No players with cards found');
+          return;
+        }
+
+        print('DEBUG: Dealing to ${playersWithCards.length} players');
+
+        // Sort players by seat position starting from small blind
+        final smallBlindSeat = widget.smallBlindSeat;
+        if (smallBlindSeat != null) {
+          playersWithCards.sort((a, b) {
+            int seatA = (a.seat - smallBlindSeat) % widget.maxSeats;
+            int seatB = (b.seat - smallBlindSeat) % widget.maxSeats;
+            return seatA.compareTo(seatB);
+          });
+        }
+
+        final numPlayers = playersWithCards.length;
+        // Time per card: 500ms total / (2 rounds) = 250ms per round
+        // Delay between each card in a round: 250ms / numPlayers
+        final delayBetweenCards = (250 / numPlayers).ceil();
+        final cardAnimDuration = 200; // Each card animation duration
+
+        // Deal first card to all players
+        for (int i = 0; i < numPlayers; i++) {
+          final player = playersWithCards[i];
+          Future.delayed(Duration(milliseconds: i * delayBetweenCards), () {
+            if (mounted) {
+              setState(() {
+                _dealingCardsTo[player.userId] = 1; // First card
+                _cardAnimationStarted[player.userId] = false; // Not started yet
+              });
+
+              // Start the animation on next frame (to trigger AnimatedPositioned)
+              Future.delayed(const Duration(milliseconds: 10), () {
                 if (mounted) {
                   setState(() {
-                    _dealingCardsTo.add(player.userId);
+                    _cardAnimationStarted[player.userId] = true;
                   });
+                }
+              });
 
-                  // Remove from dealing set after animation completes
-                  Future.delayed(const Duration(milliseconds: 150), () {
-                    if (mounted) {
-                      setState(() {
-                        _dealingCardsTo.remove(player.userId);
-                      });
-                    }
+              // Remove from dealing set after animation completes
+              Future.delayed(Duration(milliseconds: cardAnimDuration + 10), () {
+                if (mounted) {
+                  setState(() {
+                    _dealingCardsTo.remove(player.userId);
+                    _cardAnimationStarted.remove(player.userId);
                   });
                 }
               });
             }
-          }
-        });
+          });
+        }
+
+        // Deal second card to all players (after first round completes)
+        final secondRoundDelay = numPlayers * delayBetweenCards;
+        for (int i = 0; i < numPlayers; i++) {
+          final player = playersWithCards[i];
+          Future.delayed(
+            Duration(milliseconds: secondRoundDelay + i * delayBetweenCards),
+            () {
+              if (mounted) {
+                setState(() {
+                  _dealingCardsTo[player.userId] = 2; // Second card
+                  _cardAnimationStarted[player.userId] = false; // Not started yet
+                });
+
+                // Start the animation on next frame
+                Future.delayed(const Duration(milliseconds: 10), () {
+                  if (mounted) {
+                    setState(() {
+                      _cardAnimationStarted[player.userId] = true;
+                    });
+                  }
+                });
+
+                // Remove from dealing set after animation completes
+                Future.delayed(Duration(milliseconds: cardAnimDuration + 10), () {
+                  if (mounted) {
+                    setState(() {
+                      _dealingCardsTo.remove(player.userId);
+                      _cardAnimationStarted.remove(player.userId);
+                    });
+                  }
+                });
+              }
+            },
+          );
+        }
       });
     }
-    _lastPhaseForCards = widget.gamePhase;
+
+    _lastPhase = widget.gamePhase;
 
     // Don't trigger pot animation if one is already running
     if (_animatingPot) return;
 
     // Detect all winners and their pot amounts
-    final winners = widget.players.where((p) => p.isWinner && p.potWon > 0).toList();
-    
+    final winners = widget.players
+        .where((p) => p.isWinner && p.potWon > 0)
+        .toList();
+
     // Only trigger if we have winners and haven't animated these specific winnings yet
     if (winners.isNotEmpty) {
       final newWinners = <String, int>{};
@@ -441,11 +525,13 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           newWinners[winner.userId] = winner.potWon;
         }
       }
-      
+
       if (newWinners.isNotEmpty) {
         print('Starting pot animation for ${newWinners.length} winner(s):');
         for (final entry in newWinners.entries) {
-          final winner = widget.players.firstWhere((p) => p.userId == entry.key);
+          final winner = widget.players.firstWhere(
+            (p) => p.userId == entry.key,
+          );
           print('  - ${winner.username}: \$${entry.value}');
         }
 
@@ -484,7 +570,11 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         }
 
         // Calculate pot center position
-        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - 150);
+        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - 125);
+
+        // Track dimension changes to force animation update on significant resize
+        final dimensionKey =
+            '${(tableWidth / 10).round()}_${(tableHeight / 10).round()}';
 
         return SizedBox(
           width: tableWidth,
@@ -522,17 +612,20 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               // Player bet chips on table (between player and center)
               for (int i = 0; i < widget.maxSeats; i++)
                 _buildChipsAtPosition(i, tableWidth, tableHeight),
-              
+
               // Pot chips - if animating, show separate chips for each winner
               if (_animatingPot && _winnerPots.isNotEmpty)
                 // Animate each winner's pot portion separately
                 ..._winnerPots.entries.map((entry) {
                   final winnerId = entry.key;
                   final potAmount = entry.value;
-                  final winner = widget.players.firstWhere((p) => p.userId == winnerId);
-                  
+                  final winner = widget.players.firstWhere(
+                    (p) => p.userId == winnerId,
+                  );
+
                   // Calculate winner seat position
-                  final angle = (2 * pi * winner.seat / widget.maxSeats) - pi / 2;
+                  final angle =
+                      (2 * pi * winner.seat / widget.maxSeats) - pi / 2;
                   final radiusX = tableWidth * 0.35;
                   final radiusY = tableHeight * 0.35;
                   final targetX = radiusX * cos(angle);
@@ -541,8 +634,9 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                     (tableWidth / 2) + targetX,
                     (tableHeight / 2) + targetY - 40,
                   );
-                  
+
                   return AnimatedPositioned(
+                    key: ValueKey('pot_${winnerId}_$dimensionKey'),
                     duration: const Duration(milliseconds: 1000),
                     curve: Curves.easeInOut,
                     left: targetOffset.dx,
@@ -557,6 +651,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                           smallBlind: widget.smallBlind,
                           scale: 1.0,
                           showAmount: true,
+                          textColor: Colors.lightGreenAccent,
                         ),
                       ),
                     ),
@@ -575,6 +670,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                       smallBlind: widget.smallBlind,
                       scale: 1.1,
                       showAmount: true,
+                      textColor: Colors.lightGreenAccent,
                     ),
                   ),
                 ),
@@ -636,6 +732,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         isSmallBlind: widget.smallBlindSeat == seatIndex,
         isBigBlind: widget.bigBlindSeat == seatIndex,
         smallBlind: widget.smallBlind,
+        isDealingCards: player != null && _dealingCardsTo.containsKey(player.userId),
       ),
     );
   }
@@ -684,7 +781,17 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     final player = widget.players.where((p) => p.seat == seatIndex).firstOrNull;
 
     // Only show animation if this player is being dealt cards
-    if (player == null || !_dealingCardsTo.contains(player.userId)) {
+    if (player == null || !_dealingCardsTo.containsKey(player.userId)) {
+      return const SizedBox.shrink();
+    }
+
+    final cardNumber = _dealingCardsTo[player.userId]!;
+    final card =
+        (player.holeCards != null && player.holeCards!.length >= cardNumber)
+        ? player.holeCards![cardNumber - 1]
+        : null;
+
+    if (card == null) {
       return const SizedBox.shrink();
     }
 
@@ -696,28 +803,26 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     final targetX = radiusX * cos(angle);
     final targetY = radiusY * sin(angle);
 
+    // Offset second card slightly to the right
+    final cardOffset = (cardNumber - 1) * 20.0;
+
+    // Check if animation has started (determines position)
+    final bool animationStarted = _cardAnimationStarted[player.userId] ?? false;
+
     return AnimatedPositioned(
-      duration: const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 200),
       curve: Curves.easeOut,
-      // Start from center, move to player position
-      left: (tableWidth / 2) + targetX - 40,
-      top: (tableHeight / 2) + targetY - 120, // Above seat (where cards appear)
+      // Start from center, move to player position after animation starts
+      left: animationStarted 
+          ? (tableWidth / 2) + targetX - 40 + cardOffset
+          : (tableWidth / 2) - 17.5, // Center of table (card width is 35, so -17.5)
+      top: animationStarted
+          ? (tableHeight / 2) + targetY - 120 // Above seat (where cards appear)
+          : (tableHeight / 2) - 25, // Center of table (card height is 50, so -25)
       child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 150),
+        duration: const Duration(milliseconds: 100),
         opacity: 1.0,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: (player.holeCards ?? [])
-              .map(
-                (card) => CardWidget(
-                  card: card,
-                  width: 35,
-                  height: 50,
-                  isShowdown: false,
-                ),
-              )
-              .toList(),
-        ),
+        child: CardWidget(card: card, width: 35, height: 50, isShowdown: false),
       ),
     );
   }

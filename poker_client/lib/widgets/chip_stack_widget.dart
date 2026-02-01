@@ -8,6 +8,7 @@ class ChipStackWidget extends StatelessWidget {
   final int smallBlind;
   final double scale;
   final bool showAmount;
+  final Color textColor;
 
   const ChipStackWidget({
     super.key,
@@ -15,6 +16,7 @@ class ChipStackWidget extends StatelessWidget {
     this.smallBlind = 10,
     this.scale = 1.0,
     this.showAmount = true,
+    this.textColor = Colors.amber,
   });
 
   @override
@@ -46,12 +48,12 @@ class ChipStackWidget extends StatelessWidget {
             decoration: BoxDecoration(
               color: Colors.black87,
               borderRadius: BorderRadius.circular(8 * scale),
-              border: Border.all(color: Colors.amber, width: 1),
+              border: Border.all(color: textColor, width: 1),
             ),
             child: Text(
               '\$$amount',
               style: TextStyle(
-                color: Colors.amber,
+                color: textColor,
                 fontSize: 11 * scale,
                 fontWeight: FontWeight.bold,
               ),

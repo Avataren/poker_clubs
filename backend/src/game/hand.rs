@@ -156,19 +156,34 @@ pub fn determine_winners(hands: Vec<(usize, HandRank)>) -> Vec<usize> {
     // Find the best hand rank
     let best_rank = hands.iter().map(|(_, rank)| rank).max().unwrap().clone();
 
-    // Debug logging for flush comparisons
-    if best_rank.description.contains("Flush") {
-        tracing::info!("=== FLUSH WINNER DETERMINATION ===");
-        for (idx, rank) in &hands {
-            tracing::info!(
-                "Player {}: {} (rank_value={}, sub_rank={}, best_cards={:?})",
-                idx, rank.description, rank.rank_value, rank.sub_rank,
-                rank.best_cards.iter().map(|c| format!("{}{}", c.rank, c.suit)).collect::<Vec<_>>()
-            );
-        }
-        tracing::info!("Best rank: {} (rank_value={}, sub_rank={})", 
-            best_rank.description, best_rank.rank_value, best_rank.sub_rank);
+    // Debug logging for all hand comparisons
+    tracing::info!("=== WINNER DETERMINATION ===");
+    for (idx, rank) in &hands {
+        tracing::info!(
+            "Player {}: {} (rank_value={}, sub_rank={}, best_cards={:?})",
+            idx, rank.description, rank.rank_value, rank.sub_rank,
+            rank.best_cards.iter().map(|c| format!("{}{}. ", 
+                match c.rank {
+                    14 => "A", 13 => "K", 12 => "Q", 11 => "J", 10 => "T",
+                    r => return r.to_string(),
+                },
+                match c.suit {
+                    0 => "♣", 1 => "♦", 2 => "♥", 3 => "♠",
+                    _ => "?",
+                }
+            )).collect::<String>()
+        );
     }
+    tracing::info!("Best rank: {} (rank_value={}, sub_rank={})", 
+        best_rank.description, best_rank.rank_value, best_rank.sub_rank);
+    
+    let winners: Vec<usize> = hands
+        .iter()
+        .filter(|(_, rank)| rank == &best_rank)
+        .map(|(idx, _)| *idx)
+        .collect();
+    
+    tracing::info!("Winners: {:?}", winners);
 
     // Return all players with the best hand (handles ties)
     hands
@@ -617,6 +632,73 @@ mod tests {
             (2, player2),
         ]);
         assert_eq!(winners, vec![0], "Only player 0 with A-high flush should win");
+    }
+
+    #[test]
+    fn test_two_pair_ace_kicker_vs_jack_kicker() {
+        // Board: 9d 9h 6d Jc 4h
+        // Bob: 6c Ad = 99 66 A (two pair with ace kicker)
+        // Diana: 6s Th = 99 66 J (two pair with jack kicker)
+        // Bob should win because A > J
+        let community = vec![
+            Card::new(9, 1),  // 9d
+            Card::new(9, 2),  // 9h
+            Card::new(6, 1),  // 6d
+            Card::new(11, 0), // Jc
+            Card::new(4, 2),  // 4h
+        ];
+
+        // Bob: 6c Ad
+        let bob = evaluate_hand(
+            &[Card::new(6, 0), Card::new(14, 1)], // 6c Ad
+            &community,
+        );
+
+        // Diana: 6s Th
+        let diana = evaluate_hand(
+            &[Card::new(6, 3), Card::new(10, 2)], // 6s Th
+            &community,
+        );
+
+        assert_eq!(bob.description, "Two Pair");
+        assert_eq!(diana.description, "Two Pair");
+        assert!(bob > diana, "Two pair 99 66 with A kicker should beat 99 66 with J kicker");
+
+        let winners = determine_winners(vec![(0, bob), (1, diana)]);
+        assert_eq!(winners, vec![0], "Bob with ace kicker should win alone");
+    }
+
+    #[test]
+    fn test_two_pair_board_better_than_both_players() {
+        // Board: AA 77 K - both players have worse hole cards
+        // Both players play the board for AA 77 K
+        let community = vec![
+            Card::new(14, 1), // Ad
+            Card::new(14, 0), // Ac
+            Card::new(7, 2),  // 7h
+            Card::new(7, 3),  // 7s
+            Card::new(13, 0), // Kc
+        ];
+
+        // Alice: JT (worse than board)
+        let alice = evaluate_hand(
+            &[Card::new(11, 1), Card::new(10, 3)], // Jd Ts
+            &community,
+        );
+
+        // Bob: 85 (worse than board)
+        let bob = evaluate_hand(
+            &[Card::new(8, 0), Card::new(5, 0)], // 8c 5c
+            &community,
+        );
+
+        assert_eq!(alice.description, "Two Pair");
+        assert_eq!(bob.description, "Two Pair");
+        assert_eq!(alice, bob, "Both should have identical AA 77 K using the board");
+
+        let winners = determine_winners(vec![(0, alice), (1, bob)]);
+        assert_eq!(winners.len(), 2, "Should be a split pot - both play the board");
+        assert!(winners.contains(&0) && winners.contains(&1));
     }
 
     #[test]

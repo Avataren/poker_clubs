@@ -45,7 +45,7 @@ impl Player {
     }
 
     pub fn deal_cards(&mut self, cards: Vec<Card>) {
-        self.hole_cards = cards;
+        self.hole_cards.extend(cards);
     }
 
     pub fn place_bet(&mut self, amount: i64) -> i64 {

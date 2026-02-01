@@ -395,11 +395,23 @@ impl PokerTable {
 
     fn deal_hole_cards(&mut self) {
         let hole_cards_count = self.variant.hole_cards_count();
-        for player in &mut self.players {
-            if player.can_act() {
-                let cards = self.deck.deal_multiple(hole_cards_count);
-                player.deal_cards(cards);
+        
+        // Calculate where dealing starts: small blind (first player after dealer)
+        let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
+        
+        // Deal one card at a time to each player, just like real poker
+        // Start from small blind and go around the table for each round
+        for round in 0..hole_cards_count {
+            let mut current_seat = sb_seat;
+            for _ in 0..self.players.len() {
+                if self.players[current_seat].can_act() {
+                    if let Some(card) = self.deck.deal() {
+                        self.players[current_seat].deal_cards(vec![card]);
+                    }
+                }
+                current_seat = (current_seat + 1) % self.players.len();
             }
+            tracing::debug!("Dealt card round {} of {}, starting from seat {}", round + 1, hole_cards_count, sb_seat);
         }
     }
 

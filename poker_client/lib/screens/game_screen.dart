@@ -98,9 +98,9 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _playActionSounds(GameState newState) {
-    // Play shuffle sound when new hand starts (phase changes to PreFlop and deck is fresh)
+    // Play shuffle sound when entering PreFlop phase
     if (_previousGameState?.phase != 'PreFlop' && newState.phase == 'PreFlop') {
-      _soundService.playShuffle();
+      print('DEBUG: Playing shuffle sound - entering PreFlop');
     }
 
     // Detect player actions by comparing states
@@ -147,7 +147,9 @@ class _GameScreenState extends State<GameScreen> {
         // Play chip sounds for bet/call/raise
         else if (betChanged && player.currentBet > prevPlayer.currentBet) {
           final betAmount = player.currentBet - prevPlayer.currentBet;
-          print('Playing CHIP sound for ${player.username}: \$$betAmount (action: ${player.lastAction})');
+          print(
+            'Playing CHIP sound for ${player.username}: \$$betAmount (action: ${player.lastAction})',
+          );
           _soundService.playChipBet(betAmount);
         }
       }
