@@ -156,6 +156,20 @@ pub fn determine_winners(hands: Vec<(usize, HandRank)>) -> Vec<usize> {
     // Find the best hand rank
     let best_rank = hands.iter().map(|(_, rank)| rank).max().unwrap().clone();
 
+    // Debug logging for flush comparisons
+    if best_rank.description.contains("Flush") {
+        tracing::info!("=== FLUSH WINNER DETERMINATION ===");
+        for (idx, rank) in &hands {
+            tracing::info!(
+                "Player {}: {} (rank_value={}, sub_rank={}, best_cards={:?})",
+                idx, rank.description, rank.rank_value, rank.sub_rank,
+                rank.best_cards.iter().map(|c| format!("{}{}", c.rank, c.suit)).collect::<Vec<_>>()
+            );
+        }
+        tracing::info!("Best rank: {} (rank_value={}, sub_rank={})", 
+            best_rank.description, best_rank.rank_value, best_rank.sub_rank);
+    }
+
     // Return all players with the best hand (handles ties)
     hands
         .into_iter()
@@ -318,6 +332,295 @@ mod tests {
     }
 
     #[test]
+    fn test_flush_vs_flush_different_high_cards() {
+        // Test that A-high flush beats K-high flush
+        let community = vec![
+            Card::new(10, 2), // Th
+            Card::new(8, 2),  // 8h
+            Card::new(6, 2),  // 6h
+            Card::new(4, 2),  // 4h
+            Card::new(2, 0),  // 2c
+        ];
+
+        // Player 1: Ah 3h = A-high flush (Ah Th 8h 6h 4h)
+        let player1 = evaluate_hand(
+            &[Card::new(14, 2), Card::new(3, 2)], // Ah 3h
+            &community,
+        );
+
+        // Player 2: Kh 5h = K-high flush (Kh Th 8h 6h 5h)
+        let player2 = evaluate_hand(
+            &[Card::new(13, 2), Card::new(5, 2)], // Kh 5h
+            &community,
+        );
+
+        assert_eq!(player1.description, "Flush");
+        assert_eq!(player2.description, "Flush");
+        assert!(player1 > player2, "A-high flush should beat K-high flush");
+
+        let winners = determine_winners(vec![(0, player1.clone()), (1, player2.clone())]);
+        assert_eq!(winners, vec![0], "Player 0 with A-high flush should win alone");
+    }
+
+    #[test]
+    fn test_flush_vs_flush_same_high_card_different_kicker() {
+        // Both have K-high flush but different second cards
+        let community = vec![
+            Card::new(13, 1), // Kd
+            Card::new(9, 1),  // 9d
+            Card::new(7, 1),  // 7d
+            Card::new(5, 1),  // 5d
+            Card::new(2, 0),  // 2c
+        ];
+
+        // Player 1: Qd 3d = K-high flush with Q kicker
+        let player1 = evaluate_hand(
+            &[Card::new(12, 1), Card::new(3, 1)], // Qd 3d
+            &community,
+        );
+
+        // Player 2: Jd 4d = K-high flush with J kicker
+        let player2 = evaluate_hand(
+            &[Card::new(11, 1), Card::new(4, 1)], // Jd 4d
+            &community,
+        );
+
+        assert_eq!(player1.description, "Flush");
+        assert_eq!(player2.description, "Flush");
+        assert!(player1 > player2, "K-Q-9-7-5 flush should beat K-J-9-7-5 flush");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners, vec![0], "Player 0 with higher kicker should win alone");
+    }
+
+    #[test]
+    fn test_identical_flushes_split_pot() {
+        // Both players make the exact same flush using board cards
+        let community = vec![
+            Card::new(14, 3), // As
+            Card::new(13, 3), // Ks
+            Card::new(11, 3), // Js
+            Card::new(9, 3),  // 9s
+            Card::new(7, 3),  // 7s
+        ];
+
+        // Player 1: 2s 3s (board flush is better)
+        let player1 = evaluate_hand(
+            &[Card::new(2, 3), Card::new(3, 3)],
+            &community,
+        );
+
+        // Player 2: 4s 5s (board flush is better)
+        let player2 = evaluate_hand(
+            &[Card::new(4, 3), Card::new(5, 3)],
+            &community,
+        );
+
+        assert_eq!(player1.description, "Flush");
+        assert_eq!(player2.description, "Flush");
+        assert_eq!(player1, player2, "Both should have identical A-K-J-9-7 flush");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners.len(), 2, "Should be a split pot");
+        assert!(winners.contains(&0) && winners.contains(&1));
+    }
+
+    #[test]
+    fn test_straight_vs_straight() {
+        let community = vec![
+            Card::new(9, 0),  // 9c
+            Card::new(8, 1),  // 8d
+            Card::new(7, 2),  // 7h
+            Card::new(6, 3),  // 6s
+            Card::new(2, 0),  // 2c
+        ];
+
+        // Player 1: T5 = T-high straight (T9876)
+        let player1 = evaluate_hand(
+            &[Card::new(10, 1), Card::new(5, 2)],
+            &community,
+        );
+
+        // Player 2: 53 = 9-high straight (98765)
+        let player2 = evaluate_hand(
+            &[Card::new(5, 1), Card::new(3, 2)],
+            &community,
+        );
+
+        assert_eq!(player1.description, "Straight");
+        assert_eq!(player2.description, "Straight");
+        assert!(player1 > player2, "T-high straight should beat 9-high straight");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners, vec![0]);
+    }
+
+    #[test]
+    fn test_full_house_vs_full_house() {
+        let community = vec![
+            Card::new(10, 0), // Tc
+            Card::new(10, 1), // Td
+            Card::new(10, 2), // Th
+            Card::new(5, 3),  // 5s
+            Card::new(3, 0),  // 3c
+        ];
+
+        // Player 1: 55 = TTT55 (tens full of fives)
+        let player1 = evaluate_hand(
+            &[Card::new(5, 0), Card::new(5, 1)],
+            &community,
+        );
+
+        // Player 2: 33 = TTT33 (tens full of threes)
+        let player2 = evaluate_hand(
+            &[Card::new(3, 1), Card::new(3, 2)],
+            &community,
+        );
+
+        assert_eq!(player1.description, "Full House");
+        assert_eq!(player2.description, "Full House");
+        assert!(player1 > player2, "Tens full of fives should beat tens full of threes");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners, vec![0]);
+    }
+
+    #[test]
+    fn test_quads_vs_quads() {
+        let community = vec![
+            Card::new(10, 0), // Tc
+            Card::new(10, 1), // Td
+            Card::new(10, 2), // Th
+            Card::new(10, 3), // Ts
+            Card::new(3, 0),  // 3c
+        ];
+
+        // Player 1: AK = TTTTA (quads with ace kicker)
+        let player1 = evaluate_hand(
+            &[Card::new(14, 1), Card::new(13, 2)],
+            &community,
+        );
+
+        // Player 2: Q9 = TTTTQ (quads with queen kicker)
+        let player2 = evaluate_hand(
+            &[Card::new(12, 1), Card::new(9, 2)],
+            &community,
+        );
+
+        assert_eq!(player1.description, "Four of a Kind");
+        assert_eq!(player2.description, "Four of a Kind");
+        assert!(player1 > player2, "Quads with A kicker should beat quads with Q kicker");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners, vec![0]);
+    }
+
+    #[test]
+    fn test_high_card_vs_high_card() {
+        let community = vec![
+            Card::new(13, 0), // Kc
+            Card::new(11, 1), // Jd
+            Card::new(9, 2),  // 9h
+            Card::new(7, 3),  // 7s
+            Card::new(5, 0),  // 5c
+        ];
+
+        // Player 1: A2 = AKJ97 high
+        let player1 = evaluate_hand(
+            &[Card::new(14, 1), Card::new(2, 2)],
+            &community,
+        );
+
+        // Player 2: Q3 = KQJ97 high
+        let player2 = evaluate_hand(
+            &[Card::new(12, 1), Card::new(3, 2)],
+            &community,
+        );
+
+        assert_eq!(player1.description, "High Card");
+        assert_eq!(player2.description, "High Card");
+        assert!(player1 > player2, "A-high should beat K-high");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners, vec![0]);
+    }
+
+    #[test]
+    fn test_flush_beats_straight() {
+        let community = vec![
+            Card::new(10, 2), // Th
+            Card::new(9, 2),  // 9h
+            Card::new(8, 2),  // 8h
+            Card::new(7, 0),  // 7c
+            Card::new(6, 1),  // 6d
+        ];
+
+        // Player 1: Ah 2h = A-high flush
+        let player1 = evaluate_hand(
+            &[Card::new(14, 2), Card::new(2, 2)],
+            &community,
+        );
+
+        // Player 2: JQ = Q-high straight
+        let player2 = evaluate_hand(
+            &[Card::new(11, 0), Card::new(12, 1)],
+            &community,
+        );
+
+        assert_eq!(player1.description, "Flush");
+        assert_eq!(player2.description, "Straight");
+        assert!(player1 > player2, "Flush should beat straight");
+
+        let winners = determine_winners(vec![(0, player1), (1, player2)]);
+        assert_eq!(winners, vec![0]);
+    }
+
+    #[test]
+    fn test_three_way_different_flushes() {
+        let community = vec![
+            Card::new(12, 1), // Qd
+            Card::new(10, 1), // Td
+            Card::new(8, 1),  // 8d
+            Card::new(6, 1),  // 6d
+            Card::new(2, 0),  // 2c
+        ];
+
+        // Player 0: Ad 3d = A-high flush
+        let player0 = evaluate_hand(
+            &[Card::new(14, 1), Card::new(3, 1)],
+            &community,
+        );
+
+        // Player 1: Kd 4d = K-high flush
+        let player1 = evaluate_hand(
+            &[Card::new(13, 1), Card::new(4, 1)],
+            &community,
+        );
+
+        // Player 2: 9d 5d = Q-high flush
+        let player2 = evaluate_hand(
+            &[Card::new(9, 1), Card::new(5, 1)],
+            &community,
+        );
+
+        assert_eq!(player0.description, "Flush");
+        assert_eq!(player1.description, "Flush");
+        assert_eq!(player2.description, "Flush");
+        
+        assert!(player0 > player1, "A-high flush should beat K-high flush");
+        assert!(player1 > player2, "K-high flush should beat Q-high flush");
+        assert!(player0 > player2, "A-high flush should beat Q-high flush");
+
+        let winners = determine_winners(vec![
+            (0, player0),
+            (1, player1),
+            (2, player2),
+        ]);
+        assert_eq!(winners, vec![0], "Only player 0 with A-high flush should win");
+    }
+
+    #[test]
+
     fn test_omaha_returns_none_with_insufficient_cards() {
         let hole_cards = vec![
             Card::new(14, 0), // Ace
