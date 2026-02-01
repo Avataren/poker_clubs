@@ -1242,7 +1242,13 @@ async fn test_ws_fold_against_allin_ends_immediately() {
     );
 
     // Chips must be conserved
-    let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    // Note: During Showdown phase, the pot has already been awarded to winners but not yet reset
+    // (kept visible for UI animation). So we exclude the pot from the calculation in Showdown.
+    let final_total: i64 = if matches!(state.phase, GamePhase::Showdown) {
+        state.players.iter().map(|p| p.stack).sum::<i64>()
+    } else {
+        state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total
+    };
     assert_eq!(final_total, total_chips, "Chips must be conserved after fold vs all-in");
 
     // There should be a winner message
