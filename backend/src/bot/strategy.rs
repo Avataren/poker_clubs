@@ -96,9 +96,14 @@ impl BotStrategy for SimpleStrategy {
         if can_check {
             // No bet to face
             if strength > raise_threshold && !is_slowplaying {
-                // Strong hand: raise
-                let raise_size = self.calculate_raise(view, strength, &mut rng);
-                PlayerAction::Raise(raise_size)
+                // Strong hand: raise (or occasional all-in with nuts)
+                if strength >= 0.95 && rng.gen_bool(0.15 + self.aggression * 0.15) {
+                    // Very strong hand: sometimes go all-in
+                    PlayerAction::AllIn
+                } else {
+                    let raise_size = self.calculate_raise(view, strength, &mut rng);
+                    PlayerAction::Raise(raise_size)
+                }
             } else if is_bluffing && view.phase != GamePhase::PreFlop {
                 // Occasional bluff bet
                 let raise_size = self.calculate_raise(view, 0.5, &mut rng);
@@ -109,8 +114,11 @@ impl BotStrategy for SimpleStrategy {
         } else {
             // Facing a bet — use pot odds to decide
             if strength > raise_threshold && !is_slowplaying {
-                // Strong hand: raise (or all-in if short-stacked)
-                if to_call >= view.my_stack / 2 {
+                // Strong hand: raise or re-raise
+                if strength >= 0.95 && rng.gen_bool(0.20 + self.aggression * 0.20) {
+                    // Very strong hand (nuts): go all-in more often
+                    PlayerAction::AllIn
+                } else if to_call >= view.my_stack / 2 {
                     PlayerAction::AllIn
                 } else {
                     let raise_size = self.calculate_raise(view, strength, &mut rng);
@@ -140,17 +148,56 @@ impl BotStrategy for SimpleStrategy {
 impl SimpleStrategy {
     fn calculate_raise(&self, view: &BotGameView, strength: f64, rng: &mut impl Rng) -> i64 {
         let bb = view.big_blind.max(1);
-
-        // Base raise: 2-4x big blind, scaled by strength and aggression
-        let multiplier = 2.0 + strength * 2.0 + self.aggression;
-        let base = (bb as f64 * multiplier) as i64;
-
-        // Add some variance (0.8x to 1.3x)
-        let variance: f64 = rng.gen_range(0.8..1.3);
-        let raise = (base as f64 * variance) as i64;
-
-        // Clamp: at least 1 BB, at most our stack
-        raise.max(bb).min(view.my_stack)
+        let pot = view.pot_total.max(bb);
+        
+        // Preflop: use BB-based sizing (2.5-4x BB)
+        if view.community_cards.is_empty() {
+            let multiplier = 2.5 + strength * 1.5 + self.aggression * 0.5;
+            let raise = (bb as f64 * multiplier) as i64;
+            return raise.max(bb * 2).min(view.my_stack);
+        }
+        
+        // Postflop: use pot-based sizing like real players
+        // Choose bet size based on hand strength and aggression
+        let base_percentage = if strength >= 0.85 {
+            // Very strong hands: vary between 50% pot to overbet
+            if rng.gen_bool(0.3) {
+                1.0 + self.aggression * 0.5 // pot or overbet (for value)
+            } else if rng.gen_bool(0.5) {
+                0.75 // 75% pot
+            } else {
+                0.5 // 50% pot
+            }
+        } else if strength >= 0.70 {
+            // Strong hands: 50-75% pot
+            if rng.gen_bool(0.6) {
+                0.75
+            } else {
+                0.5
+            }
+        } else if strength >= 0.55 {
+            // Medium hands: 33-50% pot
+            if rng.gen_bool(0.5) {
+                0.5
+            } else {
+                0.33
+            }
+        } else {
+            // Bluff or weak: 33-50% pot (smaller for bluffs)
+            if rng.gen_bool(0.7) {
+                0.33
+            } else {
+                0.5
+            }
+        };
+        
+        // Add small variance (0.9x to 1.15x)
+        let variance: f64 = rng.gen_range(0.9..1.15);
+        let raise = (pot as f64 * base_percentage * variance) as i64;
+        
+        // Ensure minimum bet is at least 1 BB, and don't exceed stack
+        let min_bet = bb.max(view.current_bet + bb);
+        raise.max(min_bet).min(view.my_stack)
     }
 }
 

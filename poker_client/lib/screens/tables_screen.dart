@@ -24,19 +24,27 @@ class _TablesScreenState extends State<TablesScreen> {
   final _bigBlindController = TextEditingController(text: '100');
   String _selectedVariantId = 'holdem';
   String _selectedFormatId = 'cash';
+  WebSocketService? _wsService;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
 
-    // Subscribe to club broadcasts for new tables
-    final wsService = context.read<WebSocketService>();
-    wsService.onClubUpdate = () {
-      print('Club broadcast received - refreshing tables list');
-      _loadTables();
-    };
-    wsService.viewingClub(widget.club.id);
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    // Set up WebSocketService subscription if not already done
+    if (_wsService == null) {
+      _wsService = context.read<WebSocketService>();
+      _wsService!.onClubUpdate = () {
+        print('Club broadcast received - refreshing tables list');
+        _loadTables();
+      };
+      _wsService!.viewingClub(widget.club.id);
+    }
   }
 
   Future<void> _loadData() async {
@@ -76,7 +84,10 @@ class _TablesScreenState extends State<TablesScreen> {
     if (_tableNameController.text.isEmpty) return;
 
     try {
-      await context.read<ApiService>().createTable(
+      print(
+        'Creating table: ${_tableNameController.text}, variant: $_selectedVariantId, format: $_selectedFormatId',
+      );
+      final table = await context.read<ApiService>().createTable(
         widget.club.id,
         _tableNameController.text,
         int.parse(_smallBlindController.text),
@@ -84,9 +95,17 @@ class _TablesScreenState extends State<TablesScreen> {
         variantId: _selectedVariantId,
         formatId: _selectedFormatId,
       );
+      print('Table created successfully: ${table.id}');
       _tableNameController.clear();
-      _loadTables();
-    } catch (e) {
+      await _loadTables();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Table "${table.name}" created!')),
+        );
+      }
+    } catch (e, stackTrace) {
+      print('Error creating table: $e');
+      print('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -269,10 +288,11 @@ class _TablesScreenState extends State<TablesScreen> {
     _smallBlindController.dispose();
     _bigBlindController.dispose();
 
-    // Unsubscribe from club broadcasts
-    final wsService = context.read<WebSocketService>();
-    wsService.onClubUpdate = null;
-    wsService.leavingView();
+    // Unsubscribe from club broadcasts using stored reference
+    if (_wsService != null) {
+      _wsService!.onClubUpdate = null;
+      _wsService!.leavingView();
+    }
 
     super.dispose();
   }

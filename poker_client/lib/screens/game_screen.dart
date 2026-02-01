@@ -4,6 +4,7 @@ import '../models/club.dart';
 import '../models/game_state.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
+import '../services/sound_service.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/table_seat_widget.dart';
 
@@ -18,7 +19,9 @@ class GameScreen extends StatefulWidget {
 
 class _GameScreenState extends State<GameScreen> {
   late WebSocketService _wsService;
+  final _soundService = SoundService();
   GameState? _gameState;
+  GameState? _previousGameState;
   String _statusMessage = 'Connecting...';
   final _raiseController = TextEditingController(text: '200');
   final _buyinController = TextEditingController(text: '5000');
@@ -30,7 +33,9 @@ class _GameScreenState extends State<GameScreen> {
     super.initState();
     _wsService = WebSocketService();
     _wsService.onGameStateUpdate = (gameState) {
+      _playActionSounds(gameState);
       setState(() {
+        _previousGameState = _gameState;
         _gameState = gameState;
         _updateStatusMessage();
         _checkIfSeated();
@@ -90,6 +95,46 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       _statusMessage = isMyTurn ? 'Your turn!' : 'Waiting for your turn...';
     });
+  }
+
+  void _playActionSounds(GameState newState) {
+    // Play shuffle sound when new hand starts (phase changes to PreFlop and deck is fresh)
+    if (_previousGameState?.phase != 'PreFlop' && newState.phase == 'PreFlop') {
+      _soundService.playShuffle();
+    }
+
+    // Detect player actions by comparing states
+    if (_previousGameState == null) return;
+
+    for (final player in newState.players) {
+      final prevPlayer = _previousGameState!.players
+          .where((p) => p.userId == player.userId)
+          .firstOrNull;
+
+      if (prevPlayer == null) continue;
+
+      // Check if player took an action (lastAction changed or currentBet changed)
+      final actionChanged = player.lastAction != prevPlayer.lastAction;
+      final betChanged = player.currentBet != prevPlayer.currentBet;
+
+      if (actionChanged || betChanged) {
+        final action = player.lastAction?.toLowerCase() ?? '';
+
+        // Play fold sound
+        if (action.contains('fold')) {
+          _soundService.playFold();
+        }
+        // Play all-in sound
+        else if (player.isAllIn && !prevPlayer.isAllIn) {
+          _soundService.playAllIn();
+        }
+        // Play chip sounds for bet/call/raise
+        else if (betChanged && player.currentBet > prevPlayer.currentBet) {
+          final betAmount = player.currentBet - prevPlayer.currentBet;
+          _soundService.playChipBet(betAmount);
+        }
+      }
+    }
   }
 
   void _takeSeat(int seatNumber) {
@@ -214,8 +259,14 @@ class _GameScreenState extends State<GameScreen> {
                 items: const [
                   DropdownMenuItem(value: 'balanced', child: Text('Balanced')),
                   DropdownMenuItem(value: 'tight', child: Text('Tight')),
-                  DropdownMenuItem(value: 'aggressive', child: Text('Aggressive')),
-                  DropdownMenuItem(value: 'calling_station', child: Text('Calling Station')),
+                  DropdownMenuItem(
+                    value: 'aggressive',
+                    child: Text('Aggressive'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'calling_station',
+                    child: Text('Calling Station'),
+                  ),
                 ],
                 onChanged: (value) {
                   setDialogState(() => selectedStrategy = value!);
@@ -360,67 +411,48 @@ class _GameScreenState extends State<GameScreen> {
                             dealerSeat: _gameState!.dealerSeat,
                             smallBlindSeat: _gameState!.smallBlindSeat,
                             bigBlindSeat: _gameState!.bigBlindSeat,
+                            smallBlind: widget.table.smallBlind,
+                            potTotal: _gameState!.potTotal,
                           ),
 
-                          // Table center overlay (pot and community cards)
+                          // Table center overlay (community cards)
                           IgnorePointer(
-                          child: Container(
-                            constraints: const BoxConstraints(
-                              maxWidth: 400,
-                              maxHeight: 200,
+                            child: Container(
+                              constraints: const BoxConstraints(
+                                maxWidth: 400,
+                                maxHeight: 200,
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Community cards
+                                  if (_gameState!.communityCards.isNotEmpty)
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black26,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: _gameState!.communityCards
+                                            .map(
+                                              (card) => CardWidget(
+                                                card: card,
+                                                width: 50,
+                                                height: 70,
+                                                isShowdown: isShowdown,
+                                              ),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // Pot
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black45,
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(
-                                    'POT: \$${_gameState!.potTotal}',
-                                    style: const TextStyle(
-                                      color: Colors.amber,
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-
-                                // Community cards
-                                if (_gameState!.communityCards.isNotEmpty)
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black26,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: _gameState!.communityCards
-                                          .map(
-                                            (card) => CardWidget(
-                                              card: card,
-                                              width: 50,
-                                              height: 70,
-                                              isShowdown: isShowdown,
-                                            ),
-                                          )
-                                          .toList(),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
                           ),
                         ],
                       )

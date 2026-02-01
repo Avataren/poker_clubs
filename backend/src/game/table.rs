@@ -591,18 +591,24 @@ impl PokerTable {
 
         match self.phase {
             GamePhase::PreFlop => {
+                // Burn a card before dealing the flop
+                self.deck.deal();
                 // Deal flop
                 self.community_cards = self.deck.deal_multiple(3);
                 self.phase = GamePhase::Flop;
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
             GamePhase::Flop => {
+                // Burn a card before dealing the turn
+                self.deck.deal();
                 // Deal turn
                 self.community_cards.push(self.deck.deal().unwrap());
                 self.phase = GamePhase::Turn;
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
             GamePhase::Turn => {
+                // Burn a card before dealing the river
+                self.deck.deal();
                 // Deal river
                 self.community_cards.push(self.deck.deal().unwrap());
                 self.phase = GamePhase::River;
@@ -708,7 +714,8 @@ impl PokerTable {
             winner_names.push(format!("{} wins ${}", self.players[*player_idx].username, amount));
         }
 
-        self.pot.reset();
+        // DON'T reset pot here - keep it visible for animation
+        // It will be reset when start_new_hand() is called
         self.last_winner_message = Some(winner_names.join(", "));
 
         // Record showdown time for delay before new hand
