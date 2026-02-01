@@ -377,8 +377,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   void didUpdateWidget(PokerTableWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Detect new hand starting - trigger card dealing animation
+    // Detect new hand starting - reset pot animation and trigger card dealing animation
     if (_lastPhase != 'PreFlop' && widget.gamePhase == 'PreFlop') {
+      // Reset pot animation state for new hand
+      _animatingPot = false;
+      _potTargetOffset = null;
+      
       // Clear any existing animation state
       _dealingCardsTo.clear();
 
@@ -446,17 +450,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           }
         });
 
-        // Don't reset _animatingPot - let it stay true until showdown ends
+        // Keep _animatingPot true until new hand starts - pot stays at winner
       }
-    }
-
-    // Reset animation when showdown ends
-    if (_lastShowingDown && !widget.showingDown) {
-      setState(() {
-        _animatingPot = false;
-        _potTargetOffset = null;
-      });
-      print('Showdown ended, reset _animatingPot to false');
     }
 
     _lastShowingDown = widget.showingDown;
