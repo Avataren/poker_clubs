@@ -2,8 +2,45 @@
 ## Sit-and-Go (SNG) and Multi-Table Tournament (MTT) Features
 
 **Date:** February 2, 2026  
-**Status:** Planning Phase  
+**Status:** ✅ Phase 1 & 2 Complete - In Progress  
 **Author:** Backend Code Review & Architecture Planning
+
+---
+
+## 🎯 Implementation Status
+
+### ✅ Phase 1: Database Schema - COMPLETE
+- ✅ Created migration `003_tournament_tables.sql`
+- ✅ Added `tournaments`, `tournament_registrations`, `tournament_blind_levels`, `tournament_tables` tables
+- ✅ Added Tournament, TournamentRegistration, TournamentBlindLevel, TournamentTable models
+- ✅ Updated migration runner to include migration 003
+- ✅ All migrations run successfully
+
+### ✅ Phase 2: Tournament Manager Core - COMPLETE
+- ✅ Created `/backend/src/tournament/` module structure
+- ✅ Implemented `prizes.rs` with PrizeStructure and distribution logic
+  - ✅ 4/4 unit tests passing
+  - ✅ Supports heads-up, 3-player, 6-max, 9-player, 18-player, and large tournaments
+- ✅ Implemented `manager.rs` with TournamentManager
+  - ✅ `create_sng()` and `create_mtt()` methods
+  - ✅ `register_player()` with balance deduction
+  - ✅ `unregister_player()` with refunds
+  - ✅ `start_tournament()` with status management
+  - ✅ `advance_blind_level()` for blind progression
+  - ✅ `eliminate_player()` with finish position tracking
+  - ✅ `distribute_prizes()` with automatic payouts
+
+### 🚧 Phase 3: Game Engine Integration - NEXT
+- ⏳ Add blind update methods to PokerTable
+- ⏳ Player elimination detection
+- ⏳ Tournament end detection
+- ⏳ Ante collection
+
+### ⏳ Phase 4-7: Remaining Work
+- Phase 4: API Endpoints
+- Phase 5: Background Services
+- Phase 6: WebSocket Extensions
+- Phase 7: Testing & Integration
 
 ---
 

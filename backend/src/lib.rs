@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod game;
+pub mod tournament;
 pub mod ws;
 
 use axum::{routing::get, Router};

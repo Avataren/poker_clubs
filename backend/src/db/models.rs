@@ -231,3 +231,136 @@ impl Transaction {
         }
     }
 }
+
+// ============================================================================
+// Tournament Models
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Tournament {
+    pub id: String,
+    pub club_id: String,
+    pub name: String,
+    pub format_id: String,
+    pub variant_id: String,
+    pub buy_in: i64,
+    pub starting_stack: i64,
+    pub prize_pool: i64,
+    pub max_players: i32,
+    pub registered_players: i32,
+    pub remaining_players: i32,
+    pub current_blind_level: i32,
+    pub level_duration_secs: i64,
+    pub level_start_time: Option<String>,
+    pub status: String,
+    pub scheduled_start: Option<String>,
+    pub actual_start: Option<String>,
+    pub finished_at: Option<String>,
+    pub created_at: String,
+}
+
+impl Tournament {
+    pub fn new(
+        club_id: String,
+        name: String,
+        format_id: String,
+        variant_id: String,
+        buy_in: i64,
+        starting_stack: i64,
+        max_players: i32,
+        level_duration_secs: i64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            club_id,
+            name,
+            format_id,
+            variant_id,
+            buy_in,
+            starting_stack,
+            prize_pool: 0,
+            max_players,
+            registered_players: 0,
+            remaining_players: 0,
+            current_blind_level: 0,
+            level_duration_secs,
+            level_start_time: None,
+            status: "registering".to_string(),
+            scheduled_start: None,
+            actual_start: None,
+            finished_at: None,
+            created_at: Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TournamentRegistration {
+    pub tournament_id: String,
+    pub user_id: String,
+    pub registered_at: String,
+    pub starting_table_id: Option<String>,
+    pub eliminated_at: Option<String>,
+    pub finish_position: Option<i32>,
+    pub prize_amount: i64,
+}
+
+impl TournamentRegistration {
+    pub fn new(tournament_id: String, user_id: String) -> Self {
+        Self {
+            tournament_id,
+            user_id,
+            registered_at: Utc::now().to_rfc3339(),
+            starting_table_id: None,
+            eliminated_at: None,
+            finish_position: None,
+            prize_amount: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TournamentBlindLevel {
+    pub tournament_id: String,
+    pub level_number: i32,
+    pub small_blind: i64,
+    pub big_blind: i64,
+    pub ante: i64,
+}
+
+impl TournamentBlindLevel {
+    pub fn new(
+        tournament_id: String,
+        level_number: i32,
+        small_blind: i64,
+        big_blind: i64,
+        ante: i64,
+    ) -> Self {
+        Self {
+            tournament_id,
+            level_number,
+            small_blind,
+            big_blind,
+            ante,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TournamentTable {
+    pub tournament_id: String,
+    pub table_id: String,
+    pub table_number: i32,
+    pub is_active: i32,
+}
+
+impl TournamentTable {
+    pub fn new(tournament_id: String, table_id: String, table_number: i32) -> Self {
+        Self {
+            tournament_id,
+            table_id,
+            table_number,
+            is_active: 1,
+        }
+    }
+}
