@@ -23,6 +23,7 @@ pub struct Player {
     pub has_acted_this_round: bool, // Track if player acted this betting round
     pub is_winner: bool, // Whether this player won the last showdown
     pub last_action: Option<String>, // Last action taken (for display), cleared on new round
+    pub pot_won: i64, // Amount won from pot (for animation)
 }
 
 impl Player {
@@ -39,6 +40,7 @@ impl Player {
             has_acted_this_round: false,
             is_winner: false,
             last_action: None,
+            pot_won: 0,
         }
     }
 
@@ -76,6 +78,7 @@ impl Player {
         self.has_acted_this_round = false;
         self.is_winner = false;
         self.last_action = None;
+        self.pot_won = 0;
 
         // Activate players who have chips and aren't voluntarily sitting out
         if self.stack > 0 && self.state != PlayerState::SittingOut {

@@ -576,11 +576,12 @@ impl PokerTable {
             let total = self.pot.total();
             self.players[winner_idx].add_chips(total);
             self.players[winner_idx].is_winner = true;
+            self.players[winner_idx].pot_won = total;
             self.last_winner_message = Some(format!(
                 "{} wins ${}",
                 self.players[winner_idx].username, total
             ));
-            self.pot.reset();
+            // Pot reset happens in start_new_hand(), not here
             self.phase = GamePhase::Showdown;
             tracing::info!(
                 "Hand over: {} wins ${} (all others folded)",
@@ -711,6 +712,7 @@ impl PokerTable {
         for (player_idx, amount) in &payouts {
             self.players[*player_idx].add_chips(*amount);
             self.players[*player_idx].is_winner = true;
+            self.players[*player_idx].pot_won = *amount;
             winner_names.push(format!("{} wins ${}", self.players[*player_idx].username, amount));
         }
 
@@ -893,6 +895,7 @@ impl PokerTable {
                     },
                     is_winner: p.is_winner,
                     last_action: p.last_action.clone(),
+                    pot_won: p.pot_won,
                 }
             }).collect(),
             max_seats: self.max_seats,
@@ -959,6 +962,7 @@ pub struct PublicPlayerState {
     pub hole_cards: Option<Vec<Card>>, // Only visible to the player themselves
     pub is_winner: bool,
     pub last_action: Option<String>,
+    pub pot_won: i64, // Amount won from pot (for animation)
 }
 
 #[cfg(test)]

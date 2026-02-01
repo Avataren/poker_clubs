@@ -356,18 +356,18 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   bool _animatingPot = false;
   bool _lastShowingDown = false;
   Offset? _potTargetOffset; // Where the pot should move to
-  String? _lastWinnerId; // Track last winner to detect new wins
-  int _lastPotTotal = 0; // Store pot amount during animation
+  Map<String, int> _winnerPots = {}; // Map of userId to pot amount won
+  String? _lastPhase;
 
   // Card dealing animation
   final Set<String> _dealingCardsTo =
       {}; // Set of player IDs currently being dealt cards
-  String? _lastPhase;
+  String? _lastPhaseForCards;
 
   @override
   void initState() {
     super.initState();
-    _lastPhase = widget.gamePhase;
+    _lastPhaseForCards = widget.gamePhase;
   }
 
   @override
@@ -380,12 +380,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     super.didUpdateWidget(oldWidget);
 
     // Detect new hand starting - reset pot animation and trigger card dealing animation
-    if (_lastPhase != 'PreFlop' && widget.gamePhase == 'PreFlop') {
+    if (_lastPhaseForCards != 'PreFlop' && widget.gamePhase == 'PreFlop') {
       // Reset pot animation state for new hand
       setState(() {
         _animatingPot = false;
         _potTargetOffset = null;
-        _lastWinnerId = null;
+        _winnerPots.clear();
       });
 
       // Clear any existing animation state
@@ -424,44 +424,42 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         });
       });
     }
-    _lastPhase = widget.gamePhase;
+    _lastPhaseForCards = widget.gamePhase;
 
     // Don't trigger pot animation if one is already running
     if (_animatingPot) return;
 
-    // Trigger animation when there's a winner (showdown or fold win)
-    final currentWinner = widget.players.where((p) => p.isWinner).firstOrNull;
-    if (currentWinner != null && currentWinner.userId != _lastWinnerId) {
-      print('Starting pot animation to winner: ${currentWinner.username}');
-
-      // Capture pot amount before it gets reset
-      final potToAnimate = widget.potTotal > 0
-          ? widget.potTotal
-          : _lastPotTotal;
-
-      // Calculate target position
-      final winnerSeat = currentWinner.seat;
-
-      // Use current layout to estimate table dimensions
-      // We'll recalculate in build but need approximate values
-      _potTargetOffset = Offset(
-        winnerSeat.toDouble() * 100,
-        100,
-      ); // Placeholder, will be set in build
-
-      // Schedule animation to start in next frame
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          setState(() {
-            _animatingPot = true;
-            _lastWinnerId = currentWinner.userId;
-            _lastPotTotal = potToAnimate;
-          });
-          print('_animatingPot set to true in next frame, pot=$potToAnimate');
+    // Detect all winners and their pot amounts
+    final winners = widget.players.where((p) => p.isWinner && p.potWon > 0).toList();
+    
+    // Only trigger if we have winners and haven't animated these specific winnings yet
+    if (winners.isNotEmpty) {
+      final newWinners = <String, int>{};
+      for (final winner in winners) {
+        // Check if this is a new win (not already in our tracked winners)
+        if (!_winnerPots.containsKey(winner.userId)) {
+          newWinners[winner.userId] = winner.potWon;
         }
-      });
+      }
+      
+      if (newWinners.isNotEmpty) {
+        print('Starting pot animation for ${newWinners.length} winner(s):');
+        for (final entry in newWinners.entries) {
+          final winner = widget.players.firstWhere((p) => p.userId == entry.key);
+          print('  - ${winner.username}: \$${entry.value}');
+        }
 
-      // Keep _animatingPot true until new hand starts - pot stays at winner
+        // Schedule animation to start in next frame
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _animatingPot = true;
+              _winnerPots.addAll(newWinners);
+            });
+            print('Pot animation started for ${newWinners.length} winner(s)');
+          }
+        });
+      }
     }
 
     _lastShowingDown = widget.showingDown;
@@ -487,42 +485,6 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
         // Calculate pot center position
         final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - 150);
-
-        // Find winner position for animation
-        Offset? winnerOffset;
-        if (widget.showingDown && (_animatingPot || _potTargetOffset != null)) {
-          final winners = widget.players.where((p) => p.isWinner).toList();
-          if (winners.isNotEmpty) {
-            final winnerSeat = winners.first.seat;
-            final angle = (2 * pi * winnerSeat / widget.maxSeats) - pi / 2;
-            final radiusX = (tableWidth / 2) - 30;
-            final radiusY = (tableHeight / 2) + 10;
-            final x = radiusX * cos(angle);
-            final y = radiusY * sin(angle);
-            winnerOffset = Offset(
-              (tableWidth / 2) + x,
-              (tableHeight / 2) + y - 40,
-            );
-          }
-        }
-
-        // Determine pot position: animate to winner if flag set, otherwise center
-        final potLeft = _animatingPot && winnerOffset != null
-            ? winnerOffset.dx
-            : centerOffset.dx;
-        final potTop = _animatingPot && winnerOffset != null
-            ? winnerOffset.dy
-            : centerOffset.dy;
-
-        print(
-          'BUILD: potTotal=${widget.potTotal}, _animatingPot=$_animatingPot, showingDown=${widget.showingDown}',
-        );
-
-        if (widget.potTotal > 0) {
-          print(
-            'POT RENDER: animating=$_animatingPot, showingDown=${widget.showingDown}, left=$potLeft, top=$potTop',
-          );
-        }
 
         return SizedBox(
           width: tableWidth,
@@ -560,28 +522,59 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               // Player bet chips on table (between player and center)
               for (int i = 0; i < widget.maxSeats; i++)
                 _buildChipsAtPosition(i, tableWidth, tableHeight),
-              // Pot chips and amount - animated to winner during showdown
-              if (_animatingPot ? _lastPotTotal > 0 : widget.potTotal > 0)
+              
+              // Pot chips - if animating, show separate chips for each winner
+              if (_animatingPot && _winnerPots.isNotEmpty)
+                // Animate each winner's pot portion separately
+                ..._winnerPots.entries.map((entry) {
+                  final winnerId = entry.key;
+                  final potAmount = entry.value;
+                  final winner = widget.players.firstWhere((p) => p.userId == winnerId);
+                  
+                  // Calculate winner seat position
+                  final angle = (2 * pi * winner.seat / widget.maxSeats) - pi / 2;
+                  final radiusX = tableWidth * 0.35;
+                  final radiusY = tableHeight * 0.35;
+                  final targetX = radiusX * cos(angle);
+                  final targetY = radiusY * sin(angle);
+                  final targetOffset = Offset(
+                    (tableWidth / 2) + targetX,
+                    (tableHeight / 2) + targetY - 40,
+                  );
+                  
+                  return AnimatedPositioned(
+                    duration: const Duration(milliseconds: 1000),
+                    curve: Curves.easeInOut,
+                    left: targetOffset.dx,
+                    top: targetOffset.dy,
+                    child: FractionalTranslation(
+                      translation: const Offset(-0.5, 0),
+                      child: AnimatedScale(
+                        duration: const Duration(milliseconds: 1000),
+                        scale: 0.8,
+                        child: ChipStackWidget(
+                          amount: potAmount,
+                          smallBlind: widget.smallBlind,
+                          scale: 1.0,
+                          showAmount: true,
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList()
+              // Show centered pot when not animating
+              else if (widget.potTotal > 0)
                 AnimatedPositioned(
-                  duration: _animatingPot
-                      ? const Duration(milliseconds: 1000)
-                      : const Duration(
-                          milliseconds: 0,
-                        ), // Instant position change when not animating
-                  curve: Curves.easeInOut,
-                  left: potLeft,
-                  top: potTop,
+                  duration: const Duration(milliseconds: 0),
+                  left: centerOffset.dx,
+                  top: centerOffset.dy,
                   child: FractionalTranslation(
                     translation: const Offset(-0.5, 0),
-                    child: AnimatedScale(
-                      duration: const Duration(milliseconds: 1000),
-                      scale: _animatingPot ? 0.8 : 1.0,
-                      child: ChipStackWidget(
-                        amount: _animatingPot ? _lastPotTotal : widget.potTotal,
-                        smallBlind: widget.smallBlind,
-                        scale: 1.1,
-                        showAmount: true,
-                      ),
+                    child: ChipStackWidget(
+                      amount: widget.potTotal,
+                      smallBlind: widget.smallBlind,
+                      scale: 1.1,
+                      showAmount: true,
                     ),
                   ),
                 ),
@@ -714,7 +707,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         opacity: 1.0,
         child: Row(
           mainAxisSize: MainAxisSize.min,
-          children: player.holeCards!
+          children: (player.holeCards ?? [])
               .map(
                 (card) => CardWidget(
                   card: card,

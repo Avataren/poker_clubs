@@ -131,19 +131,23 @@ class _GameScreenState extends State<GameScreen> {
 
         // Play check sound
         if (action.contains('check')) {
+          print('Playing CHECK sound for ${player.username}');
           _soundService.playCheck();
         }
         // Play fold sound
         else if (action.contains('fold')) {
+          print('Playing FOLD sound for ${player.username}');
           _soundService.playFold();
         }
         // Play all-in sound
         else if (player.isAllIn && !prevPlayer.isAllIn) {
+          print('Playing ALL-IN sound for ${player.username}');
           _soundService.playAllIn();
         }
         // Play chip sounds for bet/call/raise
         else if (betChanged && player.currentBet > prevPlayer.currentBet) {
           final betAmount = player.currentBet - prevPlayer.currentBet;
+          print('Playing CHIP sound for ${player.username}: \$$betAmount (action: ${player.lastAction})');
           _soundService.playChipBet(betAmount);
         }
       }
