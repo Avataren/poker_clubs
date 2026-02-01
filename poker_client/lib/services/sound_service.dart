@@ -32,9 +32,19 @@ class SoundService {
     await _player.play(AssetSource('sounds/fold.ogg'));
   }
 
+  Future<void> playCheck() async {
+    if (!_enabled) return;
+    await _player.play(AssetSource('sounds/check.ogg'));
+  }
+
   Future<void> playShuffle() async {
     if (!_enabled) return;
     await _player.play(AssetSource('sounds/shuffle.ogg'));
+  }
+
+  Future<void> playGameStart() async {
+    if (!_enabled) return;
+    await _player.play(AssetSource('sounds/game-start.ogg'));
   }
 
   void dispose() {

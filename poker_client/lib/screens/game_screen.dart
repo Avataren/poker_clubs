@@ -68,7 +68,7 @@ class _GameScreenState extends State<GameScreen> {
         .firstOrNull;
 
     if (myPlayer == null) {
-      setState(() => _statusMessage = 'Select a seat to join the game');
+      setState(() => _statusMessage = '');
       return;
     }
 
@@ -113,6 +113,15 @@ class _GameScreenState extends State<GameScreen> {
 
       if (prevPlayer == null) continue;
 
+      // Detect top-up (stack increased while not in a betting round)
+      final stackIncreased =
+          player.stack > prevPlayer.stack &&
+          player.currentBet == prevPlayer.currentBet;
+      if (stackIncreased) {
+        _soundService.playGameStart();
+        continue; // Skip other sound checks for this player
+      }
+
       // Check if player took an action (lastAction changed or currentBet changed)
       final actionChanged = player.lastAction != prevPlayer.lastAction;
       final betChanged = player.currentBet != prevPlayer.currentBet;
@@ -120,8 +129,12 @@ class _GameScreenState extends State<GameScreen> {
       if (actionChanged || betChanged) {
         final action = player.lastAction?.toLowerCase() ?? '';
 
+        // Play check sound
+        if (action.contains('check')) {
+          _soundService.playCheck();
+        }
         // Play fold sound
-        if (action.contains('fold')) {
+        else if (action.contains('fold')) {
           _soundService.playFold();
         }
         // Play all-in sound
@@ -462,20 +475,21 @@ class _GameScreenState extends State<GameScreen> {
               ),
             ),
 
-            // Status message
-            Container(
-              padding: const EdgeInsets.all(12),
-              color: isMyTurn ? Colors.amber[700] : Colors.black45,
-              child: Text(
-                _statusMessage,
-                style: TextStyle(
-                  color: isMyTurn ? Colors.black : Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+            // Status message - only show if there's a message
+            if (_statusMessage.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(12),
+                color: isMyTurn ? Colors.amber[700] : Colors.black45,
+                child: Text(
+                  _statusMessage,
+                  style: TextStyle(
+                    color: isMyTurn ? Colors.black : Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
               ),
-            ),
 
             // Action buttons (only show if seated and it's my turn)
             if (_isSeated && isMyTurn)

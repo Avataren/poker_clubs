@@ -356,6 +356,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   bool _animatingPot = false;
   bool _lastShowingDown = false;
   Offset? _potTargetOffset; // Where the pot should move to
+  String? _lastWinnerId; // Track last winner to detect new wins
+  int _lastPotTotal = 0; // Store pot amount during animation
 
   // Card dealing animation
   final Set<String> _dealingCardsTo =
@@ -380,9 +382,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     // Detect new hand starting - reset pot animation and trigger card dealing animation
     if (_lastPhase != 'PreFlop' && widget.gamePhase == 'PreFlop') {
       // Reset pot animation state for new hand
-      _animatingPot = false;
-      _potTargetOffset = null;
-      
+      setState(() {
+        _animatingPot = false;
+        _potTargetOffset = null;
+        _lastWinnerId = null;
+      });
+
       // Clear any existing animation state
       _dealingCardsTo.clear();
 
@@ -424,34 +429,39 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     // Don't trigger pot animation if one is already running
     if (_animatingPot) return;
 
-    // Trigger animation when showdown starts and there's a winner
-    if (!_lastShowingDown && widget.showingDown) {
-      final winners = widget.players.where((p) => p.isWinner).toList();
-      if (winners.isNotEmpty) {
-        print('Starting pot animation to winner: ${winners.first.username}');
+    // Trigger animation when there's a winner (showdown or fold win)
+    final currentWinner = widget.players.where((p) => p.isWinner).firstOrNull;
+    if (currentWinner != null && currentWinner.userId != _lastWinnerId) {
+      print('Starting pot animation to winner: ${currentWinner.username}');
 
-        // Calculate target position
-        final winnerSeat = winners.first.seat;
+      // Capture pot amount before it gets reset
+      final potToAnimate = widget.potTotal > 0
+          ? widget.potTotal
+          : _lastPotTotal;
 
-        // Use current layout to estimate table dimensions
-        // We'll recalculate in build but need approximate values
-        _potTargetOffset = Offset(
-          winnerSeat.toDouble() * 100,
-          100,
-        ); // Placeholder, will be set in build
+      // Calculate target position
+      final winnerSeat = currentWinner.seat;
 
-        // Schedule animation to start in next frame
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            setState(() {
-              _animatingPot = true;
-            });
-            print('_animatingPot set to true in next frame');
-          }
-        });
+      // Use current layout to estimate table dimensions
+      // We'll recalculate in build but need approximate values
+      _potTargetOffset = Offset(
+        winnerSeat.toDouble() * 100,
+        100,
+      ); // Placeholder, will be set in build
 
-        // Keep _animatingPot true until new hand starts - pot stays at winner
-      }
+      // Schedule animation to start in next frame
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _animatingPot = true;
+            _lastWinnerId = currentWinner.userId;
+            _lastPotTotal = potToAnimate;
+          });
+          print('_animatingPot set to true in next frame, pot=$potToAnimate');
+        }
+      });
+
+      // Keep _animatingPot true until new hand starts - pot stays at winner
     }
 
     _lastShowingDown = widget.showingDown;
@@ -476,7 +486,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         }
 
         // Calculate pot center position
-        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - 100);
+        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - 150);
 
         // Find winner position for animation
         Offset? winnerOffset;
@@ -551,7 +561,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               for (int i = 0; i < widget.maxSeats; i++)
                 _buildChipsAtPosition(i, tableWidth, tableHeight),
               // Pot chips and amount - animated to winner during showdown
-              if (widget.potTotal > 0)
+              if (_animatingPot ? _lastPotTotal > 0 : widget.potTotal > 0)
                 AnimatedPositioned(
                   duration: _animatingPot
                       ? const Duration(milliseconds: 1000)
@@ -567,7 +577,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                       duration: const Duration(milliseconds: 1000),
                       scale: _animatingPot ? 0.8 : 1.0,
                       child: ChipStackWidget(
-                        amount: widget.potTotal,
+                        amount: _animatingPot ? _lastPotTotal : widget.potTotal,
                         smallBlind: widget.smallBlind,
                         scale: 1.1,
                         showAmount: true,

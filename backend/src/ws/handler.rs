@@ -186,7 +186,43 @@ impl GameServer {
 
     /// Check all tables for bots whose turn it is and execute their actions.
     pub async fn check_bot_actions(&self) {
-        // Phase 1: read tables + bot manager to collect actions
+        // Phase 1: Check for broke bots and auto top-up
+        let topups = {
+            let tables = self.tables.read().await;
+            let bot_mgr = self.bot_manager.read().await;
+            let mut topups = Vec::new();
+            
+            for (table_id, table) in tables.iter() {
+                // Only in cash games (can_top_up)
+                if !table.can_top_up() {
+                    continue;
+                }
+                
+                for player in &table.players {
+                    // Check if bot is broke or very low on chips
+                    if bot_mgr.is_bot(&player.user_id) && player.stack < table.big_blind * 10 {
+                        let topup_amount = table.big_blind * 100; // Top up to 100BB
+                        topups.push((table_id.clone(), player.user_id.clone(), topup_amount));
+                    }
+                }
+            }
+            topups
+        };
+
+        // Execute top-ups
+        for (table_id, user_id, amount) in topups {
+            let mut tables = self.tables.write().await;
+            if let Some(table) = tables.get_mut(&table_id) {
+                if let Ok(()) = table.top_up(&user_id, amount) {
+                    tracing::info!("Bot {} topped up ${} at table {}", user_id, amount, table_id);
+                    // Notify clients about the top-up
+                    drop(tables); // Release lock before notify
+                    self.notify_table_update(&table_id).await;
+                }
+            }
+        }
+
+        // Phase 2: read tables + bot manager to collect actions
         let actions = {
             let tables = self.tables.read().await;
             let bot_mgr = self.bot_manager.read().await;
@@ -197,7 +233,7 @@ impl GameServer {
             return;
         }
 
-        // Phase 2: execute each action (needs write lock)
+        // Phase 3: execute each action (needs write lock)
         for (table_id, user_id, action) in actions {
             let result = {
                 let mut tables = self.tables.write().await;
