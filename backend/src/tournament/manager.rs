@@ -624,6 +624,11 @@ impl TournamentManager {
                 let tournament_id = tournament.id.clone();
                 self.start_tournament_with_state(&tournament_id, tournament)
                     .await?;
+                if tournament.format_id == "sng" {
+                    self.start_sng_table(tournament).await?;
+                } else {
+                    self.start_mtt_tables(tournament).await?;
+                }
             } else {
                 self.cancel_tournament_with_state(
                     tournament,
