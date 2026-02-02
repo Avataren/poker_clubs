@@ -4,6 +4,7 @@ import '../models/club.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import 'game_screen.dart';
+import 'tournaments_screen.dart';
 
 class TablesScreen extends StatefulWidget {
   final Club club;
@@ -14,7 +15,8 @@ class TablesScreen extends StatefulWidget {
   State<TablesScreen> createState() => _TablesScreenState();
 }
 
-class _TablesScreenState extends State<TablesScreen> {
+class _TablesScreenState extends State<TablesScreen>
+    with SingleTickerProviderStateMixin {
   List<PokerTable> _tables = [];
   List<VariantInfo> _variants = [];
   List<FormatInfo> _formats = [];
@@ -25,10 +27,12 @@ class _TablesScreenState extends State<TablesScreen> {
   String _selectedVariantId = 'holdem';
   String _selectedFormatId = 'cash';
   WebSocketService? _wsService;
+  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     _loadData();
   }
 
@@ -118,172 +122,194 @@ class _TablesScreenState extends State<TablesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.club.name} - Tables'),
+        title: Text(widget.club.name),
         backgroundColor: Colors.green,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(icon: Icon(Icons.table_chart), text: 'Tables'),
+            Tab(icon: Icon(Icons.emoji_events), text: 'Tournaments'),
+          ],
+        ),
       ),
-      body: Column(
+      body: TabBarView(
+        controller: _tabController,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: _tableNameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Table Name',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _smallBlindController,
-                        decoration: const InputDecoration(
-                          labelText: 'Small Blind',
-                          border: OutlineInputBorder(),
-                        ),
-                        keyboardType: TextInputType.number,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _bigBlindController,
-                        decoration: const InputDecoration(
-                          labelText: 'Big Blind',
-                          border: OutlineInputBorder(),
-                        ),
-                        keyboardType: TextInputType.number,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                // Variant and Format selection
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _selectedVariantId,
-                        decoration: const InputDecoration(
-                          labelText: 'Game Variant',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: _variants.isEmpty
-                            ? [
-                                const DropdownMenuItem(
-                                  value: 'holdem',
-                                  child: Text('Texas Hold\'em'),
-                                ),
-                              ]
-                            : _variants
-                                  .map(
-                                    (v) => DropdownMenuItem(
-                                      value: v.id,
-                                      child: Text(v.name),
-                                    ),
-                                  )
-                                  .toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => _selectedVariantId = value);
-                          }
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _selectedFormatId,
-                        decoration: const InputDecoration(
-                          labelText: 'Game Format',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: _formats.isEmpty
-                            ? [
-                                const DropdownMenuItem(
-                                  value: 'cash',
-                                  child: Text('Cash Game'),
-                                ),
-                              ]
-                            : _formats
-                                  .map(
-                                    (f) => DropdownMenuItem(
-                                      value: f.id,
-                                      child: Text(f.name),
-                                    ),
-                                  )
-                                  .toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => _selectedFormatId = value);
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _createTable,
-                    child: const Text('Create Table'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-                    itemCount: _tables.length,
-                    itemBuilder: (context, index) {
-                      final table = _tables[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        child: ListTile(
-                          title: Text(
-                            table.name,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          subtitle: Text('Blinds: ${table.blindsStr}'),
-                          trailing: ElevatedButton(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => GameScreen(table: table),
-                                ),
-                              );
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
-                            ),
-                            child: const Text('Join'),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+          _buildTablesTab(),
+          TournamentsScreen(
+            apiService: context.read<ApiService>(),
+            websocketService: context.read<WebSocketService>(),
+            clubId: widget.club.id,
           ),
         ],
       ),
     );
   }
 
+  Widget _buildTablesTab() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _tableNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Table Name',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _smallBlindController,
+                      decoration: const InputDecoration(
+                        labelText: 'Small Blind',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _bigBlindController,
+                      decoration: const InputDecoration(
+                        labelText: 'Big Blind',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Variant and Format selection
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _selectedVariantId,
+                      decoration: const InputDecoration(
+                        labelText: 'Game Variant',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _variants.isEmpty
+                          ? [
+                              const DropdownMenuItem(
+                                value: 'holdem',
+                                child: Text('Texas Hold\'em'),
+                              ),
+                            ]
+                          : _variants
+                                .map(
+                                  (v) => DropdownMenuItem(
+                                    value: v.id,
+                                    child: Text(v.name),
+                                  ),
+                                )
+                                .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _selectedVariantId = value);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _selectedFormatId,
+                      decoration: const InputDecoration(
+                        labelText: 'Game Format',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _formats.isEmpty
+                          ? [
+                              const DropdownMenuItem(
+                                value: 'cash',
+                                child: Text('Cash Game'),
+                              ),
+                            ]
+                          : _formats
+                                .map(
+                                  (f) => DropdownMenuItem(
+                                    value: f.id,
+                                    child: Text(f.name),
+                                  ),
+                                )
+                                .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _selectedFormatId = value);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _createTable,
+                  child: const Text('Create Table'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : ListView.builder(
+                  itemCount: _tables.length,
+                  itemBuilder: (context, index) {
+                    final table = _tables[index];
+                    return Card(
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: ListTile(
+                        title: Text(
+                          table.name,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        subtitle: Text('Blinds: ${table.blindsStr}'),
+                        trailing: ElevatedButton(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => GameScreen(table: table),
+                              ),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                          ),
+                          child: const Text('Join'),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
   @override
   void dispose() {
+    _tabController.dispose();
     _tableNameController.dispose();
     _smallBlindController.dispose();
     _bigBlindController.dispose();

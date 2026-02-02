@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/game_state.dart';
+import '../models/tournament.dart';
 
 class WebSocketService {
   WebSocketChannel? _channel;
@@ -9,6 +10,26 @@ class WebSocketService {
   Function()? onConnected;
   Function()? onClubUpdate;
   Function()? onGlobalUpdate;
+
+  // Tournament event callbacks
+  Function(String tournamentId, String tournamentName, String? tableId)?
+  onTournamentStarted;
+  Function(
+    String tournamentId,
+    int level,
+    int smallBlind,
+    int bigBlind,
+    int ante,
+  )?
+  onTournamentBlindLevelIncreased;
+  Function(String tournamentId, String username, int position, int prize)?
+  onTournamentPlayerEliminated;
+  Function(
+    String tournamentId,
+    String tournamentName,
+    List<TournamentWinner> winners,
+  )?
+  onTournamentFinished;
 
   bool get isConnected => _channel != null;
 
@@ -61,6 +82,56 @@ class WebSocketService {
           final errorMsg = data['payload']['message'];
           print('Server error: $errorMsg');
           onError?.call(errorMsg);
+          break;
+
+        case 'TournamentStarted':
+          final payload = data['payload'];
+          print('Tournament started: ${payload['tournament_name']}');
+          onTournamentStarted?.call(
+            payload['tournament_id'],
+            payload['tournament_name'],
+            payload['table_id'],
+          );
+          onGlobalUpdate?.call(); // Refresh tournament lists
+          break;
+
+        case 'TournamentBlindLevelIncreased':
+          final payload = data['payload'];
+          print('Tournament blind level increased: Level ${payload['level']}');
+          onTournamentBlindLevelIncreased?.call(
+            payload['tournament_id'],
+            payload['level'],
+            payload['small_blind'],
+            payload['big_blind'],
+            payload['ante'],
+          );
+          break;
+
+        case 'TournamentPlayerEliminated':
+          final payload = data['payload'];
+          print(
+            'Player eliminated: ${payload['username']} - Position ${payload['position']}',
+          );
+          onTournamentPlayerEliminated?.call(
+            payload['tournament_id'],
+            payload['username'],
+            payload['position'],
+            payload['prize'],
+          );
+          break;
+
+        case 'TournamentFinished':
+          final payload = data['payload'];
+          print('Tournament finished: ${payload['tournament_name']}');
+          final winners = (payload['winners'] as List)
+              .map((w) => TournamentWinner.fromJson(w))
+              .toList();
+          onTournamentFinished?.call(
+            payload['tournament_id'],
+            payload['tournament_name'],
+            winners,
+          );
+          onGlobalUpdate?.call(); // Refresh tournament lists
           break;
 
         default:
@@ -178,10 +249,7 @@ class WebSocketService {
     if (name != null) payload['name'] = name;
     if (strategy != null) payload['strategy'] = strategy;
 
-    final message = jsonEncode({
-      'type': 'AddBot',
-      'payload': payload,
-    });
+    final message = jsonEncode({'type': 'AddBot', 'payload': payload});
     _channel!.sink.add(message);
   }
 
