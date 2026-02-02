@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Prize winner information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct PrizeWinner {
     pub user_id: String,
     pub username: String,

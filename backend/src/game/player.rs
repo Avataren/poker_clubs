@@ -8,6 +8,7 @@ pub enum PlayerState {
     AllIn,          // All chips in the pot
     SittingOut,     // Voluntarily sitting out (won't auto-activate)
     WaitingForHand, // Joined mid-hand, waiting for next hand to start
+    Eliminated,     // Tournament only: player has no chips left
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

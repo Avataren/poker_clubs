@@ -20,6 +20,7 @@ use tower_http::cors::{Any, CorsLayer};
 pub fn create_app(
     auth_state: Arc<api::AppState>,
     table_state: Arc<api::TableAppState>,
+    tournament_state: Arc<api::TournamentAppState>,
     game_server: Arc<ws::GameServer>,
 ) -> Router {
     let cors = CorsLayer::new()
@@ -33,6 +34,7 @@ pub fn create_app(
         .nest("/api/auth", api::auth_router().with_state(auth_state.clone()))
         .nest("/api/clubs", api::clubs_router().with_state(auth_state.clone()))
         .nest("/api/tables", api::tables_router().with_state(table_state))
+        .nest("/api/tournaments", api::tournaments_router().with_state(tournament_state))
         .route("/ws", get(ws::ws_handler).with_state(game_server))
         .layer(cors)
 }
@@ -68,6 +70,18 @@ pub async fn create_test_app() -> (Router, Arc<ws::GameServer>) {
         jwt_manager: jwt_manager.clone(),
     });
 
-    let app = create_app(auth_state, table_state, game_server.clone());
+    let tournament_manager = Arc::new(tournament::TournamentManager::new(
+        Arc::new(pool.clone()),
+        game_server.clone(),
+    ));
+
+    let tournament_state = Arc::new(api::TournamentAppState {
+        pool: pool.clone(),
+        jwt_manager: jwt_manager.clone(),
+        game_server: game_server.clone(),
+        tournament_manager,
+    });
+
+    let app = create_app(auth_state, table_state, tournament_state, game_server.clone());
     (app, game_server)
 }

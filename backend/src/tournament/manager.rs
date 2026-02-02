@@ -807,4 +807,43 @@ impl TournamentManager {
         // - Link tables to tournament
         Ok(())
     }
+
+    /// Check all running tournaments for blind level advancement
+    /// Called periodically by background task
+    pub async fn check_all_blind_levels(&self) -> Result<()> {
+        // Get all running tournaments
+        let tournaments: Vec<Tournament> = sqlx::query_as(
+            "SELECT * FROM tournaments WHERE status = 'running' AND level_start_time IS NOT NULL"
+        )
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for tournament in tournaments {
+            if let Some(level_start_str) = &tournament.level_start_time {
+                // Parse the level start time and convert to UTC
+                if let Ok(level_start) = DateTime::parse_from_rfc3339(level_start_str) {
+                    let now = Utc::now();
+                    let level_start_utc = level_start.with_timezone(&Utc);
+                    let elapsed_secs = (now - level_start_utc).num_seconds();
+
+                    // Check if it's time to advance
+                    if elapsed_secs >= tournament.level_duration_secs {
+                        tracing::info!(
+                            "Tournament {} level {} expired after {}s (duration: {}s)",
+                            tournament.id,
+                            tournament.current_blind_level,
+                            elapsed_secs,
+                            tournament.level_duration_secs
+                        );
+                        
+                        if let Err(e) = self.advance_blind_level(&tournament.id).await {
+                            tracing::error!("Failed to advance blind level for tournament {}: {:?}", tournament.id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }

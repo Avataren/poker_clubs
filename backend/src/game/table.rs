@@ -977,6 +977,90 @@ pub struct PublicPlayerState {
     pub pot_won: i64, // Amount won from pot (for animation)
 }
 
+impl PokerTable {
+    // ==================== Tournament-Specific Methods ====================
+
+    /// Update blinds and minimum raise (called when tournament blind level advances)
+    pub fn update_blinds(&mut self, small_blind: i64, big_blind: i64) {
+        self.small_blind = small_blind;
+        self.big_blind = big_blind;
+        self.min_raise = big_blind;
+        tracing::info!(
+            "Table {} blinds updated to {}/{}",
+            self.table_id,
+            small_blind,
+            big_blind
+        );
+    }
+
+    /// Apply antes from all active players (called at start of hand in tournament mode)
+    pub fn apply_antes(&mut self, ante: i64) -> GameResult<()> {
+        if ante == 0 {
+            return Ok(());
+        }
+
+        for (seat, player) in self.players.iter_mut().enumerate() {
+            if player.can_act() || player.state == PlayerState::WaitingForHand {
+                let actual_ante = player.place_bet(ante);
+                self.pot.add_bet(seat, actual_ante);
+                tracing::debug!(
+                    "Player {} posted ante: ${} (requested: ${})",
+                    player.username,
+                    actual_ante,
+                    ante
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check for eliminated players (stack = 0 in tournament mode)
+    /// Returns list of user_ids who are eliminated
+    pub fn check_eliminations(&mut self) -> Vec<String> {
+        if !self.format.eliminates_players() {
+            return vec![];
+        }
+
+        let mut eliminated = vec![];
+        for player in &mut self.players {
+            if player.stack == 0 
+                && player.state != PlayerState::Eliminated 
+                && player.state != PlayerState::SittingOut
+            {
+                let user_id = player.user_id.clone();
+                let username = player.username.clone();
+                player.state = PlayerState::Eliminated;
+                eliminated.push(user_id);
+                tracing::info!("Player {} eliminated from tournament", username);
+            }
+        }
+        eliminated
+    }
+
+    /// Check if tournament is finished (1 or fewer players remaining)
+    pub fn tournament_finished(&self) -> bool {
+        if !self.format.eliminates_players() {
+            return false;
+        }
+
+        let active_count = self.players.iter()
+            .filter(|p| p.state != PlayerState::Eliminated && p.stack > 0)
+            .count();
+
+        active_count <= 1
+    }
+
+    /// Get remaining tournament players (not eliminated)
+    pub fn get_remaining_players(&self) -> Vec<String> {
+        self.players
+            .iter()
+            .filter(|p| p.state != PlayerState::Eliminated && p.stack > 0)
+            .map(|p| p.user_id.clone())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

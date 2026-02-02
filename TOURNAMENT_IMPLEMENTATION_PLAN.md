@@ -2,7 +2,7 @@
 ## Sit-and-Go (SNG) and Multi-Table Tournament (MTT) Features
 
 **Date:** February 2, 2026  
-**Status:** ✅ Phase 1 & 2 Complete - In Progress  
+**Status:** ✅ Phase 1-6 Complete - In Progress  
 **Author:** Backend Code Review & Architecture Planning
 
 ---
@@ -30,16 +30,34 @@
   - ✅ `eliminate_player()` with finish position tracking
   - ✅ `distribute_prizes()` with automatic payouts
 
-### 🚧 Phase 3: Game Engine Integration - NEXT
-- ⏳ Add blind update methods to PokerTable
-- ⏳ Player elimination detection
-- ⏳ Tournament end detection
-- ⏳ Ante collection
+### ✅ Phase 3: Game Engine Integration - COMPLETE
+- ✅ Added `update_blinds()` method to PokerTable
+- ✅ Added `apply_antes()` method for ante collection
+- ✅ Added `check_eliminations()` for player elimination detection
+- ✅ Added `tournament_finished()` for tournament end detection
+- ✅ Added `Eliminated` state to PlayerState enum
+- ✅ Added `get_remaining_players()` helper method
 
-### ⏳ Phase 4-7: Remaining Work
-- Phase 4: API Endpoints
-- Phase 5: Background Services
-- Phase 6: WebSocket Extensions
+### ✅ Phase 4: API Endpoints - COMPLETE
+- ✅ Created `backend/src/api/tournaments.rs` with full endpoint set
+- ✅ Tournament creation endpoints (SNG/MTT)
+- ✅ Registration and unregistration endpoints
+- ✅ Tournament listing and detail endpoints
+- ✅ Tournament administration endpoints
+- ✅ Results and prizes endpoints
+- ✅ Wired up tournament routes in main.rs and lib.rs
+- ✅ Created TournamentAppState with TournamentManager
+
+### ✅ Phase 5: Background Services - COMPLETE
+- ✅ Added `check_all_blind_levels()` method to TournamentManager
+- ✅ Background task in main.rs to check blind levels every 10 seconds
+- ✅ Automatic blind level advancement based on timer
+
+### ⏳ Phase 6: WebSocket Extensions - IN PROGRESS
+- ⏳ Add tournament-specific WebSocket messages
+- ⏳ Broadcast tournament updates to players
+
+### ⏳ Phase 7: Testing & Integration - NEXT
 - Phase 7: Testing & Integration
 
 ---
