@@ -395,6 +395,19 @@ impl TournamentManager {
             ).await;
         }
 
+        // Broadcast blind level increase event
+        use crate::ws::messages::ServerMessage;
+        self.game_server.broadcast_tournament_event(
+            tournament_id,
+            ServerMessage::TournamentBlindLevelIncreased {
+                tournament_id: tournament_id.to_string(),
+                level: (tournament.current_blind_level + 1) as i64,
+                small_blind: new_level.small_blind,
+                big_blind: new_level.big_blind,
+                ante: new_level.ante,
+            },
+        ).await;
+
         Ok(true)
     }
 
@@ -433,12 +446,32 @@ impl TournamentManager {
         .execute(&*self.pool)
         .await?;
 
+        // Get username and potential prize
+        let username = self.get_username(user_id).await?;
+        let prize = if let Some(state) = self.tournaments.read().await.get(tournament_id) {
+            state.prize_structure.prize_for_position(finish_position, tournament.prize_pool)
+        } else {
+            0
+        };
+
         tracing::info!(
             "Player {} eliminated from tournament {} at position {}",
             user_id,
             tournament_id,
             finish_position
         );
+
+        // Broadcast player elimination event
+        use crate::ws::messages::ServerMessage;
+        self.game_server.broadcast_tournament_event(
+            tournament_id,
+            ServerMessage::TournamentPlayerEliminated {
+                tournament_id: tournament_id.to_string(),
+                username,
+                position: finish_position as i64,
+                prize,
+            },
+        ).await;
 
         // Check if tournament is finished
         if tournament.remaining_players <= 1 {
@@ -466,6 +499,26 @@ impl TournamentManager {
         let winners = self.distribute_prizes(tournament_id).await?;
 
         tracing::info!("Tournament {} finished with {} winners", tournament_id, winners.len());
+
+        // Broadcast tournament finished event
+        use crate::ws::messages::{ServerMessage, TournamentWinner};
+        let winner_info: Vec<TournamentWinner> = winners.iter().map(|w| {
+            TournamentWinner {
+                username: w.username.clone(),
+                position: w.position as i64,
+                prize: w.prize_amount,
+            }
+        }).collect();
+
+        self.game_server.broadcast_tournament_event(
+            tournament_id,
+            ServerMessage::TournamentFinished {
+                tournament_id: tournament_id.to_string(),
+                tournament_name: tournament.name.clone(),
+                winners: winner_info,
+            },
+        ).await;
+
         Ok(winners)
     }
 
@@ -888,6 +941,20 @@ impl TournamentManager {
         .execute(&*self.pool)
         .await?;
 
+        // Set tournament ID on the table
+        self.game_server.set_table_tournament(&table_id, tournament.id.clone()).await;
+
+        // Broadcast tournament started event
+        use crate::ws::messages::ServerMessage;
+        self.game_server.broadcast_tournament_event(
+            &tournament.id,
+            ServerMessage::TournamentStarted {
+                tournament_id: tournament.id.clone(),
+                tournament_name: tournament.name.clone(),
+                table_id: Some(table_id.clone()),
+            },
+        ).await;
+
         tracing::info!(
             "Created SNG table {} for tournament {} with {} players",
             table_id,
@@ -996,6 +1063,9 @@ impl TournamentManager {
             .execute(&*self.pool)
             .await?;
 
+            // Set tournament ID on the table
+            self.game_server.set_table_tournament(&table_id, tournament.id.clone()).await;
+
             tracing::info!(
                 "Created MTT table {} (#{}) for tournament {} with {} players",
                 table_id,
@@ -1011,6 +1081,17 @@ impl TournamentManager {
             tournament.id,
             player_count
         );
+
+        // Broadcast tournament started event
+        use crate::ws::messages::ServerMessage;
+        self.game_server.broadcast_tournament_event(
+            &tournament.id,
+            ServerMessage::TournamentStarted {
+                tournament_id: tournament.id.clone(),
+                tournament_name: tournament.name.clone(),
+                table_id: None,  // MTT has multiple tables
+            },
+        ).await;
 
         Ok(())
     }
@@ -1045,6 +1126,52 @@ impl TournamentManager {
                         
                         if let Err(e) = self.advance_blind_level(&tournament.id).await {
                             tracing::error!("Failed to advance blind level for tournament {}: {:?}", tournament.id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check all tournament tables for player eliminations
+    /// Called periodically by background task
+    pub async fn check_tournament_eliminations(&self) -> Result<()> {
+        // Get all active tournament tables
+        let tables: Vec<(String, String)> = sqlx::query_as(
+            "SELECT tournament_id, table_id FROM tournament_tables WHERE is_active = 1"
+        )
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for (tournament_id, table_id) in tables {
+            // Check if this table has any eliminations
+            if let Some((_, eliminated_users)) = self.game_server.check_table_eliminations(&table_id).await {
+                // Process each elimination
+                for user_id in eliminated_users {
+                    tracing::info!("Player {} eliminated from tournament {}", user_id, tournament_id);
+                    
+                    // Record the elimination and check if tournament is finished
+                    match self.eliminate_player(&tournament_id, &user_id).await {
+                        Ok(Some(prizes)) => {
+                            tracing::info!(
+                                "Tournament {} finished! {} prize winners",
+                                tournament_id,
+                                prizes.len()
+                            );
+                            // TODO: Broadcast tournament finished message via WebSocket
+                        }
+                        Ok(None) => {
+                            // Elimination recorded, tournament continues
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to process elimination for player {} in tournament {}: {:?}",
+                                user_id,
+                                tournament_id,
+                                e
+                            );
                         }
                     }
                 }

@@ -37,4 +37,36 @@ pub enum ServerMessage {
     Pong,
     ClubUpdate,
     GlobalUpdate,
+    
+    // Tournament events
+    TournamentStarted {
+        tournament_id: String,
+        tournament_name: String,
+        table_id: Option<String>,
+    },
+    TournamentBlindLevelIncreased {
+        tournament_id: String,
+        level: i64,
+        small_blind: i64,
+        big_blind: i64,
+        ante: i64,
+    },
+    TournamentPlayerEliminated {
+        tournament_id: String,
+        username: String,
+        position: i64,
+        prize: i64,
+    },
+    TournamentFinished {
+        tournament_id: String,
+        tournament_name: String,
+        winners: Vec<TournamentWinner>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TournamentWinner {
+    pub username: String,
+    pub position: i64,
+    pub prize: i64,
 }

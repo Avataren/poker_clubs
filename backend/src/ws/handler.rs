@@ -175,6 +175,53 @@ impl GameServer {
         }
     }
 
+    /// Set tournament ID for a table
+    pub async fn set_table_tournament(&self, table_id: &str, tournament_id: String) {
+        let mut tables = self.tables.write().await;
+        if let Some(table) = tables.get_mut(table_id) {
+            table.set_tournament_id(Some(tournament_id));
+        }
+    }
+
+    /// Check a table for eliminations and return (tournament_id, eliminated_users)
+    pub async fn check_table_eliminations(&self, table_id: &str) -> Option<(String, Vec<String>)> {
+        let mut tables = self.tables.write().await;
+        if let Some(table) = tables.get_mut(table_id) {
+            let eliminated = table.check_eliminations();
+            if !eliminated.is_empty() {
+                if let Some(tournament_id) = &table.tournament_id {
+                    return Some((tournament_id.clone(), eliminated));
+                }
+            }
+        }
+        None
+    }
+
+    /// Broadcast a tournament event to all tables in a tournament
+    pub async fn broadcast_tournament_event(&self, tournament_id: &str, _message: ServerMessage) {
+        let tables = self.tables.read().await;
+        let mut table_ids = Vec::new();
+        
+        // Find all tables for this tournament
+        for (table_id, table) in tables.iter() {
+            if let Some(tid) = &table.tournament_id {
+                if tid == tournament_id {
+                    table_ids.push(table_id.clone());
+                }
+            }
+        }
+        
+        drop(tables);
+        
+        // Broadcast to all tournament tables
+        let broadcasts = self.table_broadcasts.read().await;
+        for table_id in table_ids {
+            if let Some(tx) = broadcasts.get(&table_id) {
+                let _ = tx.send(TableBroadcast { table_id: table_id.clone() });
+            }
+        }
+    }
+
     async fn get_or_create_broadcast(&self, table_id: &str) -> broadcast::Receiver<TableBroadcast> {
         let mut broadcasts = self.table_broadcasts.write().await;
         let tx = broadcasts.entry(table_id.to_string())

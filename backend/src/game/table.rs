@@ -45,6 +45,7 @@ pub struct PokerTable {
     pub last_phase_change_time: Option<u64>,
     pub street_delay_ms: u64,  // Delay between flop/turn/river
     pub showdown_delay_ms: u64, // Delay to show results
+    pub tournament_id: Option<String>,  // If this is a tournament table
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
     #[serde(skip, default = "default_format")]
@@ -81,6 +82,7 @@ impl Clone for PokerTable {
             last_phase_change_time: self.last_phase_change_time,
             street_delay_ms: self.street_delay_ms,
             showdown_delay_ms: self.showdown_delay_ms,
+            tournament_id: self.tournament_id.clone(),
             variant: self.variant.clone_box(),
             format: self.format.clone_box(),
         }
@@ -139,9 +141,15 @@ impl PokerTable {
             last_phase_change_time: None,
             street_delay_ms: DEFAULT_STREET_DELAY_MS,
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
+            tournament_id: None,
             variant,
             format,
         }
+    }
+
+    /// Set the tournament ID for this table
+    pub fn set_tournament_id(&mut self, tournament_id: Option<String>) {
+        self.tournament_id = tournament_id;
     }
 
     /// Get the variant ID of this table

@@ -86,6 +86,18 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Spawn background task for tournament player eliminations (check every 5 seconds)
+    let tournament_mgr_eliminations = tournament_manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            if let Err(e) = tournament_mgr_eliminations.check_tournament_eliminations().await {
+                tracing::error!("Error checking tournament eliminations: {:?}", e);
+            }
+        }
+    });
+
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.server_addr()).await?;
     tracing::info!("Server listening on {}", config.server_addr());

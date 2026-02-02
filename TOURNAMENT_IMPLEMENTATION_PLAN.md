@@ -2,7 +2,7 @@
 ## Sit-and-Go (SNG) and Multi-Table Tournament (MTT) Features
 
 **Date:** February 2, 2026  
-**Status:** ✅ Phase 1-6 Complete - In Progress  
+**Status:** ✅ Phase 1-7 Complete - Testing Remaining  
 **Author:** Backend Code Review & Architecture Planning
 
 ---
@@ -37,6 +37,7 @@
 - ✅ Added `tournament_finished()` for tournament end detection
 - ✅ Added `Eliminated` state to PlayerState enum
 - ✅ Added `get_remaining_players()` helper method
+- ✅ Added `tournament_id` field to PokerTable for tracking
 
 ### ✅ Phase 4: API Endpoints - COMPLETE
 - ✅ Created `backend/src/api/tournaments.rs` with full endpoint set
@@ -53,12 +54,28 @@
 - ✅ Background task in main.rs to check blind levels every 10 seconds
 - ✅ Automatic blind level advancement based on timer
 
-### ⏳ Phase 6: WebSocket Extensions - IN PROGRESS
-- ⏳ Add tournament-specific WebSocket messages
-- ⏳ Broadcast tournament updates to players
+### ✅ Phase 6: Table Creation & Management - COMPLETE
+- ✅ Implemented `start_sng_table()` for single-table SNG creation
+- ✅ Implemented `start_mtt_tables()` for multi-table distribution
+- ✅ Player seating across tables for SNGs and MTTs
+- ✅ Tournament-to-table linking via `tournament_tables`
+- ✅ Blind updates propagated to all tournament tables
 
-### ⏳ Phase 7: Testing & Integration - NEXT
-- Phase 7: Testing & Integration
+### ✅ Phase 7: Tournament Lifecycle Integration - COMPLETE
+- ✅ Added `check_tournament_eliminations()` to TournamentManager
+- ✅ Background task checking eliminations every 5 seconds
+- ✅ Tournament event broadcasting via WebSocket
+  - ✅ TournamentStarted message
+  - ✅ TournamentBlindLevelIncreased message
+  - ✅ TournamentPlayerEliminated message
+  - ✅ TournamentFinished message
+- ✅ Automatic prize distribution on tournament completion
+- ✅ Tournament status tracking from registration to completion
+
+### ⏳ Phase 8: Testing & Documentation - NEXT
+- ⏳ Integration tests for full tournament lifecycle
+- ⏳ API documentation updates
+- ⏳ Client-side tournament UI integration
 
 ---
 
