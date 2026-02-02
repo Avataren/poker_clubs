@@ -525,7 +525,7 @@ impl TournamentManager {
                 prize_pool, max_players, min_players, registered_players, remaining_players,
                 current_blind_level, level_duration_secs, level_start_time,
                 status, scheduled_start, pre_seat_secs, actual_start, finished_at, cancel_reason, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&tournament.id)
         .bind(&tournament.club_id)
