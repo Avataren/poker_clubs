@@ -12,6 +12,11 @@ class ApiService {
   String? get userId => _userId;
   bool get isAuthenticated => _token != null;
 
+  void logout() {
+    _token = null;
+    _userId = null;
+  }
+
   Future<Map<String, dynamic>> register(
     String username,
     String email,

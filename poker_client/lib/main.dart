@@ -26,6 +26,9 @@ class PokerApp extends StatelessWidget {
           brightness: Brightness.dark,
           useMaterial3: true,
         ),
+        routes: {
+          '/login': (context) => const LoginScreen(),
+        },
         home: const LoginScreen(),
       ),
     );

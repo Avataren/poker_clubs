@@ -97,9 +97,27 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
       _loadClubs();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        final errorMsg = e.toString();
+        // Check if it's an authentication error
+        if (errorMsg.contains('no longer exists') || 
+            errorMsg.contains('Unauthorized') ||
+            errorMsg.contains('401')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Session expired. Please log in again.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          // Log out and return to login screen
+          context.read<ApiService>().logout();
+          if (mounted) {
+            Navigator.of(context).pushReplacementNamed('/login');
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e')),
+          );
+        }
       }
     }
   }
@@ -118,6 +136,14 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
               _loadClubs();
             },
             tooltip: 'Refresh clubs',
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () {
+              context.read<ApiService>().logout();
+              Navigator.of(context).pushReplacementNamed('/login');
+            },
+            tooltip: 'Logout',
           ),
         ],
       ),
