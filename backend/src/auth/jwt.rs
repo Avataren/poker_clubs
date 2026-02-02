@@ -11,8 +11,8 @@ pub struct Claims {
 
 impl Claims {
     pub fn new(user_id: String, username: String, expiration_hours: i64) -> Self {
-        let exp = (chrono::Utc::now() + chrono::Duration::hours(expiration_hours))
-            .timestamp() as usize;
+        let exp =
+            (chrono::Utc::now() + chrono::Duration::hours(expiration_hours)).timestamp() as usize;
 
         Self {
             sub: user_id,

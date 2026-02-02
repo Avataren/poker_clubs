@@ -68,11 +68,8 @@ impl BlindSchedule {
         let levels = multipliers
             .iter()
             .map(|&mult| {
-                BlindLevel::new(
-                    starting_bb * mult / 2,
-                    starting_bb * mult,
-                )
-                .with_duration(level_duration_secs)
+                BlindLevel::new(starting_bb * mult / 2, starting_bb * mult)
+                    .with_duration(level_duration_secs)
             })
             .collect();
         Self::new(levels)
@@ -404,16 +401,9 @@ pub struct MultiTableTournament {
 }
 
 impl MultiTableTournament {
-    pub fn new(
-        name: String,
-        buy_in: i64,
-        starting_stack: i64,
-        level_duration_secs: u64,
-    ) -> Self {
-        let blind_schedule = BlindSchedule::standard_tournament(
-            starting_stack / 100,
-            level_duration_secs,
-        );
+    pub fn new(name: String, buy_in: i64, starting_stack: i64, level_duration_secs: u64) -> Self {
+        let blind_schedule =
+            BlindSchedule::standard_tournament(starting_stack / 100, level_duration_secs);
 
         Self {
             config: FormatConfig {
@@ -482,20 +472,25 @@ impl GameFormat for MultiTableTournament {
 /// Factory function to create a format from its ID
 /// Note: SNG and MTT require specific parameters, so this creates with defaults
 /// For cash games, caller should typically use CashGame::new() directly with blinds
-pub fn format_from_id(id: &str, small_blind: i64, big_blind: i64, max_seats: usize) -> Option<Box<dyn GameFormat>> {
+pub fn format_from_id(
+    id: &str,
+    small_blind: i64,
+    big_blind: i64,
+    max_seats: usize,
+) -> Option<Box<dyn GameFormat>> {
     match id {
         "cash" => Some(Box::new(CashGame::new(small_blind, big_blind, max_seats))),
         "sng" => Some(Box::new(SitAndGo::new(
-            big_blind * 100,  // Default buy-in = 100 big blinds
-            big_blind * 100,  // Starting stack = buy-in
+            big_blind * 100, // Default buy-in = 100 big blinds
+            big_blind * 100, // Starting stack = buy-in
             max_seats,
-            300,              // 5 minute levels
+            300, // 5 minute levels
         ))),
         "mtt" => Some(Box::new(MultiTableTournament::new(
             "Tournament".to_string(),
             big_blind * 100,
             big_blind * 100,
-            600,              // 10 minute levels
+            600, // 10 minute levels
         ))),
         _ => None,
     }
@@ -513,7 +508,7 @@ mod tests {
     #[test]
     fn test_cash_game_format() {
         let cash = CashGame::new(50, 100, 9);
-        
+
         assert!(cash.can_join());
         assert!(cash.can_cash_out());
         assert!(cash.can_top_up());
@@ -525,24 +520,24 @@ mod tests {
     #[test]
     fn test_sng_format() {
         let mut sng = SitAndGo::new(100, 1500, 6, 300);
-        
+
         assert!(sng.can_join());
         assert!(!sng.can_cash_out());
         assert!(!sng.can_top_up());
         assert!(sng.has_increasing_blinds());
         assert!(sng.eliminates_players());
         assert_eq!(*sng.status(), TournamentStatus::Registering);
-        
+
         // Register players
         for _ in 0..5 {
             assert!(sng.register_player());
             assert_eq!(*sng.status(), TournamentStatus::Registering);
         }
-        
+
         // Last player starts the tournament
         assert!(sng.register_player());
         assert_eq!(*sng.status(), TournamentStatus::Running);
-        
+
         // Can't register more
         assert!(!sng.register_player());
         assert!(!sng.can_join());
@@ -551,10 +546,10 @@ mod tests {
     #[test]
     fn test_blind_schedule() {
         let mut schedule = BlindSchedule::standard_tournament(100, 600);
-        
+
         assert_eq!(schedule.current().small_blind, 50);
         assert_eq!(schedule.current().big_blind, 100);
-        
+
         assert!(schedule.advance());
         assert_eq!(schedule.current().small_blind, 100);
         assert_eq!(schedule.current().big_blind, 200);
@@ -564,10 +559,10 @@ mod tests {
     fn test_prize_structure() {
         let prize = PrizeStructure::nine_player();
         let pool = 9000;
-        
+
         assert_eq!(prize.payout_for_position(0, pool), 4500); // 50%
         assert_eq!(prize.payout_for_position(1, pool), 2700); // 30%
         assert_eq!(prize.payout_for_position(2, pool), 1800); // 20%
-        assert_eq!(prize.payout_for_position(3, pool), 0);    // Not in the money
+        assert_eq!(prize.payout_for_position(3, pool), 0); // Not in the money
     }
 }

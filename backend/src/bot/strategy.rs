@@ -3,9 +3,9 @@
 //! Each strategy implements the `BotStrategy` trait to decide what action
 //! to take given the current game state visible to the bot.
 
-use crate::game::{GamePhase, PlayerAction};
-use crate::game::deck::Card;
 use crate::bot::evaluate::{estimate_hand_strength, preflop_hand_strength};
+use crate::game::deck::Card;
+use crate::game::{GamePhase, PlayerAction};
 use rand::Rng;
 
 /// Everything the bot can see about the current game state.
@@ -39,12 +39,20 @@ pub struct SimpleStrategy {
 
 impl SimpleStrategy {
     pub fn new(aggression: f64) -> Self {
-        Self { aggression: aggression.clamp(0.0, 1.0) }
+        Self {
+            aggression: aggression.clamp(0.0, 1.0),
+        }
     }
 
-    pub fn tight() -> Self { Self::new(0.2) }
-    pub fn balanced() -> Self { Self::new(0.5) }
-    pub fn aggressive() -> Self { Self::new(0.8) }
+    pub fn tight() -> Self {
+        Self::new(0.2)
+    }
+    pub fn balanced() -> Self {
+        Self::new(0.5)
+    }
+    pub fn aggressive() -> Self {
+        Self::new(0.8)
+    }
 }
 
 impl BotStrategy for SimpleStrategy {
@@ -149,14 +157,14 @@ impl SimpleStrategy {
     fn calculate_raise(&self, view: &BotGameView, strength: f64, rng: &mut impl Rng) -> i64 {
         let bb = view.big_blind.max(1);
         let pot = view.pot_total.max(bb);
-        
+
         // Preflop: use BB-based sizing (2.5-4x BB)
         if view.community_cards.is_empty() {
             let multiplier = 2.5 + strength * 1.5 + self.aggression * 0.5;
             let raise = (bb as f64 * multiplier) as i64;
             return raise.max(bb * 2).min(view.my_stack);
         }
-        
+
         // Postflop: use pot-based sizing like real players
         // Choose bet size based on hand strength and aggression
         let base_percentage = if strength >= 0.85 {
@@ -190,11 +198,11 @@ impl SimpleStrategy {
                 0.5
             }
         };
-        
+
         // Add small variance (0.9x to 1.15x)
         let variance: f64 = rng.gen_range(0.9..1.15);
         let raise = (pot as f64 * base_percentage * variance) as i64;
-        
+
         // Ensure minimum bet is at least 1 BB, and don't exceed stack
         let min_bet = bb.max(view.current_bet + bb);
         raise.max(min_bet).min(view.my_stack)
@@ -206,7 +214,9 @@ impl SimpleStrategy {
 pub struct CallingStation;
 
 impl BotStrategy for CallingStation {
-    fn name(&self) -> &str { "calling_station" }
+    fn name(&self) -> &str {
+        "calling_station"
+    }
 
     fn decide(&self, view: &BotGameView) -> PlayerAction {
         let to_call = view.current_bet - view.my_current_bet;
@@ -253,12 +263,19 @@ mod tests {
         let view = make_view(
             vec![Card::new(2, 0), Card::new(7, 3)],
             vec![Card::new(3, 1), Card::new(9, 2), Card::new(13, 0)],
-            100, 0, 0, 1000, GamePhase::Flop,
+            100,
+            0,
+            0,
+            1000,
+            GamePhase::Flop,
         );
         // With a weak hand and no bet, a tight player should check
         let action = strategy.decide(&view);
         // Could be Check or a rare bluff — just verify it's not Fold
-        assert!(!matches!(action, PlayerAction::Fold), "Should not fold when can check");
+        assert!(
+            !matches!(action, PlayerAction::Fold),
+            "Should not fold when can check"
+        );
     }
 
     #[test]
@@ -268,7 +285,11 @@ mod tests {
         let view = make_view(
             vec![Card::new(2, 0), Card::new(3, 3)],
             vec![Card::new(14, 1), Card::new(13, 2), Card::new(12, 0)],
-            500, 400, 0, 1000, GamePhase::Flop,
+            500,
+            400,
+            0,
+            1000,
+            GamePhase::Flop,
         );
         // Run multiple times — tight strategy should usually fold junk vs big raise
         let mut fold_count = 0;
@@ -277,7 +298,11 @@ mod tests {
                 fold_count += 1;
             }
         }
-        assert!(fold_count > 10, "Tight bot should fold junk vs big raise most of the time, folded {}/20", fold_count);
+        assert!(
+            fold_count > 10,
+            "Tight bot should fold junk vs big raise most of the time, folded {}/20",
+            fold_count
+        );
     }
 
     #[test]
@@ -286,11 +311,18 @@ mod tests {
         let view = make_view(
             vec![Card::new(2, 0), Card::new(7, 3)],
             vec![],
-            500, 400, 0, 1000, GamePhase::PreFlop,
+            500,
+            400,
+            0,
+            1000,
+            GamePhase::PreFlop,
         );
         for _ in 0..20 {
             let action = strategy.decide(&view);
-            assert!(!matches!(action, PlayerAction::Fold), "Calling station should never fold");
+            assert!(
+                !matches!(action, PlayerAction::Fold),
+                "Calling station should never fold"
+            );
         }
     }
 
@@ -301,7 +333,11 @@ mod tests {
         let view = make_view(
             vec![Card::new(14, 0), Card::new(14, 1)],
             vec![],
-            75, 0, 0, 1000, GamePhase::PreFlop,
+            75,
+            0,
+            0,
+            1000,
+            GamePhase::PreFlop,
         );
         let mut raise_count = 0;
         for _ in 0..20 {
@@ -309,6 +345,10 @@ mod tests {
                 raise_count += 1;
             }
         }
-        assert!(raise_count > 10, "Aggressive bot should usually raise AA, raised {}/20", raise_count);
+        assert!(
+            raise_count > 10,
+            "Aggressive bot should usually raise AA, raised {}/20",
+            raise_count
+        );
     }
 }

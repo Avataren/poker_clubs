@@ -76,24 +76,26 @@ impl PrizeStructure {
     /// Pays decreasing percentages for top positions
     fn large_tournament(positions: usize) -> Self {
         if positions == 0 {
-            return Self { payouts: vec![100.0] };
+            return Self {
+                payouts: vec![100.0],
+            };
         }
-        
+
         // Use simple decreasing percentages
         // First gets most, each subsequent position gets less
         let mut payouts = Vec::new();
         let mut total_weight = 0.0;
-        
+
         // Calculate weights (position 1 gets weight 'positions', position 2 gets 'positions-1', etc.)
         for i in 0..positions {
             let weight = (positions - i) as f64;
             payouts.push(weight);
             total_weight += weight;
         }
-        
+
         // Convert weights to percentages
         payouts = payouts.iter().map(|w| (w / total_weight) * 100.0).collect();
-        
+
         Self { payouts }
     }
 
@@ -128,7 +130,7 @@ mod tests {
     fn test_nine_player_payout() {
         let structure = PrizeStructure::nine_player();
         let pool = 9000;
-        
+
         assert_eq!(structure.prize_for_position(1, pool), 4500); // 50%
         assert_eq!(structure.prize_for_position(2, pool), 2700); // 30%
         assert_eq!(structure.prize_for_position(3, pool), 1800); // 20%
@@ -147,28 +149,40 @@ mod tests {
     fn test_large_tournament_payout() {
         let structure = PrizeStructure::large_tournament(10);
         assert_eq!(structure.paid_positions(), 10);
-        
+
         // First place should get most
         let pool = 10000;
         let first = structure.prize_for_position(1, pool);
         let second = structure.prize_for_position(2, pool);
-        
+
         assert!(first > second, "First place should be more than second");
         // With 10 positions, first gets about 18% (10/55 of the pool)
-        assert!(first >= pool / 6, "First place should be at least ~17%: got {}", first);
-        
+        assert!(
+            first >= pool / 6,
+            "First place should be at least ~17%: got {}",
+            first
+        );
+
         // Total should equal pool (within rounding)
         let mut total = 0;
         for pos in 1..=10 {
             total += structure.prize_for_position(pos, pool);
         }
-        assert!((total - pool).abs() < 100, "Total should match pool within rounding");
-        
+        assert!(
+            (total - pool).abs() < 100,
+            "Total should match pool within rounding"
+        );
+
         // Verify decreasing amounts
         for pos in 1..10 {
             let current = structure.prize_for_position(pos, pool);
             let next = structure.prize_for_position(pos + 1, pool);
-            assert!(current > next, "Position {} should pay more than position {}", pos, pos + 1);
+            assert!(
+                current > next,
+                "Position {} should pay more than position {}",
+                pos,
+                pos + 1
+            );
         }
     }
 }

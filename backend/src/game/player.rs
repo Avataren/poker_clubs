@@ -22,9 +22,9 @@ pub struct Player {
     pub state: PlayerState,
     pub total_bet_this_hand: i64, // Track total bet for pot calculation
     pub has_acted_this_round: bool, // Track if player acted this betting round
-    pub is_winner: bool, // Whether this player won the last showdown
+    pub is_winner: bool,          // Whether this player won the last showdown
     pub last_action: Option<String>, // Last action taken (for display), cleared on new round
-    pub pot_won: i64, // Amount won from pot (for animation)
+    pub pot_won: i64,             // Amount won from pot (for animation)
 }
 
 impl Player {

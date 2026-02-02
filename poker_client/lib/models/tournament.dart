@@ -2,50 +2,77 @@ class Tournament {
   final String id;
   final String clubId;
   final String name;
-  final String tournamentType; // 'sng' or 'mtt'
+  final String formatId; // 'sng' or 'mtt'
+  final String variantId; // 'holdem', etc.
   final int buyIn;
   final int maxPlayers;
   final int minPlayers;
   final int startingStack;
-  final int levelDurationMins;
-  final String status; // 'registration', 'running', 'finished', 'cancelled'
-  final String? variantId;
+  final int prizePool;
+  final int registeredPlayers;
+  final int remainingPlayers;
+  final int currentBlindLevel;
+  final int levelDurationSecs;
+  final String? levelStartTime;
+  final String
+  status; // 'registering', 'seating', 'running', 'paused', 'finished', 'cancelled'
+  final int preSeatSecs;
   final DateTime createdAt;
   final DateTime? scheduledStart;
   final DateTime? actualStart;
   final DateTime? finishedAt;
+  final String? cancelReason;
 
   Tournament({
     required this.id,
     required this.clubId,
     required this.name,
-    required this.tournamentType,
+    required this.formatId,
+    required this.variantId,
     required this.buyIn,
     required this.maxPlayers,
     required this.minPlayers,
     required this.startingStack,
-    required this.levelDurationMins,
+    required this.prizePool,
+    required this.registeredPlayers,
+    required this.remainingPlayers,
+    required this.currentBlindLevel,
+    required this.levelDurationSecs,
+    this.levelStartTime,
     required this.status,
-    this.variantId,
+    required this.preSeatSecs,
     required this.createdAt,
     this.scheduledStart,
     this.actualStart,
     this.finishedAt,
+    this.cancelReason,
   });
+
+  // Convenience getter for level duration in minutes
+  int get levelDurationMins => (levelDurationSecs / 60).round();
+
+  // Convenience getter for tournament type (alias for formatId)
+  String get tournamentType => formatId;
 
   factory Tournament.fromJson(Map<String, dynamic> json) {
     return Tournament(
       id: json['id'] as String,
       clubId: json['club_id'] as String,
       name: json['name'] as String,
-      tournamentType: json['tournament_type'] as String,
+      formatId: json['format_id'] as String,
+      variantId: json['variant_id'] as String,
       buyIn: json['buy_in'] as int,
       maxPlayers: json['max_players'] as int,
       minPlayers: json['min_players'] as int,
       startingStack: json['starting_stack'] as int,
-      levelDurationMins: json['level_duration_mins'] as int,
+      prizePool: json['prize_pool'] as int,
+      registeredPlayers: json['registered_players'] as int,
+      remainingPlayers: json['remaining_players'] as int,
+      currentBlindLevel: json['current_blind_level'] as int,
+      levelDurationSecs: json['level_duration_secs'] as int,
+      levelStartTime: json['level_start_time'] as String?,
       status: json['status'] as String,
-      variantId: json['variant_id'] as String?,
+      preSeatSecs: json['pre_seat_secs'] as int,
       createdAt: DateTime.parse(json['created_at'] as String),
       scheduledStart: json['scheduled_start'] != null
           ? DateTime.parse(json['scheduled_start'] as String)
@@ -56,6 +83,7 @@ class Tournament {
       finishedAt: json['finished_at'] != null
           ? DateTime.parse(json['finished_at'] as String)
           : null,
+      cancelReason: json['cancel_reason'] as String?,
     );
   }
 
@@ -64,34 +92,39 @@ class Tournament {
       'id': id,
       'club_id': clubId,
       'name': name,
-      'tournament_type': tournamentType,
+      'format_id': formatId,
+      'variant_id': variantId,
       'buy_in': buyIn,
       'max_players': maxPlayers,
       'min_players': minPlayers,
       'starting_stack': startingStack,
-      'level_duration_mins': levelDurationMins,
+      'prize_pool': prizePool,
+      'registered_players': registeredPlayers,
+      'remaining_players': remainingPlayers,
+      'current_blind_level': currentBlindLevel,
+      'level_duration_secs': levelDurationSecs,
+      'level_start_time': levelStartTime,
       'status': status,
-      'variant_id': variantId,
+      'pre_seat_secs': preSeatSecs,
       'created_at': createdAt.toIso8601String(),
       'scheduled_start': scheduledStart?.toIso8601String(),
       'actual_start': actualStart?.toIso8601String(),
       'finished_at': finishedAt?.toIso8601String(),
+      'cancel_reason': cancelReason,
     };
   }
 }
 
 class TournamentBlindLevel {
-  final String id;
   final String tournamentId;
-  final int level;
+  final int levelNumber;
   final int smallBlind;
   final int bigBlind;
   final int ante;
 
   TournamentBlindLevel({
-    required this.id,
     required this.tournamentId,
-    required this.level,
+    required this.levelNumber,
     required this.smallBlind,
     required this.bigBlind,
     required this.ante,
@@ -99,9 +132,8 @@ class TournamentBlindLevel {
 
   factory TournamentBlindLevel.fromJson(Map<String, dynamic> json) {
     return TournamentBlindLevel(
-      id: json['id'] as String,
       tournamentId: json['tournament_id'] as String,
-      level: json['level'] as int,
+      levelNumber: json['level_number'] as int,
       smallBlind: json['small_blind'] as int,
       bigBlind: json['big_blind'] as int,
       ante: json['ante'] as int,
@@ -110,9 +142,8 @@ class TournamentBlindLevel {
 
   Map<String, dynamic> toJson() {
     return {
-      'id': id,
       'tournament_id': tournamentId,
-      'level': level,
+      'level_number': levelNumber,
       'small_blind': smallBlind,
       'big_blind': bigBlind,
       'ante': ante,
@@ -226,6 +257,29 @@ class TournamentResult {
       eliminatedAt: json['eliminated_at'] != null
           ? DateTime.parse(json['eliminated_at'] as String)
           : null,
+    );
+  }
+}
+
+class TournamentTableInfo {
+  final String tableId;
+  final int tableNumber;
+  final String tableName;
+  final int playerCount;
+
+  TournamentTableInfo({
+    required this.tableId,
+    required this.tableNumber,
+    required this.tableName,
+    required this.playerCount,
+  });
+
+  factory TournamentTableInfo.fromJson(Map<String, dynamic> json) {
+    return TournamentTableInfo(
+      tableId: json['table_id'] as String,
+      tableNumber: json['table_number'] as int,
+      tableName: json['table_name'] as String,
+      playerCount: json['player_count'] as int,
     );
   }
 }

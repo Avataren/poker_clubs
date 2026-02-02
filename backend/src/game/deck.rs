@@ -1,21 +1,26 @@
 use rand::seq::SliceRandom;
-use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 // Simple card representation for our poker game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
-    pub rank: u8,  // 2-14 (Jack=11, Queen=12, King=13, Ace=14)
-    pub suit: u8,  // 0-3 (Clubs, Diamonds, Hearts, Spades)
-    pub highlighted: bool,  // Whether this card is part of the winning hand
-    pub face_up: bool,  // Whether this card is visible (false = face down/hidden)
+    pub rank: u8,          // 2-14 (Jack=11, Queen=12, King=13, Ace=14)
+    pub suit: u8,          // 0-3 (Clubs, Diamonds, Hearts, Spades)
+    pub highlighted: bool, // Whether this card is part of the winning hand
+    pub face_up: bool,     // Whether this card is visible (false = face down/hidden)
 }
 
 impl Card {
     pub fn new(rank: u8, suit: u8) -> Self {
-        Self { rank, suit, highlighted: false, face_up: true }
+        Self {
+            rank,
+            suit,
+            highlighted: false,
+            face_up: true,
+        }
     }
 
     fn suit_char(suit: u8) -> char {
@@ -62,7 +67,7 @@ impl Card {
 
     // Convert from rs_poker Card back to our Card
     pub fn from_rs_poker(card: &rs_poker::core::Card) -> Self {
-        use rs_poker::core::{Value, Suit};
+        use rs_poker::core::{Suit, Value};
 
         let rank = match card.value {
             Value::Two => 2,

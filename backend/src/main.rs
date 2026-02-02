@@ -1,4 +1,4 @@
-use poker_server::{api, auth, config, db, tournament, ws, create_app};
+use poker_server::{api, auth, config, create_app, db, tournament, ws};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -21,7 +21,10 @@ async fn main() -> anyhow::Result<()> {
     let jwt_manager = Arc::new(auth::JwtManager::new(config.jwt_secret.clone()));
 
     // Create game server
-    let game_server = Arc::new(ws::GameServer::new(jwt_manager.clone(), Arc::new(pool.clone())));
+    let game_server = Arc::new(ws::GameServer::new(
+        jwt_manager.clone(),
+        Arc::new(pool.clone()),
+    ));
 
     // Create tournament manager
     let tournament_manager = Arc::new(tournament::TournamentManager::new(
@@ -52,7 +55,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Build router using lib function
-    let app = create_app(auth_state, table_state, tournament_state, game_server.clone());
+    let app = create_app(
+        auth_state,
+        table_state,
+        tournament_state,
+        game_server.clone(),
+    );
 
     // Spawn background task to check for auto-advances
     let game_server_clone = game_server.clone();
@@ -92,7 +100,10 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
         loop {
             interval.tick().await;
-            if let Err(e) = tournament_mgr_eliminations.check_tournament_eliminations().await {
+            if let Err(e) = tournament_mgr_eliminations
+                .check_tournament_eliminations()
+                .await
+            {
                 tracing::error!("Error checking tournament eliminations: {:?}", e);
             }
         }

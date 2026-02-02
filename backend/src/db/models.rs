@@ -187,7 +187,7 @@ impl TransactionType {
 
 impl std::str::FromStr for TransactionType {
     type Err = ();
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "admin_credit" => Ok(TransactionType::AdminCredit),

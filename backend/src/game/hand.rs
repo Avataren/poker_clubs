@@ -9,7 +9,7 @@ pub struct HandRank {
     /// (e.g., AAQQ vs AA66 within TwoPair)
     sub_rank: u32,
     pub description: String,
-    pub best_cards: Vec<Card>,  // The 5 cards that make up the best hand
+    pub best_cards: Vec<Card>, // The 5 cards that make up the best hand
 }
 
 /// Equality is based on hand strength only (rank_value + sub_rank),
@@ -38,10 +38,7 @@ impl HandRank {
         };
 
         // Get the best 5 cards from the hand
-        let best_cards: Vec<Card> = hand.cards()
-            .iter()
-            .map(Card::from_rs_poker)
-            .collect();
+        let best_cards: Vec<Card> = hand.cards().iter().map(Card::from_rs_poker).collect();
 
         Self {
             rank_value,
@@ -60,7 +57,8 @@ impl PartialOrd for HandRank {
 
 impl Ord for HandRank {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.rank_value.cmp(&other.rank_value)
+        self.rank_value
+            .cmp(&other.rank_value)
             .then_with(|| self.sub_rank.cmp(&other.sub_rank))
     }
 }
@@ -74,9 +72,11 @@ pub fn evaluate_hand(hole_cards: &[Card], community_cards: &[Card]) -> HandRank 
     // Find the best 5-card combination out of all available cards
     // Use rs_poker's native Rank comparison for proper ordering within hand categories
     let combos = combinations(&all_cards, 5);
-    let best_hand = combos.into_iter()
+    let best_hand = combos
+        .into_iter()
         .map(|five_cards| {
-            let rs_cards: Vec<rs_poker::core::Card> = five_cards.iter().map(|c| c.to_rs_poker()).collect();
+            let rs_cards: Vec<rs_poker::core::Card> =
+                five_cards.iter().map(|c| c.to_rs_poker()).collect();
             Hand::new_with_cards(rs_cards)
         })
         .max_by_key(|hand| hand.rank())
@@ -96,7 +96,7 @@ pub fn evaluate_omaha_hand(hole_cards: &[Card], community_cards: &[Card]) -> Opt
 
     // Generate all 2-card combinations from hole cards
     let hole_combos = combinations(hole_cards, 2);
-    // Generate all 3-card combinations from community cards  
+    // Generate all 3-card combinations from community cards
     let community_combos = combinations(community_cards, 3);
 
     // Try every combination of 2 hole + 3 community
@@ -128,21 +128,21 @@ fn combinations<T: Clone>(items: &[T], k: usize) -> Vec<Vec<T>> {
     if items.len() < k {
         return vec![];
     }
-    
+
     let mut result = Vec::new();
-    
+
     // Take the first item and combine with (k-1) combinations from rest
     let first = &items[0];
     let rest = &items[1..];
-    
+
     for mut combo in combinations(rest, k - 1) {
         combo.insert(0, first.clone());
         result.push(combo);
     }
-    
+
     // Also get combinations that don't include the first item
     result.extend(combinations(rest, k));
-    
+
     result
 }
 
@@ -161,28 +161,46 @@ pub fn determine_winners(hands: Vec<(usize, HandRank)>) -> Vec<usize> {
     for (idx, rank) in &hands {
         tracing::info!(
             "Player {}: {} (rank_value={}, sub_rank={}, best_cards={:?})",
-            idx, rank.description, rank.rank_value, rank.sub_rank,
-            rank.best_cards.iter().map(|c| format!("{}{}. ", 
-                match c.rank {
-                    14 => "A", 13 => "K", 12 => "Q", 11 => "J", 10 => "T",
-                    r => return r.to_string(),
-                },
-                match c.suit {
-                    0 => "♣", 1 => "♦", 2 => "♥", 3 => "♠",
-                    _ => "?",
-                }
-            )).collect::<String>()
+            idx,
+            rank.description,
+            rank.rank_value,
+            rank.sub_rank,
+            rank.best_cards
+                .iter()
+                .map(|c| format!(
+                    "{}{}. ",
+                    match c.rank {
+                        14 => "A",
+                        13 => "K",
+                        12 => "Q",
+                        11 => "J",
+                        10 => "T",
+                        r => return r.to_string(),
+                    },
+                    match c.suit {
+                        0 => "♣",
+                        1 => "♦",
+                        2 => "♥",
+                        3 => "♠",
+                        _ => "?",
+                    }
+                ))
+                .collect::<String>()
         );
     }
-    tracing::info!("Best rank: {} (rank_value={}, sub_rank={})", 
-        best_rank.description, best_rank.rank_value, best_rank.sub_rank);
-    
+    tracing::info!(
+        "Best rank: {} (rank_value={}, sub_rank={})",
+        best_rank.description,
+        best_rank.rank_value,
+        best_rank.sub_rank
+    );
+
     let winners: Vec<usize> = hands
         .iter()
         .filter(|(_, rank)| rank == &best_rank)
         .map(|(idx, _)| *idx)
         .collect();
-    
+
     tracing::info!("Winners: {:?}", winners);
 
     // Return all players with the best hand (handles ties)
@@ -192,7 +210,6 @@ pub fn determine_winners(hands: Vec<(usize, HandRank)>) -> Vec<usize> {
         .map(|(idx, _)| idx)
         .collect()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -221,9 +238,9 @@ mod tests {
             Card::new(14, 2), // Ace of Hearts
         ];
         let community_cards = vec![
-            Card::new(2, 1),  // Two of Diamonds
-            Card::new(5, 0),  // Five of Clubs
-            Card::new(9, 3),  // Nine of Spades
+            Card::new(2, 1), // Two of Diamonds
+            Card::new(5, 0), // Five of Clubs
+            Card::new(9, 3), // Nine of Spades
         ];
 
         let hand_rank = evaluate_hand(&hole_cards, &community_cards);
@@ -234,9 +251,33 @@ mod tests {
     fn test_determine_winners_single() {
         // Higher rank_value means better hand
         let hands = vec![
-            (0, HandRank { rank_value: 3, sub_rank: 0, description: "Three of a Kind".to_string(), best_cards: vec![] }),
-            (1, HandRank { rank_value: 1, sub_rank: 0, description: "Pair".to_string(), best_cards: vec![] }),
-            (2, HandRank { rank_value: 2, sub_rank: 0, description: "Two Pair".to_string(), best_cards: vec![] }),
+            (
+                0,
+                HandRank {
+                    rank_value: 3,
+                    sub_rank: 0,
+                    description: "Three of a Kind".to_string(),
+                    best_cards: vec![],
+                },
+            ),
+            (
+                1,
+                HandRank {
+                    rank_value: 1,
+                    sub_rank: 0,
+                    description: "Pair".to_string(),
+                    best_cards: vec![],
+                },
+            ),
+            (
+                2,
+                HandRank {
+                    rank_value: 2,
+                    sub_rank: 0,
+                    description: "Two Pair".to_string(),
+                    best_cards: vec![],
+                },
+            ),
         ];
 
         let winners = determine_winners(hands);
@@ -246,8 +287,24 @@ mod tests {
     #[test]
     fn test_determine_winners_tie() {
         let hands = vec![
-            (0, HandRank { rank_value: 3, sub_rank: 100, description: "Three of a Kind".to_string(), best_cards: vec![] }),
-            (1, HandRank { rank_value: 3, sub_rank: 100, description: "Three of a Kind".to_string(), best_cards: vec![] }),
+            (
+                0,
+                HandRank {
+                    rank_value: 3,
+                    sub_rank: 100,
+                    description: "Three of a Kind".to_string(),
+                    best_cards: vec![],
+                },
+            ),
+            (
+                1,
+                HandRank {
+                    rank_value: 3,
+                    sub_rank: 100,
+                    description: "Three of a Kind".to_string(),
+                    best_cards: vec![],
+                },
+            ),
         ];
 
         let winners = determine_winners(hands);
@@ -280,7 +337,12 @@ mod tests {
 
         assert_eq!(qq_hand.description, "Two Pair");
         assert_eq!(s76_hand.description, "Two Pair");
-        assert!(qq_hand > s76_hand, "AAQQ should beat AA66: qq={:?} vs 76={:?}", qq_hand, s76_hand);
+        assert!(
+            qq_hand > s76_hand,
+            "AAQQ should beat AA66: qq={:?} vs 76={:?}",
+            qq_hand,
+            s76_hand
+        );
     }
 
     #[test]
@@ -304,7 +366,7 @@ mod tests {
         let hole_cards = vec![
             Card::new(14, 0), // Ace of Clubs
             Card::new(14, 1), // Ace of Diamonds
-            Card::new(2, 2),  // Two of Hearts  
+            Card::new(2, 2),  // Two of Hearts
             Card::new(3, 3),  // Three of Spades
         ];
         let community_cards = vec![
@@ -335,7 +397,7 @@ mod tests {
         ];
         let community_cards = vec![
             Card::new(12, 2), // Queen of Hearts
-            Card::new(11, 2), // Jack of Hearts  
+            Card::new(11, 2), // Jack of Hearts
             Card::new(10, 2), // Ten of Hearts
             Card::new(5, 3),  // Five of Spades
             Card::new(6, 3),  // Six of Spades
@@ -374,7 +436,11 @@ mod tests {
         assert!(player1 > player2, "A-high flush should beat K-high flush");
 
         let winners = determine_winners(vec![(0, player1.clone()), (1, player2.clone())]);
-        assert_eq!(winners, vec![0], "Player 0 with A-high flush should win alone");
+        assert_eq!(
+            winners,
+            vec![0],
+            "Player 0 with A-high flush should win alone"
+        );
     }
 
     #[test]
@@ -402,10 +468,17 @@ mod tests {
 
         assert_eq!(player1.description, "Flush");
         assert_eq!(player2.description, "Flush");
-        assert!(player1 > player2, "K-Q-9-7-5 flush should beat K-J-9-7-5 flush");
+        assert!(
+            player1 > player2,
+            "K-Q-9-7-5 flush should beat K-J-9-7-5 flush"
+        );
 
         let winners = determine_winners(vec![(0, player1), (1, player2)]);
-        assert_eq!(winners, vec![0], "Player 0 with higher kicker should win alone");
+        assert_eq!(
+            winners,
+            vec![0],
+            "Player 0 with higher kicker should win alone"
+        );
     }
 
     #[test]
@@ -420,20 +493,17 @@ mod tests {
         ];
 
         // Player 1: 2s 3s (board flush is better)
-        let player1 = evaluate_hand(
-            &[Card::new(2, 3), Card::new(3, 3)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(2, 3), Card::new(3, 3)], &community);
 
         // Player 2: 4s 5s (board flush is better)
-        let player2 = evaluate_hand(
-            &[Card::new(4, 3), Card::new(5, 3)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(4, 3), Card::new(5, 3)], &community);
 
         assert_eq!(player1.description, "Flush");
         assert_eq!(player2.description, "Flush");
-        assert_eq!(player1, player2, "Both should have identical A-K-J-9-7 flush");
+        assert_eq!(
+            player1, player2,
+            "Both should have identical A-K-J-9-7 flush"
+        );
 
         let winners = determine_winners(vec![(0, player1), (1, player2)]);
         assert_eq!(winners.len(), 2, "Should be a split pot");
@@ -443,28 +513,25 @@ mod tests {
     #[test]
     fn test_straight_vs_straight() {
         let community = vec![
-            Card::new(9, 0),  // 9c
-            Card::new(8, 1),  // 8d
-            Card::new(7, 2),  // 7h
-            Card::new(6, 3),  // 6s
-            Card::new(2, 0),  // 2c
+            Card::new(9, 0), // 9c
+            Card::new(8, 1), // 8d
+            Card::new(7, 2), // 7h
+            Card::new(6, 3), // 6s
+            Card::new(2, 0), // 2c
         ];
 
         // Player 1: T5 = T-high straight (T9876)
-        let player1 = evaluate_hand(
-            &[Card::new(10, 1), Card::new(5, 2)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(10, 1), Card::new(5, 2)], &community);
 
         // Player 2: 53 = 9-high straight (98765)
-        let player2 = evaluate_hand(
-            &[Card::new(5, 1), Card::new(3, 2)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(5, 1), Card::new(3, 2)], &community);
 
         assert_eq!(player1.description, "Straight");
         assert_eq!(player2.description, "Straight");
-        assert!(player1 > player2, "T-high straight should beat 9-high straight");
+        assert!(
+            player1 > player2,
+            "T-high straight should beat 9-high straight"
+        );
 
         let winners = determine_winners(vec![(0, player1), (1, player2)]);
         assert_eq!(winners, vec![0]);
@@ -481,20 +548,17 @@ mod tests {
         ];
 
         // Player 1: 55 = TTT55 (tens full of fives)
-        let player1 = evaluate_hand(
-            &[Card::new(5, 0), Card::new(5, 1)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(5, 0), Card::new(5, 1)], &community);
 
         // Player 2: 33 = TTT33 (tens full of threes)
-        let player2 = evaluate_hand(
-            &[Card::new(3, 1), Card::new(3, 2)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(3, 1), Card::new(3, 2)], &community);
 
         assert_eq!(player1.description, "Full House");
         assert_eq!(player2.description, "Full House");
-        assert!(player1 > player2, "Tens full of fives should beat tens full of threes");
+        assert!(
+            player1 > player2,
+            "Tens full of fives should beat tens full of threes"
+        );
 
         let winners = determine_winners(vec![(0, player1), (1, player2)]);
         assert_eq!(winners, vec![0]);
@@ -511,20 +575,17 @@ mod tests {
         ];
 
         // Player 1: AK = TTTTA (quads with ace kicker)
-        let player1 = evaluate_hand(
-            &[Card::new(14, 1), Card::new(13, 2)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(14, 1), Card::new(13, 2)], &community);
 
         // Player 2: Q9 = TTTTQ (quads with queen kicker)
-        let player2 = evaluate_hand(
-            &[Card::new(12, 1), Card::new(9, 2)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(12, 1), Card::new(9, 2)], &community);
 
         assert_eq!(player1.description, "Four of a Kind");
         assert_eq!(player2.description, "Four of a Kind");
-        assert!(player1 > player2, "Quads with A kicker should beat quads with Q kicker");
+        assert!(
+            player1 > player2,
+            "Quads with A kicker should beat quads with Q kicker"
+        );
 
         let winners = determine_winners(vec![(0, player1), (1, player2)]);
         assert_eq!(winners, vec![0]);
@@ -541,16 +602,10 @@ mod tests {
         ];
 
         // Player 1: A2 = AKJ97 high
-        let player1 = evaluate_hand(
-            &[Card::new(14, 1), Card::new(2, 2)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(14, 1), Card::new(2, 2)], &community);
 
         // Player 2: Q3 = KQJ97 high
-        let player2 = evaluate_hand(
-            &[Card::new(12, 1), Card::new(3, 2)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(12, 1), Card::new(3, 2)], &community);
 
         assert_eq!(player1.description, "High Card");
         assert_eq!(player2.description, "High Card");
@@ -571,16 +626,10 @@ mod tests {
         ];
 
         // Player 1: Ah 2h = A-high flush
-        let player1 = evaluate_hand(
-            &[Card::new(14, 2), Card::new(2, 2)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(14, 2), Card::new(2, 2)], &community);
 
         // Player 2: JQ = Q-high straight
-        let player2 = evaluate_hand(
-            &[Card::new(11, 0), Card::new(12, 1)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(11, 0), Card::new(12, 1)], &community);
 
         assert_eq!(player1.description, "Flush");
         assert_eq!(player2.description, "Straight");
@@ -601,37 +650,28 @@ mod tests {
         ];
 
         // Player 0: Ad 3d = A-high flush
-        let player0 = evaluate_hand(
-            &[Card::new(14, 1), Card::new(3, 1)],
-            &community,
-        );
+        let player0 = evaluate_hand(&[Card::new(14, 1), Card::new(3, 1)], &community);
 
         // Player 1: Kd 4d = K-high flush
-        let player1 = evaluate_hand(
-            &[Card::new(13, 1), Card::new(4, 1)],
-            &community,
-        );
+        let player1 = evaluate_hand(&[Card::new(13, 1), Card::new(4, 1)], &community);
 
         // Player 2: 9d 5d = Q-high flush
-        let player2 = evaluate_hand(
-            &[Card::new(9, 1), Card::new(5, 1)],
-            &community,
-        );
+        let player2 = evaluate_hand(&[Card::new(9, 1), Card::new(5, 1)], &community);
 
         assert_eq!(player0.description, "Flush");
         assert_eq!(player1.description, "Flush");
         assert_eq!(player2.description, "Flush");
-        
+
         assert!(player0 > player1, "A-high flush should beat K-high flush");
         assert!(player1 > player2, "K-high flush should beat Q-high flush");
         assert!(player0 > player2, "A-high flush should beat Q-high flush");
 
-        let winners = determine_winners(vec![
-            (0, player0),
-            (1, player1),
-            (2, player2),
-        ]);
-        assert_eq!(winners, vec![0], "Only player 0 with A-high flush should win");
+        let winners = determine_winners(vec![(0, player0), (1, player1), (2, player2)]);
+        assert_eq!(
+            winners,
+            vec![0],
+            "Only player 0 with A-high flush should win"
+        );
     }
 
     #[test]
@@ -662,7 +702,10 @@ mod tests {
 
         assert_eq!(bob.description, "Two Pair");
         assert_eq!(diana.description, "Two Pair");
-        assert!(bob > diana, "Two pair 99 66 with A kicker should beat 99 66 with J kicker");
+        assert!(
+            bob > diana,
+            "Two pair 99 66 with A kicker should beat 99 66 with J kicker"
+        );
 
         let winners = determine_winners(vec![(0, bob), (1, diana)]);
         assert_eq!(winners, vec![0], "Bob with ace kicker should win alone");
@@ -694,10 +737,17 @@ mod tests {
 
         assert_eq!(alice.description, "Two Pair");
         assert_eq!(bob.description, "Two Pair");
-        assert_eq!(alice, bob, "Both should have identical AA 77 K using the board");
+        assert_eq!(
+            alice, bob,
+            "Both should have identical AA 77 K using the board"
+        );
 
         let winners = determine_winners(vec![(0, alice), (1, bob)]);
-        assert_eq!(winners.len(), 2, "Should be a split pot - both play the board");
+        assert_eq!(
+            winners.len(),
+            2,
+            "Should be a split pot - both play the board"
+        );
         assert!(winners.contains(&0) && winners.contains(&1));
     }
 

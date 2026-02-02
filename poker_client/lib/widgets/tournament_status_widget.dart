@@ -73,7 +73,7 @@ class TournamentStatusWidget extends StatelessWidget {
     String label;
 
     switch (status) {
-      case 'registration':
+      case 'registering':
         color = Colors.blue;
         label = 'Registration Open';
         break;

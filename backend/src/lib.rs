@@ -31,10 +31,19 @@ pub fn create_app(
     Router::new()
         .route("/", get(|| async { "Poker Server" }))
         .route("/health", get(|| async { "OK" }))
-        .nest("/api/auth", api::auth_router().with_state(auth_state.clone()))
-        .nest("/api/clubs", api::clubs_router().with_state(auth_state.clone()))
+        .nest(
+            "/api/auth",
+            api::auth_router().with_state(auth_state.clone()),
+        )
+        .nest(
+            "/api/clubs",
+            api::clubs_router().with_state(auth_state.clone()),
+        )
         .nest("/api/tables", api::tables_router().with_state(table_state))
-        .nest("/api/tournaments", api::tournaments_router().with_state(tournament_state))
+        .nest(
+            "/api/tournaments",
+            api::tournaments_router().with_state(tournament_state),
+        )
         .route("/ws", get(ws::ws_handler).with_state(game_server))
         .layer(cors)
 }
@@ -44,11 +53,11 @@ pub async fn create_test_db() -> db::DbPool {
     let pool = sqlx::sqlite::SqlitePool::connect(":memory:")
         .await
         .expect("Failed to create in-memory database");
-    
+
     db::run_migrations(&pool)
         .await
         .expect("Failed to run migrations");
-    
+
     pool
 }
 
@@ -56,7 +65,10 @@ pub async fn create_test_db() -> db::DbPool {
 pub async fn create_test_app() -> (Router, Arc<ws::GameServer>) {
     let pool = create_test_db().await;
     let jwt_manager = Arc::new(auth::JwtManager::new("test_secret_key".to_string()));
-    let game_server = Arc::new(ws::GameServer::new(jwt_manager.clone(), Arc::new(pool.clone())));
+    let game_server = Arc::new(ws::GameServer::new(
+        jwt_manager.clone(),
+        Arc::new(pool.clone()),
+    ));
 
     let auth_state = Arc::new(api::AppState {
         pool: pool.clone(),
@@ -82,6 +94,11 @@ pub async fn create_test_app() -> (Router, Arc<ws::GameServer>) {
         tournament_manager,
     });
 
-    let app = create_app(auth_state, table_state, tournament_state, game_server.clone());
+    let app = create_app(
+        auth_state,
+        table_state,
+        tournament_state,
+        game_server.clone(),
+    );
     (app, game_server)
 }

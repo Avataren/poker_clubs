@@ -24,7 +24,7 @@ async fn register_user(server: &TestServer, username: &str, email: &str, passwor
             "password": password
         }))
         .await;
-    
+
     response.assert_status_ok();
     let body: Value = response.json();
     body["token"].as_str().unwrap().to_string()
@@ -37,9 +37,9 @@ async fn register_user(server: &TestServer, username: &str, email: &str, passwor
 #[tokio::test]
 async fn test_health_endpoint() {
     let server = setup().await;
-    
+
     let response = server.get("/health").await;
-    
+
     response.assert_status_ok();
     response.assert_text("OK");
 }
@@ -47,9 +47,9 @@ async fn test_health_endpoint() {
 #[tokio::test]
 async fn test_root_endpoint() {
     let server = setup().await;
-    
+
     let response = server.get("/").await;
-    
+
     response.assert_status_ok();
     response.assert_text("Poker Server");
 }
@@ -61,7 +61,7 @@ async fn test_root_endpoint() {
 #[tokio::test]
 async fn test_register_new_user() {
     let server = setup().await;
-    
+
     let response = server
         .post("/api/auth/register")
         .json(&json!({
@@ -70,9 +70,9 @@ async fn test_register_new_user() {
             "password": "password123"
         }))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     assert!(body["token"].is_string());
     assert_eq!(body["user"]["username"], "testuser");
@@ -82,7 +82,7 @@ async fn test_register_new_user() {
 #[tokio::test]
 async fn test_register_duplicate_username() {
     let server = setup().await;
-    
+
     // Register first user
     server
         .post("/api/auth/register")
@@ -93,7 +93,7 @@ async fn test_register_duplicate_username() {
         }))
         .await
         .assert_status_ok();
-    
+
     // Try to register with same username
     let response = server
         .post("/api/auth/register")
@@ -103,14 +103,14 @@ async fn test_register_duplicate_username() {
             "password": "password123"
         }))
         .await;
-    
+
     response.assert_status_bad_request();
 }
 
 #[tokio::test]
 async fn test_register_short_password() {
     let server = setup().await;
-    
+
     let response = server
         .post("/api/auth/register")
         .json(&json!({
@@ -119,14 +119,14 @@ async fn test_register_short_password() {
             "password": "short"
         }))
         .await;
-    
+
     response.assert_status_bad_request();
 }
 
 #[tokio::test]
 async fn test_login_success() {
     let server = setup().await;
-    
+
     // Register a user first
     server
         .post("/api/auth/register")
@@ -137,7 +137,7 @@ async fn test_login_success() {
         }))
         .await
         .assert_status_ok();
-    
+
     // Login
     let response = server
         .post("/api/auth/login")
@@ -146,9 +146,9 @@ async fn test_login_success() {
             "password": "password123"
         }))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     assert!(body["token"].is_string());
     assert_eq!(body["user"]["username"], "testuser");
@@ -157,7 +157,7 @@ async fn test_login_success() {
 #[tokio::test]
 async fn test_login_wrong_password() {
     let server = setup().await;
-    
+
     // Register a user first
     server
         .post("/api/auth/register")
@@ -168,7 +168,7 @@ async fn test_login_wrong_password() {
         }))
         .await
         .assert_status_ok();
-    
+
     // Login with wrong password
     let response = server
         .post("/api/auth/login")
@@ -177,14 +177,14 @@ async fn test_login_wrong_password() {
             "password": "wrongpassword"
         }))
         .await;
-    
+
     response.assert_status_unauthorized();
 }
 
 #[tokio::test]
 async fn test_login_nonexistent_user() {
     let server = setup().await;
-    
+
     let response = server
         .post("/api/auth/login")
         .json(&json!({
@@ -192,7 +192,7 @@ async fn test_login_nonexistent_user() {
             "password": "password123"
         }))
         .await;
-    
+
     response.assert_status_unauthorized();
 }
 
@@ -204,7 +204,7 @@ async fn test_login_nonexistent_user() {
 async fn test_create_club() {
     let server = setup().await;
     let token = register_user(&server, "clubowner", "owner@example.com", "password123").await;
-    
+
     let response = server
         .post("/api/clubs")
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
@@ -212,9 +212,9 @@ async fn test_create_club() {
             "name": "Test Club"
         }))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     assert_eq!(body["club"]["name"], "Test Club");
 }
@@ -222,14 +222,14 @@ async fn test_create_club() {
 #[tokio::test]
 async fn test_create_club_unauthorized() {
     let server = setup().await;
-    
+
     let response = server
         .post("/api/clubs")
         .json(&json!({
             "name": "Test Club"
         }))
         .await;
-    
+
     response.assert_status_unauthorized();
 }
 
@@ -237,7 +237,7 @@ async fn test_create_club_unauthorized() {
 async fn test_get_my_clubs() {
     let server = setup().await;
     let token = register_user(&server, "clubowner", "owner@example.com", "password123").await;
-    
+
     // Create a club
     server
         .post("/api/clubs")
@@ -245,15 +245,15 @@ async fn test_get_my_clubs() {
         .json(&json!({ "name": "My Club" }))
         .await
         .assert_status_ok();
-    
+
     // Get my clubs
     let response = server
         .get("/api/clubs/my")
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     let clubs = body.as_array().unwrap();
     assert_eq!(clubs.len(), 1);
@@ -268,18 +268,18 @@ async fn test_get_my_clubs() {
 async fn test_create_table_with_default_variant() {
     let server = setup().await;
     let token = register_user(&server, "tableowner", "table@example.com", "password123").await;
-    
+
     // Create a club first
     let club_response = server
         .post("/api/clubs")
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
         .json(&json!({ "name": "Table Club" }))
         .await;
-    
+
     club_response.assert_status_ok();
     let club: Value = club_response.json();
     let club_id = club["club"]["id"].as_str().unwrap();
-    
+
     // Create a table
     let response = server
         .post("/api/tables")
@@ -291,9 +291,9 @@ async fn test_create_table_with_default_variant() {
             "big_blind": 100
         }))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     assert_eq!(body["name"], "Test Table");
     assert_eq!(body["small_blind"], 50);
@@ -304,18 +304,18 @@ async fn test_create_table_with_default_variant() {
 async fn test_create_table_with_omaha_variant() {
     let server = setup().await;
     let token = register_user(&server, "omahaowner", "omaha@example.com", "password123").await;
-    
+
     // Create a club first
     let club_response = server
         .post("/api/clubs")
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
         .json(&json!({ "name": "Omaha Club" }))
         .await;
-    
+
     club_response.assert_status_ok();
     let club: Value = club_response.json();
     let club_id = club["club"]["id"].as_str().unwrap();
-    
+
     // Create an Omaha table
     let response = server
         .post("/api/tables")
@@ -328,9 +328,9 @@ async fn test_create_table_with_omaha_variant() {
             "variant_id": "omaha"
         }))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     assert_eq!(body["name"], "Omaha Table");
 }
@@ -339,18 +339,18 @@ async fn test_create_table_with_omaha_variant() {
 async fn test_create_table_with_invalid_variant() {
     let server = setup().await;
     let token = register_user(&server, "badvariant", "bad@example.com", "password123").await;
-    
+
     // Create a club first
     let club_response = server
         .post("/api/clubs")
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
         .json(&json!({ "name": "Bad Club" }))
         .await;
-    
+
     club_response.assert_status_ok();
     let club: Value = club_response.json();
     let club_id = club["club"]["id"].as_str().unwrap();
-    
+
     // Try to create table with invalid variant
     let response = server
         .post("/api/tables")
@@ -363,27 +363,24 @@ async fn test_create_table_with_invalid_variant() {
             "variant_id": "invalid_variant"
         }))
         .await;
-    
+
     response.assert_status_bad_request();
 }
 
 #[tokio::test]
 async fn test_list_variants() {
     let server = setup().await;
-    
+
     let response = server.get("/api/tables/variants").await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     let variants = body["variants"].as_array().unwrap();
-    
+
     // Should have at least holdem and omaha
-    let variant_ids: Vec<&str> = variants
-        .iter()
-        .map(|v| v["id"].as_str().unwrap())
-        .collect();
-    
+    let variant_ids: Vec<&str> = variants.iter().map(|v| v["id"].as_str().unwrap()).collect();
+
     assert!(variant_ids.contains(&"holdem"));
     assert!(variant_ids.contains(&"omaha"));
 }
@@ -391,20 +388,17 @@ async fn test_list_variants() {
 #[tokio::test]
 async fn test_list_formats() {
     let server = setup().await;
-    
+
     let response = server.get("/api/tables/formats").await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     let formats = body["formats"].as_array().unwrap();
-    
+
     // Should have at least cash and sng
-    let format_ids: Vec<&str> = formats
-        .iter()
-        .map(|f| f["id"].as_str().unwrap())
-        .collect();
-    
+    let format_ids: Vec<&str> = formats.iter().map(|f| f["id"].as_str().unwrap()).collect();
+
     assert!(format_ids.contains(&"cash"));
     assert!(format_ids.contains(&"sng"));
 }
@@ -413,18 +407,18 @@ async fn test_list_formats() {
 async fn test_get_club_tables() {
     let server = setup().await;
     let token = register_user(&server, "tablelister", "list@example.com", "password123").await;
-    
+
     // Create a club
     let club_response = server
         .post("/api/clubs")
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
         .json(&json!({ "name": "List Club" }))
         .await;
-    
+
     club_response.assert_status_ok();
     let club: Value = club_response.json();
     let club_id = club["club"]["id"].as_str().unwrap();
-    
+
     // Create two tables
     for i in 1..=2 {
         server
@@ -439,15 +433,15 @@ async fn test_get_club_tables() {
             .await
             .assert_status_ok();
     }
-    
+
     // Get club tables
     let response = server
         .get(&format!("/api/tables/club/{}", club_id))
         .add_header(AUTHORIZATION, format!("Bearer {}", token))
         .await;
-    
+
     response.assert_status_ok();
-    
+
     let body: Value = response.json();
     let tables = body["tables"].as_array().unwrap();
     assert_eq!(tables.len(), 2);

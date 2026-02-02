@@ -29,11 +29,13 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   bool _isProcessing = false;
   int? _currentBlindLevel;
   late TabController _tabController;
+  List<TournamentTableInfo> _tables = [];
+  bool _loadingTables = false;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _loadDetail();
 
     // Listen for tournament events
@@ -42,6 +44,13 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         _onBlindLevelIncreased;
     widget.websocketService.onTournamentPlayerEliminated = _onPlayerEliminated;
     widget.websocketService.onTournamentFinished = _onTournamentFinished;
+
+    // Load tables when switching to tables tab
+    _tabController.addListener(() {
+      if (_tabController.index == 3 && _tables.isEmpty) {
+        _loadTables();
+      }
+    });
   }
 
   @override
@@ -58,6 +67,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     if (tournamentId == widget.tournamentId) {
       _showSnackBar('Tournament has started!');
       _loadDetail();
+      _loadTables(); // Refresh tables when tournament starts
     }
   }
 
@@ -130,6 +140,26 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     }
   }
 
+  Future<void> _loadTables() async {
+    if (_loadingTables) return;
+
+    setState(() => _loadingTables = true);
+
+    try {
+      final tables = await widget.apiService.getTournamentTables(
+        widget.tournamentId,
+      );
+
+      setState(() {
+        _tables = tables;
+        _loadingTables = false;
+      });
+    } catch (e) {
+      setState(() => _loadingTables = false);
+      _showSnackBar('Failed to load tables: $e');
+    }
+  }
+
   Future<void> _register() async {
     setState(() => _isProcessing = true);
 
@@ -192,6 +222,46 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     }
   }
 
+  Future<void> _cancelTournament() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel Tournament'),
+        content: const Text(
+          'Are you sure you want to cancel this tournament? This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Yes, Cancel Tournament'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isProcessing = true);
+
+    try {
+      await widget.apiService.cancelTournament(widget.tournamentId);
+      _showSnackBar('Tournament cancelled');
+      await _loadDetail();
+    } catch (e) {
+      _showSnackBar('Error: $e');
+    } finally {
+      setState(() => _isProcessing = false);
+    }
+  }
+
   Future<void> _fillWithBots() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -242,6 +312,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           tabs: const [
             Tab(text: 'Info', icon: Icon(Icons.info)),
             Tab(text: 'Players', icon: Icon(Icons.people)),
+            Tab(text: 'Tables', icon: Icon(Icons.table_chart)),
             Tab(text: 'Blinds', icon: Icon(Icons.monetization_on)),
           ],
         ),
@@ -275,7 +346,12 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
 
     return TabBarView(
       controller: _tabController,
-      children: [_buildInfoTab(), _buildPlayersTab(), _buildBlindsTab()],
+      children: [
+        _buildInfoTab(),
+        _buildPlayersTab(),
+        _buildTablesTab(),
+        _buildBlindsTab(),
+      ],
     );
   }
 
@@ -368,6 +444,85 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     );
   }
 
+  Widget _buildTablesTab() {
+    if (_loadingTables) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_tables.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.table_chart, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text('No tables created yet'),
+            const SizedBox(height: 8),
+            const Text(
+              'Tables will be created when the tournament starts',
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _loadTables,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadTables,
+      child: ListView.builder(
+        itemCount: _tables.length,
+        itemBuilder: (context, index) {
+          final table = _tables[index];
+          return Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.green,
+                child: Text(
+                  '${table.tableNumber}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              title: Text(
+                table.tableName,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text('${table.playerCount} players'),
+              trailing: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pushNamed(
+                    context,
+                    '/table',
+                    arguments: {
+                      'tableId': table.tableId,
+                      'apiService': widget.apiService,
+                      'websocketService': widget.websocketService,
+                    },
+                  );
+                },
+                icon: const Icon(Icons.visibility, size: 18),
+                label: const Text('Watch'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget? _buildBottomBar() {
     if (_detail == null || _isProcessing) return null;
 
@@ -396,7 +551,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             // Show Fill with Bots button if tournament is in registration and not full
-            if (tournament.status == 'registration' &&
+            if (tournament.status == 'registering' &&
                 _detail!.registrations.length < tournament.maxPlayers) ...[
               SizedBox(
                 width: double.infinity,
@@ -408,6 +563,24 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            // Show Cancel button if tournament hasn't finished
+            if (tournament.status != 'finished' &&
+                tournament.status != 'cancelled') ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _isProcessing ? null : _cancelTournament,
+                  icon: const Icon(Icons.cancel),
+                  label: const Text('Cancel Tournament'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
@@ -437,7 +610,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     bool isRegistered,
     bool canRegister,
   ) {
-    if (tournament.status == 'registration') {
+    if (tournament.status == 'registering') {
       if (isRegistered) {
         return ElevatedButton.icon(
           onPressed: _isProcessing ? null : _unregister,

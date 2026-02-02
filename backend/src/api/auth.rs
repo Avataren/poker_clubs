@@ -4,7 +4,7 @@ use crate::{
     error::{AppError, Result},
     ws::GameServer,
 };
-use axum::{extract::State, Json, Router, routing::post};
+use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -120,13 +120,11 @@ async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>> {
     // Find user by username (case-insensitive)
-    let user: User = sqlx::query_as(
-        "SELECT * FROM users WHERE LOWER(username) = LOWER(?)",
-    )
-    .bind(&req.username)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::Auth("Invalid username or password".to_string()))?;
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE LOWER(username) = LOWER(?)")
+        .bind(&req.username)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| AppError::Auth("Invalid username or password".to_string()))?;
 
     // Verify password
     let valid = bcrypt::verify(req.password.as_bytes(), &user.password_hash)

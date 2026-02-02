@@ -59,11 +59,15 @@ impl PotManager {
 
             let level_contribution = bet_level - prev_level;
             // All players who bet more than prev_level contribute to this pot
-            let contributors = sorted.iter().filter(|(_, bet, _)| *bet > prev_level).count();
+            let contributors = sorted
+                .iter()
+                .filter(|(_, bet, _)| *bet > prev_level)
+                .count();
             let pot_amount = level_contribution * contributors as i64;
 
             // Only active-in-hand players who bet at least this level can win this pot
-            let eligible: Vec<usize> = sorted.iter()
+            let eligible: Vec<usize> = sorted
+                .iter()
                 .filter(|(_, bet, active)| *bet >= bet_level && *active)
                 .map(|(idx, _, _)| *idx)
                 .collect();
@@ -296,7 +300,12 @@ mod tests {
         pot_mgr.add_bet(3, 800);
 
         // P0 folded, P3 all-in at 800, P1 and P2 active
-        let player_bets = vec![(0, 500, false), (1, 2000, true), (2, 2000, true), (3, 800, true)];
+        let player_bets = vec![
+            (0, 500, false),
+            (1, 2000, true),
+            (2, 2000, true),
+            (3, 800, true),
+        ];
         pot_mgr.calculate_side_pots(&player_bets);
 
         // Total of all pots must equal total of all bets
@@ -306,19 +315,20 @@ mod tests {
 
         // Folded player should not be eligible for any pot
         for pot in &pot_mgr.pots {
-            assert!(!pot.eligible_players.contains(&0), "Folded player should not be eligible");
+            assert!(
+                !pot.eligible_players.contains(&0),
+                "Folded player should not be eligible"
+            );
         }
     }
 
     #[test]
     fn test_award_pots() {
         let mut pot_mgr = PotManager::new();
-        pot_mgr.pots = vec![
-            Pot {
-                amount: 300,
-                eligible_players: vec![0, 1, 2],
-            },
-        ];
+        pot_mgr.pots = vec![Pot {
+            amount: 300,
+            eligible_players: vec![0, 1, 2],
+        }];
 
         let winners = vec![vec![1]]; // Player 1 wins
         let payouts = pot_mgr.award_pots(winners);
@@ -329,12 +339,10 @@ mod tests {
     #[test]
     fn test_split_pot() {
         let mut pot_mgr = PotManager::new();
-        pot_mgr.pots = vec![
-            Pot {
-                amount: 300,
-                eligible_players: vec![0, 1, 2],
-            },
-        ];
+        pot_mgr.pots = vec![Pot {
+            amount: 300,
+            eligible_players: vec![0, 1, 2],
+        }];
 
         let winners = vec![vec![0, 2]]; // Players 0 and 2 tie
         let payouts = pot_mgr.award_pots(winners);

@@ -3,17 +3,18 @@ use crate::{
     db::models::Table,
     error::Result,
     game::{
-        constants::{DEFAULT_MAX_SEATS, DEFAULT_MAX_BUYIN_BB, DEFAULT_MIN_BUYIN_BB},
-        variant_from_id, available_variants,
-        format::{format_from_id, available_formats},
+        available_variants,
+        constants::{DEFAULT_MAX_BUYIN_BB, DEFAULT_MAX_SEATS, DEFAULT_MIN_BUYIN_BB},
+        format::{available_formats, format_from_id},
+        variant_from_id,
     },
     ws::GameServer,
 };
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
-    Json, Router,
     routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -78,20 +79,27 @@ async fn create_table(
     headers: HeaderMap,
     Json(req): Json<CreateTableRequest>,
 ) -> Result<Json<Table>> {
-    let auth_header = headers.get("authorization")
+    let auth_header = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let _auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
 
     // Get variant (default to Texas Hold'em)
     let variant_id = req.variant_id.as_deref().unwrap_or("holdem").to_string();
-    let variant = variant_from_id(&variant_id)
-        .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown variant: {}", variant_id)))?;
+    let variant = variant_from_id(&variant_id).ok_or_else(|| {
+        crate::error::AppError::BadRequest(format!("Unknown variant: {}", variant_id))
+    })?;
 
     // Get format (default to Cash Game)
     let format_id = req.format_id.as_deref().unwrap_or("cash").to_string();
-    let format = format_from_id(&format_id, req.small_blind, req.big_blind, DEFAULT_MAX_SEATS)
-        .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown format: {}", format_id)))?;
+    let format = format_from_id(
+        &format_id,
+        req.small_blind,
+        req.big_blind,
+        DEFAULT_MAX_SEATS,
+    )
+    .ok_or_else(|| crate::error::AppError::BadRequest(format!("Unknown format: {}", format_id)))?;
 
     let table = Table::with_variant_and_format(
         req.club_id,
@@ -125,14 +133,17 @@ async fn create_table(
     .await?;
 
     // Create in-memory game table with variant and format
-    state.game_server.create_table_with_options(
-        table.id.clone(),
-        req.name,
-        req.small_blind,
-        req.big_blind,
-        variant,
-        format,
-    ).await;
+    state
+        .game_server
+        .create_table_with_options(
+            table.id.clone(),
+            req.name,
+            req.small_blind,
+            req.big_blind,
+            variant,
+            format,
+        )
+        .await;
 
     // Notify all users viewing this club that a new table was created
     state.game_server.notify_club(&table.club_id).await;
@@ -151,7 +162,7 @@ async fn list_variants() -> Json<VariantsResponse> {
             })
         })
         .collect();
-    
+
     Json(VariantsResponse { variants })
 }
 
@@ -173,7 +184,7 @@ async fn list_formats() -> Json<FormatsResponse> {
             }
         })
         .collect();
-    
+
     Json(FormatsResponse { formats })
 }
 
@@ -182,16 +193,15 @@ async fn list_tables(
     Path(club_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<TableListResponse>> {
-    let auth_header = headers.get("authorization")
+    let auth_header = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let _auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
-    let tables: Vec<Table> = sqlx::query_as(
-        "SELECT * FROM tables WHERE club_id = ?",
-    )
-    .bind(&club_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let tables: Vec<Table> = sqlx::query_as("SELECT * FROM tables WHERE club_id = ?")
+        .bind(&club_id)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(TableListResponse { tables }))
 }

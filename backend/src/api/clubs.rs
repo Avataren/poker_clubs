@@ -5,7 +5,12 @@ use crate::{
     error::Result,
     game::constants::DEFAULT_STARTING_BALANCE,
 };
-use axum::{extract::State, http::HeaderMap, Json, Router, routing::{get, post}};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -39,22 +44,21 @@ async fn create_club(
     headers: HeaderMap,
     Json(req): Json<CreateClubRequest>,
 ) -> Result<Json<ClubResponse>> {
-    let auth_header = headers.get("authorization")
+    let auth_header = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
     let club = Club::new(req.name, auth_user.user_id.clone());
 
     // Insert club
-    sqlx::query(
-        "INSERT INTO clubs (id, name, admin_id, created_at) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&club.id)
-    .bind(&club.name)
-    .bind(&club.admin_id)
-    .bind(&club.created_at)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("INSERT INTO clubs (id, name, admin_id, created_at) VALUES (?, ?, ?, ?)")
+        .bind(&club.id)
+        .bind(&club.name)
+        .bind(&club.admin_id)
+        .bind(&club.created_at)
+        .execute(&state.pool)
+        .await?;
 
     // Auto-join as member with starting balance
     let member = ClubMember::new(club.id.clone(), auth_user.user_id.clone());
@@ -83,7 +87,8 @@ async fn get_my_clubs(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<ClubResponse>>> {
-    let auth_header = headers.get("authorization")
+    let auth_header = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
@@ -120,7 +125,8 @@ async fn get_all_clubs(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<ClubResponse>>> {
-    let auth_header = headers.get("authorization")
+    let auth_header = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
@@ -158,26 +164,24 @@ async fn join_club(
     headers: HeaderMap,
     Json(req): Json<JoinClubRequest>,
 ) -> Result<Json<ClubResponse>> {
-    let auth_header = headers.get("authorization")
+    let auth_header = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
     // Check if club exists
-    let club: Club = sqlx::query_as(
-        "SELECT * FROM clubs WHERE id = ?",
-    )
-    .bind(&req.club_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let club: Club = sqlx::query_as("SELECT * FROM clubs WHERE id = ?")
+        .bind(&req.club_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     // Check if already a member
-    let existing: Option<(i64,)> = sqlx::query_as(
-        "SELECT balance FROM club_members WHERE club_id = ? AND user_id = ?",
-    )
-    .bind(&req.club_id)
-    .bind(&auth_user.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let existing: Option<(i64,)> =
+        sqlx::query_as("SELECT balance FROM club_members WHERE club_id = ? AND user_id = ?")
+            .bind(&req.club_id)
+            .bind(&auth_user.user_id)
+            .fetch_optional(&state.pool)
+            .await?;
 
     if let Some((balance,)) = existing {
         return Ok(Json(ClubResponse {

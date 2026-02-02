@@ -91,6 +91,25 @@ SELECT
     created_at
 FROM tournaments_old;
 
+-- Also need to recreate tournament_tables to reference the new tournaments table
+ALTER TABLE tournament_tables RENAME TO tournament_tables_old;
+
+CREATE TABLE tournament_tables (
+    tournament_id TEXT NOT NULL,
+    table_id TEXT NOT NULL,
+    table_number INTEGER NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    
+    PRIMARY KEY (tournament_id, table_id),
+    FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE
+);
+
+INSERT INTO tournament_tables SELECT * FROM tournament_tables_old;
+
+CREATE INDEX IF NOT EXISTS idx_tournament_tables_tournament ON tournament_tables(tournament_id);
+CREATE INDEX IF NOT EXISTS idx_tournament_tables_table ON tournament_tables(table_id);
+
+DROP TABLE tournament_tables_old;
 DROP TABLE tournaments_old;
 
 CREATE INDEX IF NOT EXISTS idx_tournaments_club ON tournaments(club_id);

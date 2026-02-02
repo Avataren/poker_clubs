@@ -15,7 +15,10 @@ fn remaining_deck(exclude: &[Card]) -> Vec<Card> {
     for suit in 0..4u8 {
         for rank in 2..=14u8 {
             let card = Card::new(rank, suit);
-            if !exclude.iter().any(|c| c.rank == card.rank && c.suit == card.suit) {
+            if !exclude
+                .iter()
+                .any(|c| c.rank == card.rank && c.suit == card.suit)
+            {
                 deck.push(card);
             }
         }
@@ -153,8 +156,18 @@ mod tests {
         let twos = preflop_hand_strength(&deuces);
         let bad = preflop_hand_strength(&junk);
 
-        assert!(aa > twos, "AA ({}) should be stronger than 22 ({})", aa, twos);
-        assert!(twos > bad, "22 ({}) should be stronger than 27o ({})", twos, bad);
+        assert!(
+            aa > twos,
+            "AA ({}) should be stronger than 22 ({})",
+            aa,
+            twos
+        );
+        assert!(
+            twos > bad,
+            "22 ({}) should be stronger than 27o ({})",
+            twos,
+            bad
+        );
         assert!(aa > 0.90, "AA should be > 0.90, got {}", aa);
     }
 
@@ -181,9 +194,14 @@ mod tests {
         assert!(
             aa_strength > junk_strength,
             "AA ({:.2}) should be stronger than 27o ({:.2})",
-            aa_strength, junk_strength
+            aa_strength,
+            junk_strength
         );
-        assert!(aa_strength > 0.7, "AA should win > 70% vs 1 opponent, got {:.2}", aa_strength);
+        assert!(
+            aa_strength > 0.7,
+            "AA should win > 70% vs 1 opponent, got {:.2}",
+            aa_strength
+        );
     }
 
     #[test]
@@ -191,12 +209,16 @@ mod tests {
         // We have a flush on the flop
         let hole = vec![Card::new(14, 2), Card::new(10, 2)]; // Ah Th
         let community = vec![
-            Card::new(5, 2),  // 5h
-            Card::new(8, 2),  // 8h
-            Card::new(2, 2),  // 2h - flush!
+            Card::new(5, 2), // 5h
+            Card::new(8, 2), // 8h
+            Card::new(2, 2), // 2h - flush!
         ];
 
         let strength = estimate_hand_strength(&hole, &community, 1, 500);
-        assert!(strength > 0.8, "Ace-high flush should be very strong, got {:.2}", strength);
+        assert!(
+            strength > 0.8,
+            "Ace-high flush should be very strong, got {:.2}",
+            strength
+        );
     }
 }

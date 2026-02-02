@@ -1,7 +1,6 @@
 use super::{
     constants::{
-        DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS,
-        MIN_PLAYERS_TO_START,
+        DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS, MIN_PLAYERS_TO_START,
     },
     deck::{Card, Deck},
     error::{GameError, GameResult},
@@ -16,12 +15,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum GamePhase {
-    Waiting,    // Waiting for players
-    PreFlop,    // Hole cards dealt, pre-flop betting
-    Flop,       // 3 community cards, betting
-    Turn,       // 4th community card, betting
-    River,      // 5th community card, betting
-    Showdown,   // Reveal and determine winner
+    Waiting,  // Waiting for players
+    PreFlop,  // Hole cards dealt, pre-flop betting
+    Flop,     // 3 community cards, betting
+    Turn,     // 4th community card, betting
+    River,    // 5th community card, betting
+    Showdown, // Reveal and determine winner
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,7 +32,7 @@ pub struct PokerTable {
     pub players: Vec<Player>,
     pub max_seats: usize,
     pub last_winner_message: Option<String>,
-    pub winning_hand: Option<String>,  // Description of the winning hand
+    pub winning_hand: Option<String>, // Description of the winning hand
     pub dealer_seat: usize,
     pub current_player: usize,
     pub phase: GamePhase,
@@ -43,9 +42,9 @@ pub struct PokerTable {
     pub current_bet: i64,
     pub min_raise: i64,
     pub last_phase_change_time: Option<u64>,
-    pub street_delay_ms: u64,  // Delay between flop/turn/river
-    pub showdown_delay_ms: u64, // Delay to show results
-    pub tournament_id: Option<String>,  // If this is a tournament table
+    pub street_delay_ms: u64,          // Delay between flop/turn/river
+    pub showdown_delay_ms: u64,        // Delay to show results
+    pub tournament_id: Option<String>, // If this is a tournament table
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
     #[serde(skip, default = "default_format")]
@@ -94,8 +93,21 @@ impl PokerTable {
         Self::with_max_seats(table_id, name, small_blind, big_blind, DEFAULT_MAX_SEATS)
     }
 
-    pub fn with_max_seats(table_id: String, name: String, small_blind: i64, big_blind: i64, max_seats: usize) -> Self {
-        Self::with_variant(table_id, name, small_blind, big_blind, max_seats, Box::new(TexasHoldem))
+    pub fn with_max_seats(
+        table_id: String,
+        name: String,
+        small_blind: i64,
+        big_blind: i64,
+        max_seats: usize,
+    ) -> Self {
+        Self::with_variant(
+            table_id,
+            name,
+            small_blind,
+            big_blind,
+            max_seats,
+            Box::new(TexasHoldem),
+        )
     }
 
     /// Create a table with a specific poker variant
@@ -108,7 +120,15 @@ impl PokerTable {
         variant: Box<dyn PokerVariant>,
     ) -> Self {
         let format = Box::new(CashGame::new(small_blind, big_blind, max_seats));
-        Self::with_variant_and_format(table_id, name, small_blind, big_blind, max_seats, variant, format)
+        Self::with_variant_and_format(
+            table_id,
+            name,
+            small_blind,
+            big_blind,
+            max_seats,
+            variant,
+            format,
+        )
     }
 
     /// Create a table with a specific variant and game format
@@ -188,7 +208,12 @@ impl PokerTable {
         self.format.can_top_up()
     }
 
-    pub fn add_player(&mut self, user_id: String, username: String, buyin: i64) -> GameResult<usize> {
+    pub fn add_player(
+        &mut self,
+        user_id: String,
+        username: String,
+        buyin: i64,
+    ) -> GameResult<usize> {
         // Check if player is already at the table and not broke
         if let Some(existing) = self.players.iter().find(|p| p.user_id == user_id) {
             // If player is sitting out with no chips (broke), remove them so they can rebuy
@@ -209,7 +234,10 @@ impl PokerTable {
         // If a hand is in progress, make player wait until next hand
         if self.phase != GamePhase::Waiting {
             player.state = PlayerState::WaitingForHand;
-            tracing::debug!("Player {} joining mid-hand, setting to WaitingForHand", player.username);
+            tracing::debug!(
+                "Player {} joining mid-hand, setting to WaitingForHand",
+                player.username
+            );
         }
 
         self.players.push(player);
@@ -229,7 +257,13 @@ impl PokerTable {
             player.seat = idx;
         }
     }
-    pub fn take_seat(&mut self, user_id: String, username: String, seat: usize, buyin: i64) -> GameResult<usize> {
+    pub fn take_seat(
+        &mut self,
+        user_id: String,
+        username: String,
+        seat: usize,
+        buyin: i64,
+    ) -> GameResult<usize> {
         // Check if player is already at the table
         if let Some(existing) = self.players.iter().find(|p| p.user_id == user_id) {
             // If player is sitting out with no chips (broke), remove them so they can rebuy
@@ -242,7 +276,10 @@ impl PokerTable {
 
         // Validate seat number
         if seat >= self.max_seats {
-            return Err(GameError::InvalidSeat { seat, max_seats: self.max_seats });
+            return Err(GameError::InvalidSeat {
+                seat,
+                max_seats: self.max_seats,
+            });
         }
 
         // Check if seat is occupied
@@ -255,7 +292,10 @@ impl PokerTable {
         // If a hand is in progress, make player wait until next hand
         if self.phase != GamePhase::Waiting {
             player.state = PlayerState::WaitingForHand;
-            tracing::debug!("Player {} joining mid-hand, setting to WaitingForHand", player.username);
+            tracing::debug!(
+                "Player {} joining mid-hand, setting to WaitingForHand",
+                player.username
+            );
         }
 
         self.players.push(player);
@@ -270,13 +310,17 @@ impl PokerTable {
 
     pub fn top_up(&mut self, user_id: &str, amount: i64) -> GameResult<()> {
         // Find the player
-        let player = self.players.iter_mut()
+        let player = self
+            .players
+            .iter_mut()
             .find(|p| p.user_id == user_id)
             .ok_or(GameError::PlayerNotAtTable)?;
 
         // Validate top-up amount
         if amount <= 0 {
-            return Err(GameError::InvalidAction { reason: "Top-up amount must be positive".to_string() });
+            return Err(GameError::InvalidAction {
+                reason: "Top-up amount must be positive".to_string(),
+            });
         }
 
         // Check if player can top up during a hand
@@ -286,19 +330,21 @@ impl PokerTable {
 
         // Add chips to player's stack
         player.stack += amount;
-        
+
         // If player was sitting out due to being broke, set them to WaitingForHand
         if player.state == PlayerState::SittingOut && player.stack > 0 {
             player.state = PlayerState::WaitingForHand;
-            tracing::info!("Player {} topped up ${} and is now waiting for next hand", player.username, amount);
+            tracing::info!(
+                "Player {} topped up ${} and is now waiting for next hand",
+                player.username,
+                amount
+            );
         }
 
         // If we're in Waiting phase, check if we can now start a new hand
         if self.phase == GamePhase::Waiting {
-            let playable_count = self.players.iter()
-                .filter(|p| p.stack > 0)
-                .count();
-            
+            let playable_count = self.players.iter().filter(|p| p.stack > 0).count();
+
             if playable_count >= MIN_PLAYERS_TO_START {
                 tracing::info!("Enough players with chips after top-up, starting new hand");
                 self.start_new_hand();
@@ -309,15 +355,21 @@ impl PokerTable {
     }
 
     pub fn stand_up(&mut self, user_id: &str) -> GameResult<()> {
-        let player = self.players.iter_mut()
+        let player = self
+            .players
+            .iter_mut()
             .find(|p| p.user_id == user_id)
             .ok_or(GameError::PlayerNotAtTable)?;
 
         // If player is in an active hand, mark them to stand up after hand concludes
-        if self.phase != GamePhase::Waiting && 
-           (player.state == PlayerState::Active || player.state == PlayerState::AllIn) {
+        if self.phase != GamePhase::Waiting
+            && (player.state == PlayerState::Active || player.state == PlayerState::AllIn)
+        {
             player.state = PlayerState::SittingOut;
-            tracing::debug!("Player {} will stand up after current hand", player.username);
+            tracing::debug!(
+                "Player {} will stand up after current hand",
+                player.username
+            );
             Ok(())
         } else {
             // Remove player immediately
@@ -329,7 +381,8 @@ impl PokerTable {
     }
 
     fn active_players_count(&self) -> usize {
-        self.players.iter()
+        self.players
+            .iter()
             .filter(|p| p.state == PlayerState::Active || p.state == PlayerState::WaitingForHand)
             .count()
     }
@@ -343,12 +396,10 @@ impl PokerTable {
             player.reset_for_new_hand();
             // reset_for_new_hand already sets broke players (stack=0) to SittingOut
         }
-        
+
         // Count players who can actually play (have chips)
-        let playable_count = self.players.iter()
-            .filter(|p| p.stack > 0)
-            .count();
-        
+        let playable_count = self.players.iter().filter(|p| p.stack > 0).count();
+
         if playable_count < MIN_PLAYERS_TO_START {
             self.phase = GamePhase::Waiting;
             // Clear community cards when going to waiting
@@ -395,18 +446,24 @@ impl PokerTable {
 
         // First to act is after big blind
         self.current_player = self.next_active_player(bb_seat);
-        
-        tracing::info!("Blinds posted: SB=${} at seat {}, BB=${} at seat {}. SB state={:?}, BB state={:?}",
-                      sb_amount, sb_seat, bb_amount, bb_seat,
-                      self.players[sb_seat].state, self.players[bb_seat].state);
+
+        tracing::info!(
+            "Blinds posted: SB=${} at seat {}, BB=${} at seat {}. SB state={:?}, BB state={:?}",
+            sb_amount,
+            sb_seat,
+            bb_amount,
+            bb_seat,
+            self.players[sb_seat].state,
+            self.players[bb_seat].state
+        );
     }
 
     fn deal_hole_cards(&mut self) {
         let hole_cards_count = self.variant.hole_cards_count();
-        
+
         // Calculate where dealing starts: small blind (first player after dealer)
         let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
-        
+
         // Deal one card at a time to each player, just like real poker
         // Start from small blind and go around the table for each round
         for round in 0..hole_cards_count {
@@ -419,12 +476,22 @@ impl PokerTable {
                 }
                 current_seat = (current_seat + 1) % self.players.len();
             }
-            tracing::debug!("Dealt card round {} of {}, starting from seat {}", round + 1, hole_cards_count, sb_seat);
+            tracing::debug!(
+                "Dealt card round {} of {}, starting from seat {}",
+                round + 1,
+                hole_cards_count,
+                sb_seat
+            );
         }
     }
 
     pub fn handle_action(&mut self, user_id: &str, action: PlayerAction) -> GameResult<()> {
-        tracing::debug!("handle_action: user_id={}, action={:?}, current_player={}", user_id, action, self.current_player);
+        tracing::debug!(
+            "handle_action: user_id={}, action={:?}, current_player={}",
+            user_id,
+            action,
+            self.current_player
+        );
 
         // Verify it's the player's turn
         let current = &self.players[self.current_player];
@@ -446,7 +513,9 @@ impl PokerTable {
             }
             PlayerAction::Check => {
                 if self.current_bet > self.players[self.current_player].current_bet {
-                    return Err(GameError::CannotCheck { current_bet: self.current_bet });
+                    return Err(GameError::CannotCheck {
+                        current_bet: self.current_bet,
+                    });
                 }
             }
             PlayerAction::Call => {
@@ -459,7 +528,10 @@ impl PokerTable {
                 let raise_to = self.current_bet + amount;
 
                 if amount < self.min_raise {
-                    return Err(GameError::RaiseTooSmall { min_raise: self.min_raise, attempted: amount });
+                    return Err(GameError::RaiseTooSmall {
+                        min_raise: self.min_raise,
+                        attempted: amount,
+                    });
                 }
 
                 let total_to_bet = raise_to - current_bet;
@@ -514,17 +586,24 @@ impl PokerTable {
         // Mark player as having acted
         self.players[self.current_player].has_acted_this_round = true;
 
-        tracing::info!("Player {} acted, advancing. Current player before: {}", self.players[self.current_player].username, self.current_player);
-        
+        tracing::info!(
+            "Player {} acted, advancing. Current player before: {}",
+            self.players[self.current_player].username,
+            self.current_player
+        );
+
         // Move to next player or next phase
         self.advance_action();
-        
-        tracing::info!("After advance: current_player={}, state={:?}", self.current_player, 
-                       if self.current_player < self.players.len() { 
-                           format!("{:?}", self.players[self.current_player].state) 
-                       } else { 
-                           "INVALID INDEX".to_string() 
-                       });
+
+        tracing::info!(
+            "After advance: current_player={}, state={:?}",
+            self.current_player,
+            if self.current_player < self.players.len() {
+                format!("{:?}", self.players[self.current_player].state)
+            } else {
+                "INVALID INDEX".to_string()
+            }
+        );
 
         Ok(())
     }
@@ -540,9 +619,7 @@ impl PokerTable {
     }
 
     fn is_betting_round_complete(&self) -> bool {
-        let active_players: Vec<&Player> = self.players.iter()
-            .filter(|p| p.can_act())
-            .collect();
+        let active_players: Vec<&Player> = self.players.iter().filter(|p| p.can_act()).collect();
 
         if active_players.is_empty() {
             return true;
@@ -553,7 +630,9 @@ impl PokerTable {
         // 2. All active players have matched the current bet
 
         let all_acted = active_players.iter().all(|p| p.has_acted_this_round);
-        let all_matched = active_players.iter().all(|p| p.current_bet == self.current_bet);
+        let all_matched = active_players
+            .iter()
+            .all(|p| p.current_bet == self.current_bet);
 
         // Debug logging
         tracing::debug!(
@@ -563,7 +642,11 @@ impl PokerTable {
         for (i, p) in self.players.iter().enumerate() {
             tracing::debug!(
                 "  Player {}: {}, bet={}, acted={}, state={:?}",
-                i, p.username, p.current_bet, p.has_acted_this_round, p.state
+                i,
+                p.username,
+                p.current_bet,
+                p.has_acted_this_round,
+                p.state
             );
         }
 
@@ -586,7 +669,10 @@ impl PokerTable {
         self.current_bet = 0;
 
         // If only one player is active in hand, they win immediately (no showdown)
-        let active_in_hand: Vec<usize> = self.players.iter().enumerate()
+        let active_in_hand: Vec<usize> = self
+            .players
+            .iter()
+            .enumerate()
             .filter(|(_, p)| p.is_active_in_hand())
             .map(|(idx, _)| idx)
             .collect();
@@ -605,7 +691,8 @@ impl PokerTable {
             self.phase = GamePhase::Showdown;
             tracing::info!(
                 "Hand over: {} wins ${} (all others folded)",
-                self.players[winner_idx].username, total
+                self.players[winner_idx].username,
+                total
             );
             return;
         }
@@ -662,7 +749,9 @@ impl PokerTable {
         for (idx, player) in self.players.iter().enumerate() {
             if player.is_active_in_hand() {
                 // Use variant-specific hand evaluation (e.g., Omaha requires using exactly 2 hole cards)
-                let hand_rank = self.variant.evaluate_hand(&player.hole_cards, &self.community_cards);
+                let hand_rank = self
+                    .variant
+                    .evaluate_hand(&player.hole_cards, &self.community_cards);
                 hands.push((idx, hand_rank));
             }
         }
@@ -673,31 +762,47 @@ impl PokerTable {
         // Get the winning hand description and mark cards as highlighted for all winners
         if let Some(&first_winner_idx) = winner_indices.first() {
             // Find the winning hand_rank (all winners have the same rank)
-            if let Some((_, winning_hand_rank)) = hands.iter().find(|(idx, _)| *idx == first_winner_idx) {
+            if let Some((_, winning_hand_rank)) =
+                hands.iter().find(|(idx, _)| *idx == first_winner_idx)
+            {
                 self.winning_hand = Some(winning_hand_rank.description.clone());
-                
+
                 // Process each winner for card highlighting
                 for &winner_idx in &winner_indices {
                     // Get the best cards for this winner
                     if let Some((_, hand_rank)) = hands.iter().find(|(idx, _)| *idx == winner_idx) {
                         let best_cards = &hand_rank.best_cards;
-                        
+
                         tracing::info!("Winner {} best cards: {:?}", winner_idx, best_cards);
-                        
+
                         // Highlight community cards that are in the best hand
                         for community_card in &mut self.community_cards {
-                            if best_cards.iter().any(|c| c.rank == community_card.rank && c.suit == community_card.suit) {
+                            if best_cards.iter().any(|c| {
+                                c.rank == community_card.rank && c.suit == community_card.suit
+                            }) {
                                 community_card.highlighted = true;
-                                tracing::info!("Highlighted community card: rank={} suit={}", community_card.rank, community_card.suit);
+                                tracing::info!(
+                                    "Highlighted community card: rank={} suit={}",
+                                    community_card.rank,
+                                    community_card.suit
+                                );
                             }
                         }
-                        
+
                         // Highlight hole cards of the winner that are in the best hand
                         if let Some(winner) = self.players.get_mut(winner_idx) {
                             for hole_card in &mut winner.hole_cards {
-                                if best_cards.iter().any(|c| c.rank == hole_card.rank && c.suit == hole_card.suit) {
+                                if best_cards
+                                    .iter()
+                                    .any(|c| c.rank == hole_card.rank && c.suit == hole_card.suit)
+                                {
                                     hole_card.highlighted = true;
-                                    tracing::info!("Highlighted hole card for {}: rank={} suit={}", winner.username, hole_card.rank, hole_card.suit);
+                                    tracing::info!(
+                                        "Highlighted hole card for {}: rank={} suit={}",
+                                        winner.username,
+                                        hole_card.rank,
+                                        hole_card.suit
+                                    );
                                 }
                             }
                         }
@@ -707,7 +812,10 @@ impl PokerTable {
         }
 
         // Calculate side pots based on each player's total contribution
-        let player_bets: Vec<(usize, i64, bool)> = self.players.iter().enumerate()
+        let player_bets: Vec<(usize, i64, bool)> = self
+            .players
+            .iter()
+            .enumerate()
             .filter(|(_, p)| p.total_bet_this_hand > 0)
             .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
             .collect();
@@ -716,7 +824,8 @@ impl PokerTable {
         // Determine winners for each pot based on eligible players
         let mut winners_by_pot = Vec::new();
         for pot in &self.pot.pots {
-            let eligible_hands: Vec<(usize, HandRank)> = hands.iter()
+            let eligible_hands: Vec<(usize, HandRank)> = hands
+                .iter()
                 .filter(|(idx, _)| pot.eligible_players.contains(idx))
                 .cloned()
                 .collect();
@@ -733,7 +842,10 @@ impl PokerTable {
             self.players[*player_idx].add_chips(*amount);
             self.players[*player_idx].is_winner = true;
             self.players[*player_idx].pot_won = *amount;
-            winner_names.push(format!("{} wins ${}", self.players[*player_idx].username, amount));
+            winner_names.push(format!(
+                "{} wins ${}",
+                self.players[*player_idx].username, amount
+            ));
         }
 
         // DON'T reset pot here - keep it visible for animation
@@ -746,26 +858,45 @@ impl PokerTable {
             .unwrap()
             .as_millis() as u64;
         self.last_phase_change_time = Some(now);
-        
-        tracing::info!("Showdown complete. Winner: {}. Will auto-advance after delay.", winner_names.join(", "));
+
+        tracing::info!(
+            "Showdown complete. Winner: {}. Will auto-advance after delay.",
+            winner_names.join(", ")
+        );
     }
 
     fn next_active_player(&self, after: usize) -> usize {
         let mut idx = (after + 1) % self.players.len();
         let start = idx;
 
-        tracing::debug!("next_active_player: after={}, num_players={}", after, self.players.len());
-        
+        tracing::debug!(
+            "next_active_player: after={}, num_players={}",
+            after,
+            self.players.len()
+        );
+
         loop {
-            tracing::debug!("  Checking idx={}: username={}, can_act={}, state={:?}", 
-                           idx, self.players[idx].username, self.players[idx].can_act(), self.players[idx].state);
+            tracing::debug!(
+                "  Checking idx={}: username={}, can_act={}, state={:?}",
+                idx,
+                self.players[idx].username,
+                self.players[idx].can_act(),
+                self.players[idx].state
+            );
             if self.players[idx].can_act() {
-                tracing::info!("next_active_player: returning idx={} ({})", idx, self.players[idx].username);
+                tracing::info!(
+                    "next_active_player: returning idx={} ({})",
+                    idx,
+                    self.players[idx].username
+                );
                 return idx;
             }
             idx = (idx + 1) % self.players.len();
             if idx == start {
-                tracing::warn!("next_active_player: No active players found! Returning fallback {}", after);
+                tracing::warn!(
+                    "next_active_player: No active players found! Returning fallback {}",
+                    after
+                );
                 break; // No active players found
             }
         }
@@ -779,17 +910,30 @@ impl PokerTable {
         let mut idx = (after + 1) % self.players.len();
         let start = idx;
 
-        tracing::debug!("next_eligible_player_for_button: after={}, num_players={}", after, self.players.len());
+        tracing::debug!(
+            "next_eligible_player_for_button: after={}, num_players={}",
+            after,
+            self.players.len()
+        );
 
         loop {
             let player = &self.players[idx];
             // Player is eligible if they have chips and aren't voluntarily sitting out
             if player.stack > 0 && player.state != PlayerState::SittingOut {
-                tracing::info!("next_eligible_player_for_button: returning idx={} ({})", idx, player.username);
+                tracing::info!(
+                    "next_eligible_player_for_button: returning idx={} ({})",
+                    idx,
+                    player.username
+                );
                 return idx;
             }
-            tracing::debug!("  Skipping idx={}: username={}, stack={}, state={:?}",
-                           idx, player.username, player.stack, player.state);
+            tracing::debug!(
+                "  Skipping idx={}: username={}, stack={}, state={:?}",
+                idx,
+                player.username,
+                player.stack,
+                player.state
+            );
             idx = (idx + 1) % self.players.len();
             if idx == start {
                 tracing::warn!("next_eligible_player_for_button: No eligible players found! Returning fallback {}", after);
@@ -829,12 +973,16 @@ impl PokerTable {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64;
-            
+
             let elapsed = now - last_change;
-            
+
             if elapsed >= delay_ms {
-                tracing::info!("Auto-advancing from {:?} after {}ms delay", self.phase, elapsed);
-                
+                tracing::info!(
+                    "Auto-advancing from {:?} after {}ms delay",
+                    self.phase,
+                    elapsed
+                );
+
                 if self.phase == GamePhase::Showdown {
                     // After showdown, start new hand if we have enough players
                     // Check total players (not just active, since they might be in AllIn state)
@@ -849,7 +997,7 @@ impl PokerTable {
                     // Advance to next street
                     self.advance_phase();
                 }
-                
+
                 return true;
             }
         }
@@ -871,12 +1019,13 @@ impl PokerTable {
             self.players[self.current_player].seat
         } else {
             // Fallback: try to find any active player's seat
-            self.players.iter()
+            self.players
+                .iter()
                 .find(|p| p.can_act())
                 .map(|p| p.seat)
                 .unwrap_or(0)
         };
-        
+
         PublicTableState {
             table_id: self.table_id.clone(),
             name: self.name.clone(),
@@ -887,37 +1036,46 @@ impl PokerTable {
             pot_total: self.pot.total(),
             current_bet: self.current_bet,
             current_player_seat,
-            players: self.players.iter().map(|p| {
-                PublicPlayerState {
-                    user_id: p.user_id.clone(),
-                    username: p.username.clone(),
-                    seat: p.seat,
-                    stack: p.stack,
-                    current_bet: p.current_bet,
-                    state: p.state.clone(),
-                    hole_cards: if Some(p.user_id.as_str()) == for_user_id {
-                        // Show own cards face-up
-                        Some(p.hole_cards.clone())
-                    } else if self.phase == GamePhase::Showdown && p.is_active_in_hand() {
-                        // During showdown, show all active players' cards face-up
-                        Some(p.hole_cards.clone())
-                    } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
-                        // For other players still in the hand, send placeholder face-down cards
-                        // WITHOUT revealing the actual rank/suit (security: prevent cheating via network inspection)
-                        let num_cards = p.hole_cards.len();
-                        Some(vec![
-                            Card { rank: 0, suit: 0, highlighted: false, face_up: false };
-                            num_cards
-                        ])
-                    } else {
-                        // No cards for folded/sitting out players
-                        None
-                    },
-                    is_winner: p.is_winner,
-                    last_action: p.last_action.clone(),
-                    pot_won: p.pot_won,
-                }
-            }).collect(),
+            players: self
+                .players
+                .iter()
+                .map(|p| {
+                    PublicPlayerState {
+                        user_id: p.user_id.clone(),
+                        username: p.username.clone(),
+                        seat: p.seat,
+                        stack: p.stack,
+                        current_bet: p.current_bet,
+                        state: p.state.clone(),
+                        hole_cards: if Some(p.user_id.as_str()) == for_user_id {
+                            // Show own cards face-up
+                            Some(p.hole_cards.clone())
+                        } else if self.phase == GamePhase::Showdown && p.is_active_in_hand() {
+                            // During showdown, show all active players' cards face-up
+                            Some(p.hole_cards.clone())
+                        } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
+                            // For other players still in the hand, send placeholder face-down cards
+                            // WITHOUT revealing the actual rank/suit (security: prevent cheating via network inspection)
+                            let num_cards = p.hole_cards.len();
+                            Some(vec![
+                                Card {
+                                    rank: 0,
+                                    suit: 0,
+                                    highlighted: false,
+                                    face_up: false
+                                };
+                                num_cards
+                            ])
+                        } else {
+                            // No cards for folded/sitting out players
+                            None
+                        },
+                        is_winner: p.is_winner,
+                        last_action: p.last_action.clone(),
+                        pot_won: p.pot_won,
+                    }
+                })
+                .collect(),
             max_seats: self.max_seats,
             last_winner_message: self.last_winner_message.clone(),
             winning_hand: self.winning_hand.clone(),
@@ -1032,8 +1190,8 @@ impl PokerTable {
 
         let mut eliminated = vec![];
         for player in &mut self.players {
-            if player.stack == 0 
-                && player.state != PlayerState::Eliminated 
+            if player.stack == 0
+                && player.state != PlayerState::Eliminated
                 && player.state != PlayerState::SittingOut
             {
                 let user_id = player.user_id.clone();
@@ -1052,7 +1210,9 @@ impl PokerTable {
             return false;
         }
 
-        let active_count = self.players.iter()
+        let active_count = self
+            .players
+            .iter()
             .filter(|p| p.state != PlayerState::Eliminated && p.stack > 0)
             .count();
 
@@ -1072,16 +1232,11 @@ impl PokerTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::variant::{OmahaHi, variant_from_id};
+    use crate::game::variant::{variant_from_id, OmahaHi};
 
     #[test]
     fn test_table_default_variant() {
-        let table = PokerTable::new(
-            "t1".to_string(),
-            "Test Table".to_string(),
-            5,
-            10,
-        );
+        let table = PokerTable::new("t1".to_string(), "Test Table".to_string(), 5, 10);
         assert_eq!(table.variant_id(), "holdem");
         assert_eq!(table.variant_name(), "Texas Hold'em");
     }
@@ -1146,12 +1301,7 @@ mod tests {
 
     #[test]
     fn test_table_default_format() {
-        let table = PokerTable::new(
-            "t6".to_string(),
-            "Test".to_string(),
-            5,
-            10,
-        );
+        let table = PokerTable::new("t6".to_string(), "Test".to_string(), 5, 10);
         assert_eq!(table.format_id(), "cash");
         assert!(table.can_cash_out());
         assert!(table.can_top_up());
@@ -1159,12 +1309,7 @@ mod tests {
 
     #[test]
     fn test_public_state_includes_format() {
-        let table = PokerTable::new(
-            "t7".to_string(),
-            "Test".to_string(),
-            25,
-            50,
-        );
+        let table = PokerTable::new("t7".to_string(), "Test".to_string(), 25, 50);
         let state = table.get_public_state(None);
         assert_eq!(state.format_id, "cash");
         assert!(state.can_cash_out);
@@ -1174,7 +1319,7 @@ mod tests {
     #[test]
     fn test_table_with_sng_format() {
         use crate::game::format::SitAndGo;
-        
+
         let sng = SitAndGo::new(100, 1500, 6, 300);
         let table = PokerTable::with_variant_and_format(
             "t8".to_string(),
@@ -1185,7 +1330,7 @@ mod tests {
             Box::new(TexasHoldem),
             Box::new(sng),
         );
-        
+
         assert_eq!(table.format_id(), "sng");
         assert!(!table.can_cash_out());
         assert!(!table.can_top_up());

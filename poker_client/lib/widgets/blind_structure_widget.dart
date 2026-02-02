@@ -34,7 +34,7 @@ class BlindStructureWidget extends StatelessWidget {
             itemBuilder: (context, index) {
               final level = blindLevels[index];
               final isCurrentLevel =
-                  currentLevel != null && level.level == currentLevel;
+                  currentLevel != null && level.levelNumber == currentLevel;
 
               return Container(
                 color: isCurrentLevel ? Colors.green.withOpacity(0.1) : null,
@@ -48,7 +48,7 @@ class BlindStructureWidget extends StatelessWidget {
                       SizedBox(
                         width: 60,
                         child: Text(
-                          'Level ${level.level}',
+                          'Level ${level.levelNumber}',
                           style: TextStyle(
                             fontWeight: isCurrentLevel
                                 ? FontWeight.bold

@@ -73,7 +73,11 @@ impl TournamentManager {
 
     /// Create a new Sit & Go tournament
     pub async fn create_sng(&self, club_id: &str, config: SngConfig) -> Result<Tournament> {
-        let min_players = if config.min_players <= 0 { 2 } else { config.min_players };
+        let min_players = if config.min_players <= 0 {
+            2
+        } else {
+            config.min_players
+        };
 
         if min_players < 2 || min_players > config.max_players {
             return Err(AppError::BadRequest(
@@ -97,13 +101,15 @@ impl TournamentManager {
 
         // Generate blind schedule
         let starting_bb = config.starting_stack / 100; // Starting BB = 1% of stack
-        let blind_schedule = BlindSchedule::standard_tournament(starting_bb, config.level_duration_secs as u64);
+        let blind_schedule =
+            BlindSchedule::standard_tournament(starting_bb, config.level_duration_secs as u64);
 
         // Save tournament to database
         self.save_tournament(&tournament).await?;
-        
+
         // Save blind levels
-        self.save_blind_levels(&tournament.id, &blind_schedule.levels).await?;
+        self.save_blind_levels(&tournament.id, &blind_schedule.levels)
+            .await?;
 
         // Add to in-memory state
         let prize_structure = PrizeStructure::for_player_count(config.max_players);
@@ -116,13 +122,21 @@ impl TournamentManager {
             },
         );
 
-        tracing::info!("Created SNG tournament: {} ({})", tournament.name, tournament.id);
+        tracing::info!(
+            "Created SNG tournament: {} ({})",
+            tournament.name,
+            tournament.id
+        );
         Ok(tournament)
     }
 
     /// Create a new Multi-Table Tournament
     pub async fn create_mtt(&self, club_id: &str, config: MttConfig) -> Result<Tournament> {
-        let min_players = if config.min_players <= 0 { 2 } else { config.min_players };
+        let min_players = if config.min_players <= 0 {
+            2
+        } else {
+            config.min_players
+        };
 
         if min_players < 2 || min_players > config.max_players {
             return Err(AppError::BadRequest(
@@ -147,11 +161,13 @@ impl TournamentManager {
 
         // Generate blind schedule
         let starting_bb = config.starting_stack / 100;
-        let blind_schedule = BlindSchedule::standard_tournament(starting_bb, config.level_duration_secs as u64);
+        let blind_schedule =
+            BlindSchedule::standard_tournament(starting_bb, config.level_duration_secs as u64);
 
         // Save to database
         self.save_tournament(&tournament).await?;
-        self.save_blind_levels(&tournament.id, &blind_schedule.levels).await?;
+        self.save_blind_levels(&tournament.id, &blind_schedule.levels)
+            .await?;
 
         // Add to in-memory state
         let prize_structure = PrizeStructure::for_player_count(config.max_players);
@@ -164,7 +180,11 @@ impl TournamentManager {
             },
         );
 
-        tracing::info!("Created MTT tournament: {} ({})", tournament.name, tournament.id);
+        tracing::info!(
+            "Created MTT tournament: {} ({})",
+            tournament.name,
+            tournament.id
+        );
         Ok(tournament)
     }
 
@@ -188,7 +208,9 @@ impl TournamentManager {
         }
 
         if tournament.status != "registering" && tournament.status != "seating" {
-            return Err(AppError::BadRequest("Tournament is not accepting registrations".to_string()));
+            return Err(AppError::BadRequest(
+                "Tournament is not accepting registrations".to_string(),
+            ));
         }
 
         // Check if full
@@ -198,7 +220,7 @@ impl TournamentManager {
 
         // Check if already registered
         let existing = sqlx::query_as::<_, TournamentRegistration>(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?"
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?",
         )
         .bind(tournament_id)
         .bind(user_id)
@@ -210,11 +232,13 @@ impl TournamentManager {
         }
 
         // Deduct buy-in from club balance
-        self.deduct_buy_in(&tournament.club_id, user_id, tournament.buy_in).await?;
+        self.deduct_buy_in(&tournament.club_id, user_id, tournament.buy_in)
+            .await?;
 
         // Create registration
-        let registration = TournamentRegistration::new(tournament_id.to_string(), user_id.to_string());
-        
+        let registration =
+            TournamentRegistration::new(tournament_id.to_string(), user_id.to_string());
+
         sqlx::query(
             "INSERT INTO tournament_registrations (tournament_id, user_id, registered_at, prize_amount) 
              VALUES (?, ?, ?, ?)"
@@ -233,7 +257,7 @@ impl TournamentManager {
         sqlx::query(
             "UPDATE tournaments 
              SET registered_players = ?, prize_pool = ? 
-             WHERE id = ?"
+             WHERE id = ?",
         )
         .bind(tournament.registered_players)
         .bind(tournament.prize_pool)
@@ -246,10 +270,16 @@ impl TournamentManager {
             state.tournament = tournament.clone();
         }
 
-        tracing::info!("Player {} ({}) registered for tournament {}", username, user_id, tournament_id);
+        tracing::info!(
+            "Player {} ({}) registered for tournament {}",
+            username,
+            user_id,
+            tournament_id
+        );
 
         // Check if SNG should auto-start
-        if tournament.format_id == "sng" && tournament.registered_players >= tournament.max_players {
+        if tournament.format_id == "sng" && tournament.registered_players >= tournament.max_players
+        {
             self.start_tournament(tournament_id).await?;
         }
 
@@ -261,16 +291,20 @@ impl TournamentManager {
         let tournament = self.load_tournament(tournament_id).await?;
 
         if tournament.status == "cancelled" {
-            return Err(AppError::BadRequest("Tournament has been cancelled".to_string()));
+            return Err(AppError::BadRequest(
+                "Tournament has been cancelled".to_string(),
+            ));
         }
 
         if tournament.status != "registering" && tournament.status != "seating" {
-            return Err(AppError::BadRequest("Cannot unregister after tournament has started".to_string()));
+            return Err(AppError::BadRequest(
+                "Cannot unregister after tournament has started".to_string(),
+            ));
         }
 
         // Check if registered
         let registration = sqlx::query_as::<_, TournamentRegistration>(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?"
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?",
         )
         .bind(tournament_id)
         .bind(user_id)
@@ -282,7 +316,8 @@ impl TournamentManager {
         }
 
         // Refund buy-in
-        self.refund_buy_in(&tournament.club_id, user_id, tournament.buy_in).await?;
+        self.refund_buy_in(&tournament.club_id, user_id, tournament.buy_in)
+            .await?;
 
         // Delete registration
         sqlx::query("DELETE FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?")
@@ -295,14 +330,18 @@ impl TournamentManager {
         sqlx::query(
             "UPDATE tournaments 
              SET registered_players = registered_players - 1, prize_pool = prize_pool - ? 
-             WHERE id = ?"
+             WHERE id = ?",
         )
         .bind(tournament.buy_in)
         .bind(tournament_id)
         .execute(&*self.pool)
         .await?;
 
-        tracing::info!("Player {} unregistered from tournament {}", user_id, tournament_id);
+        tracing::info!(
+            "Player {} unregistered from tournament {}",
+            user_id,
+            tournament_id
+        );
         Ok(())
     }
 
@@ -329,7 +368,11 @@ impl TournamentManager {
             self.start_mtt_tables(&tournament).await?;
         }
 
-        tracing::info!("Started tournament: {} ({})", tournament.name, tournament_id);
+        tracing::info!(
+            "Started tournament: {} ({})",
+            tournament.name,
+            tournament_id
+        );
         Ok(())
     }
 
@@ -337,7 +380,8 @@ impl TournamentManager {
     pub async fn cancel_tournament(&self, tournament_id: &str, reason: Option<&str>) -> Result<()> {
         let mut tournament = self.load_tournament(tournament_id).await?;
         let reason = reason.unwrap_or("Tournament cancelled by admin");
-        self.cancel_tournament_with_state(&mut tournament, reason).await
+        self.cancel_tournament_with_state(&mut tournament, reason)
+            .await
     }
 
     /// Advance to the next blind level
@@ -362,7 +406,7 @@ impl TournamentManager {
         tournament.level_start_time = Some(Utc::now().to_rfc3339());
 
         sqlx::query(
-            "UPDATE tournaments SET current_blind_level = ?, level_start_time = ? WHERE id = ?"
+            "UPDATE tournaments SET current_blind_level = ?, level_start_time = ? WHERE id = ?",
         )
         .bind(tournament.current_blind_level)
         .bind(&tournament.level_start_time)
@@ -381,32 +425,32 @@ impl TournamentManager {
 
         // Update blinds on all active tournament tables
         let tournament_tables: Vec<(String,)> = sqlx::query_as(
-            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1"
+            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1",
         )
         .bind(tournament_id)
         .fetch_all(&*self.pool)
         .await?;
 
         for (table_id,) in tournament_tables {
-            self.game_server.update_table_blinds(
-                &table_id,
-                new_level.small_blind,
-                new_level.big_blind,
-            ).await;
+            self.game_server
+                .update_table_blinds(&table_id, new_level.small_blind, new_level.big_blind)
+                .await;
         }
 
         // Broadcast blind level increase event
         use crate::ws::messages::ServerMessage;
-        self.game_server.broadcast_tournament_event(
-            tournament_id,
-            ServerMessage::TournamentBlindLevelIncreased {
-                tournament_id: tournament_id.to_string(),
-                level: (tournament.current_blind_level + 1) as i64,
-                small_blind: new_level.small_blind,
-                big_blind: new_level.big_blind,
-                ante: new_level.ante,
-            },
-        ).await;
+        self.game_server
+            .broadcast_tournament_event(
+                tournament_id,
+                ServerMessage::TournamentBlindLevelIncreased {
+                    tournament_id: tournament_id.to_string(),
+                    level: (tournament.current_blind_level + 1) as i64,
+                    small_blind: new_level.small_blind,
+                    big_blind: new_level.big_blind,
+                    ante: new_level.ante,
+                },
+            )
+            .await;
 
         Ok(true)
     }
@@ -437,7 +481,7 @@ impl TournamentManager {
         sqlx::query(
             "UPDATE tournament_registrations 
              SET eliminated_at = ?, finish_position = ? 
-             WHERE tournament_id = ? AND user_id = ?"
+             WHERE tournament_id = ? AND user_id = ?",
         )
         .bind(Utc::now().to_rfc3339())
         .bind(finish_position)
@@ -449,7 +493,9 @@ impl TournamentManager {
         // Get username and potential prize
         let username = self.get_username(user_id).await?;
         let prize = if let Some(state) = self.tournaments.read().await.get(tournament_id) {
-            state.prize_structure.prize_for_position(finish_position, tournament.prize_pool)
+            state
+                .prize_structure
+                .prize_for_position(finish_position, tournament.prize_pool)
         } else {
             0
         };
@@ -463,15 +509,17 @@ impl TournamentManager {
 
         // Broadcast player elimination event
         use crate::ws::messages::ServerMessage;
-        self.game_server.broadcast_tournament_event(
-            tournament_id,
-            ServerMessage::TournamentPlayerEliminated {
-                tournament_id: tournament_id.to_string(),
-                username,
-                position: finish_position as i64,
-                prize,
-            },
-        ).await;
+        self.game_server
+            .broadcast_tournament_event(
+                tournament_id,
+                ServerMessage::TournamentPlayerEliminated {
+                    tournament_id: tournament_id.to_string(),
+                    username,
+                    position: finish_position as i64,
+                    prize,
+                },
+            )
+            .await;
 
         // Check if tournament is finished
         if tournament.remaining_players <= 1 {
@@ -498,26 +546,33 @@ impl TournamentManager {
         // Distribute prizes
         let winners = self.distribute_prizes(tournament_id).await?;
 
-        tracing::info!("Tournament {} finished with {} winners", tournament_id, winners.len());
+        tracing::info!(
+            "Tournament {} finished with {} winners",
+            tournament_id,
+            winners.len()
+        );
 
         // Broadcast tournament finished event
         use crate::ws::messages::{ServerMessage, TournamentWinner};
-        let winner_info: Vec<TournamentWinner> = winners.iter().map(|w| {
-            TournamentWinner {
+        let winner_info: Vec<TournamentWinner> = winners
+            .iter()
+            .map(|w| TournamentWinner {
                 username: w.username.clone(),
                 position: w.position as i64,
                 prize: w.prize_amount,
-            }
-        }).collect();
+            })
+            .collect();
 
-        self.game_server.broadcast_tournament_event(
-            tournament_id,
-            ServerMessage::TournamentFinished {
-                tournament_id: tournament_id.to_string(),
-                tournament_name: tournament.name.clone(),
-                winners: winner_info,
-            },
-        ).await;
+        self.game_server
+            .broadcast_tournament_event(
+                tournament_id,
+                ServerMessage::TournamentFinished {
+                    tournament_id: tournament_id.to_string(),
+                    tournament_name: tournament.name.clone(),
+                    winners: winner_info,
+                },
+            )
+            .await;
 
         Ok(winners)
     }
@@ -525,9 +580,10 @@ impl TournamentManager {
     /// Distribute prizes to winners
     async fn distribute_prizes(&self, tournament_id: &str) -> Result<Vec<PrizeWinner>> {
         let tournament = self.load_tournament(tournament_id).await?;
-        
+
         // Get prize structure
-        let prize_structure = if let Some(state) = self.tournaments.read().await.get(tournament_id) {
+        let prize_structure = if let Some(state) = self.tournaments.read().await.get(tournament_id)
+        {
             state.prize_structure.clone()
         } else {
             PrizeStructure::for_player_count(tournament.max_players)
@@ -537,7 +593,7 @@ impl TournamentManager {
         let registrations = sqlx::query_as::<_, TournamentRegistration>(
             "SELECT * FROM tournament_registrations 
              WHERE tournament_id = ? 
-             ORDER BY COALESCE(finish_position, 999999)"
+             ORDER BY COALESCE(finish_position, 999999)",
         )
         .bind(tournament_id)
         .fetch_all(&*self.pool)
@@ -548,12 +604,12 @@ impl TournamentManager {
         for registration in registrations {
             if let Some(position) = registration.finish_position {
                 let prize = prize_structure.prize_for_position(position, tournament.prize_pool);
-                
+
                 if prize > 0 {
                     // Update registration with prize
                     sqlx::query(
                         "UPDATE tournament_registrations SET prize_amount = ? 
-                         WHERE tournament_id = ? AND user_id = ?"
+                         WHERE tournament_id = ? AND user_id = ?",
                     )
                     .bind(prize)
                     .bind(tournament_id)
@@ -562,7 +618,8 @@ impl TournamentManager {
                     .await?;
 
                     // Credit balance
-                    self.credit_prize(&tournament.club_id, &registration.user_id, prize).await?;
+                    self.credit_prize(&tournament.club_id, &registration.user_id, prize)
+                        .await?;
 
                     // Load username
                     let username = self.get_username(&registration.user_id).await?;
@@ -648,14 +705,17 @@ impl TournamentManager {
     }
 
     async fn load_tournament(&self, tournament_id: &str) -> Result<Tournament> {
-        let mut tournament = sqlx::query_as::<_, Tournament>("SELECT * FROM tournaments WHERE id = ?")
-            .bind(tournament_id)
-            .fetch_one(&*self.pool)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::RowNotFound => AppError::NotFound("Tournament not found".to_string()),
-                _ => AppError::Database(e),
-            })?;
+        let mut tournament =
+            sqlx::query_as::<_, Tournament>("SELECT * FROM tournaments WHERE id = ?")
+                .bind(tournament_id)
+                .fetch_one(&*self.pool)
+                .await
+                .map_err(|e| match e {
+                    sqlx::Error::RowNotFound => {
+                        AppError::NotFound("Tournament not found".to_string())
+                    }
+                    _ => AppError::Database(e),
+                })?;
 
         self.refresh_tournament_timing(&mut tournament).await?;
 
@@ -685,7 +745,9 @@ impl TournamentManager {
                 .await?;
         }
 
-        if (tournament.status == "registering" || tournament.status == "seating") && now >= scheduled_start {
+        if (tournament.status == "registering" || tournament.status == "seating")
+            && now >= scheduled_start
+        {
             if tournament.registered_players >= tournament.min_players {
                 let tournament_id = tournament.id.clone();
                 self.start_tournament_with_state(&tournament_id, tournament)
@@ -713,7 +775,9 @@ impl TournamentManager {
         tournament: &mut Tournament,
     ) -> Result<()> {
         if tournament.status != "registering" && tournament.status != "seating" {
-            return Err(AppError::BadRequest("Tournament already started or finished".to_string()));
+            return Err(AppError::BadRequest(
+                "Tournament already started or finished".to_string(),
+            ));
         }
 
         if tournament.registered_players < tournament.min_players {
@@ -732,7 +796,7 @@ impl TournamentManager {
         sqlx::query(
             "UPDATE tournaments 
              SET status = ?, actual_start = ?, level_start_time = ?, remaining_players = ? 
-             WHERE id = ?"
+             WHERE id = ?",
         )
         .bind(&tournament.status)
         .bind(&tournament.actual_start)
@@ -745,13 +809,19 @@ impl TournamentManager {
         Ok(())
     }
 
-    async fn cancel_tournament_with_state(&self, tournament: &mut Tournament, reason: &str) -> Result<()> {
+    async fn cancel_tournament_with_state(
+        &self,
+        tournament: &mut Tournament,
+        reason: &str,
+    ) -> Result<()> {
         if tournament.status == "cancelled" {
             return Ok(());
         }
 
         if tournament.status == "finished" {
-            return Err(AppError::BadRequest("Tournament already finished".to_string()));
+            return Err(AppError::BadRequest(
+                "Tournament already finished".to_string(),
+            ));
         }
 
         if tournament.status == "running" || tournament.status == "paused" {
@@ -761,15 +831,19 @@ impl TournamentManager {
         }
 
         let registrations = sqlx::query_as::<_, TournamentRegistration>(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ?"
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ?",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
         .await?;
 
         for registration in registrations {
-            self.refund_buy_in(&tournament.club_id, &registration.user_id, tournament.buy_in)
-                .await?;
+            self.refund_buy_in(
+                &tournament.club_id,
+                &registration.user_id,
+                tournament.buy_in,
+            )
+            .await?;
         }
 
         tournament.status = "cancelled".to_string();
@@ -801,7 +875,7 @@ impl TournamentManager {
 
     async fn load_blind_levels(&self, tournament_id: &str) -> Result<Vec<TournamentBlindLevel>> {
         Ok(sqlx::query_as::<_, TournamentBlindLevel>(
-            "SELECT * FROM tournament_blind_levels WHERE tournament_id = ? ORDER BY level_number"
+            "SELECT * FROM tournament_blind_levels WHERE tournament_id = ? ORDER BY level_number",
         )
         .bind(tournament_id)
         .fetch_all(&*self.pool)
@@ -809,6 +883,17 @@ impl TournamentManager {
     }
 
     async fn deduct_buy_in(&self, club_id: &str, user_id: &str, amount: i64) -> Result<()> {
+        // Check if this is a bot user - bots don't need balance
+        let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&*self.pool)
+            .await?;
+
+        if username.starts_with("Bot_") {
+            // Bots bypass balance requirements
+            return Ok(());
+        }
+
         let result = sqlx::query(
             "UPDATE club_members SET balance = balance - ? WHERE club_id = ? AND user_id = ? AND balance >= ?"
         )
@@ -827,23 +912,49 @@ impl TournamentManager {
     }
 
     async fn refund_buy_in(&self, club_id: &str, user_id: &str, amount: i64) -> Result<()> {
-        sqlx::query("UPDATE club_members SET balance = balance + ? WHERE club_id = ? AND user_id = ?")
-            .bind(amount)
-            .bind(club_id)
+        // Check if this is a bot user - bots don't have club membership
+        let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
             .bind(user_id)
-            .execute(&*self.pool)
+            .fetch_one(&*self.pool)
             .await?;
+
+        if username.starts_with("Bot_") {
+            // Bots bypass refund logic
+            return Ok(());
+        }
+
+        sqlx::query(
+            "UPDATE club_members SET balance = balance + ? WHERE club_id = ? AND user_id = ?",
+        )
+        .bind(amount)
+        .bind(club_id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(())
     }
 
     async fn credit_prize(&self, club_id: &str, user_id: &str, amount: i64) -> Result<()> {
-        sqlx::query("UPDATE club_members SET balance = balance + ? WHERE club_id = ? AND user_id = ?")
-            .bind(amount)
-            .bind(club_id)
+        // Check if this is a bot user - bots don't have club membership
+        let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
             .bind(user_id)
-            .execute(&*self.pool)
+            .fetch_one(&*self.pool)
             .await?;
+
+        if username.starts_with("Bot_") {
+            // Bots bypass prize credit logic
+            return Ok(());
+        }
+
+        sqlx::query(
+            "UPDATE club_members SET balance = balance + ? WHERE club_id = ? AND user_id = ?",
+        )
+        .bind(amount)
+        .bind(club_id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(())
     }
@@ -863,7 +974,7 @@ impl TournamentManager {
 
         // Get all registered players
         let registrations: Vec<TournamentRegistration> = sqlx::query_as(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at"
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
@@ -882,8 +993,9 @@ impl TournamentManager {
         let current_level = &blind_levels[tournament.current_blind_level as usize];
 
         // Create variant
-        let variant = variant_from_id(&tournament.variant_id)
-            .ok_or_else(|| AppError::BadRequest(format!("Invalid variant: {}", tournament.variant_id)))?;
+        let variant = variant_from_id(&tournament.variant_id).ok_or_else(|| {
+            AppError::BadRequest(format!("Invalid variant: {}", tournament.variant_id))
+        })?;
 
         // Create SNG format
         let format = SitAndGo::new(
@@ -908,15 +1020,19 @@ impl TournamentManager {
         // Add all registered players to the table
         for (seat, registration) in registrations.iter().enumerate() {
             let username = self.get_username(&registration.user_id).await?;
-            
+
             // Add player to table via game server
-            if let Err(e) = self.game_server.add_player_to_table(
-                &table_id,
-                registration.user_id.clone(),
-                username,
-                seat,
-                tournament.starting_stack,
-            ).await {
+            if let Err(e) = self
+                .game_server
+                .add_player_to_table(
+                    &table_id,
+                    registration.user_id.clone(),
+                    username,
+                    seat,
+                    tournament.starting_stack,
+                )
+                .await
+            {
                 tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
             }
 
@@ -942,18 +1058,22 @@ impl TournamentManager {
         .await?;
 
         // Set tournament ID on the table
-        self.game_server.set_table_tournament(&table_id, tournament.id.clone()).await;
+        self.game_server
+            .set_table_tournament(&table_id, tournament.id.clone())
+            .await;
 
         // Broadcast tournament started event
         use crate::ws::messages::ServerMessage;
-        self.game_server.broadcast_tournament_event(
-            &tournament.id,
-            ServerMessage::TournamentStarted {
-                tournament_id: tournament.id.clone(),
-                tournament_name: tournament.name.clone(),
-                table_id: Some(table_id.clone()),
-            },
-        ).await;
+        self.game_server
+            .broadcast_tournament_event(
+                &tournament.id,
+                ServerMessage::TournamentStarted {
+                    tournament_id: tournament.id.clone(),
+                    tournament_name: tournament.name.clone(),
+                    table_id: Some(table_id.clone()),
+                },
+            )
+            .await;
 
         tracing::info!(
             "Created SNG table {} for tournament {} with {} players",
@@ -966,12 +1086,14 @@ impl TournamentManager {
     }
 
     async fn start_mtt_tables(&self, tournament: &Tournament) -> Result<()> {
-        use crate::game::{format::MultiTableTournament, variant::variant_from_id, constants::DEFAULT_MAX_SEATS};
+        use crate::game::{
+            constants::DEFAULT_MAX_SEATS, format::MultiTableTournament, variant::variant_from_id,
+        };
         use uuid::Uuid;
 
         // Get all registered players
         let registrations: Vec<TournamentRegistration> = sqlx::query_as(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at"
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
@@ -982,7 +1104,7 @@ impl TournamentManager {
         }
 
         let player_count = registrations.len();
-        
+
         // Calculate number of tables needed (max 9 players per table)
         let players_per_table = DEFAULT_MAX_SEATS;
         let table_count = (player_count + players_per_table - 1) / players_per_table;
@@ -1029,13 +1151,17 @@ impl TournamentManager {
                 let username = self.get_username(&registration.user_id).await?;
 
                 // Add player to table
-                if let Err(e) = self.game_server.add_player_to_table(
-                    &table_id,
-                    registration.user_id.clone(),
-                    username,
-                    seat,
-                    tournament.starting_stack,
-                ).await {
+                if let Err(e) = self
+                    .game_server
+                    .add_player_to_table(
+                        &table_id,
+                        registration.user_id.clone(),
+                        username,
+                        seat,
+                        tournament.starting_stack,
+                    )
+                    .await
+                {
                     tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
                 }
 
@@ -1064,7 +1190,9 @@ impl TournamentManager {
             .await?;
 
             // Set tournament ID on the table
-            self.game_server.set_table_tournament(&table_id, tournament.id.clone()).await;
+            self.game_server
+                .set_table_tournament(&table_id, tournament.id.clone())
+                .await;
 
             tracing::info!(
                 "Created MTT table {} (#{}) for tournament {} with {} players",
@@ -1084,14 +1212,16 @@ impl TournamentManager {
 
         // Broadcast tournament started event
         use crate::ws::messages::ServerMessage;
-        self.game_server.broadcast_tournament_event(
-            &tournament.id,
-            ServerMessage::TournamentStarted {
-                tournament_id: tournament.id.clone(),
-                tournament_name: tournament.name.clone(),
-                table_id: None,  // MTT has multiple tables
-            },
-        ).await;
+        self.game_server
+            .broadcast_tournament_event(
+                &tournament.id,
+                ServerMessage::TournamentStarted {
+                    tournament_id: tournament.id.clone(),
+                    tournament_name: tournament.name.clone(),
+                    table_id: None, // MTT has multiple tables
+                },
+            )
+            .await;
 
         Ok(())
     }
@@ -1101,7 +1231,7 @@ impl TournamentManager {
     pub async fn check_all_blind_levels(&self) -> Result<()> {
         // Get all running tournaments
         let tournaments: Vec<Tournament> = sqlx::query_as(
-            "SELECT * FROM tournaments WHERE status = 'running' AND level_start_time IS NOT NULL"
+            "SELECT * FROM tournaments WHERE status = 'running' AND level_start_time IS NOT NULL",
         )
         .fetch_all(&*self.pool)
         .await?;
@@ -1123,9 +1253,13 @@ impl TournamentManager {
                             elapsed_secs,
                             tournament.level_duration_secs
                         );
-                        
+
                         if let Err(e) = self.advance_blind_level(&tournament.id).await {
-                            tracing::error!("Failed to advance blind level for tournament {}: {:?}", tournament.id, e);
+                            tracing::error!(
+                                "Failed to advance blind level for tournament {}: {:?}",
+                                tournament.id,
+                                e
+                            );
                         }
                     }
                 }
@@ -1140,18 +1274,24 @@ impl TournamentManager {
     pub async fn check_tournament_eliminations(&self) -> Result<()> {
         // Get all active tournament tables
         let tables: Vec<(String, String)> = sqlx::query_as(
-            "SELECT tournament_id, table_id FROM tournament_tables WHERE is_active = 1"
+            "SELECT tournament_id, table_id FROM tournament_tables WHERE is_active = 1",
         )
         .fetch_all(&*self.pool)
         .await?;
 
         for (tournament_id, table_id) in tables {
             // Check if this table has any eliminations
-            if let Some((_, eliminated_users)) = self.game_server.check_table_eliminations(&table_id).await {
+            if let Some((_, eliminated_users)) =
+                self.game_server.check_table_eliminations(&table_id).await
+            {
                 // Process each elimination
                 for user_id in eliminated_users {
-                    tracing::info!("Player {} eliminated from tournament {}", user_id, tournament_id);
-                    
+                    tracing::info!(
+                        "Player {} eliminated from tournament {}",
+                        user_id,
+                        tournament_id
+                    );
+
                     // Record the elimination and check if tournament is finished
                     match self.eliminate_player(&tournament_id, &user_id).await {
                         Ok(Some(prizes)) => {

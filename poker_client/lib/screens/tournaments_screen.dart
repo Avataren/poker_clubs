@@ -165,7 +165,7 @@ class _TournamentsScreenState extends State<TournamentsScreen> {
         children: [
           _buildFilterChip('All', 'all'),
           const SizedBox(width: 8),
-          _buildFilterChip('Open', 'registration'),
+          _buildFilterChip('Open', 'registering'),
           const SizedBox(width: 8),
           _buildFilterChip('Running', 'running'),
           const SizedBox(width: 8),

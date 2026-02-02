@@ -6,22 +6,42 @@ use serde::{Deserialize, Serialize};
 pub enum ClientMessage {
     // Screen subscriptions
     ViewingClubsList,
-    ViewingClub { club_id: String },
+    ViewingClub {
+        club_id: String,
+    },
     LeavingView,
 
     // Table actions
-    JoinTable { table_id: String, buyin: i64 },
-    TakeSeat { table_id: String, seat: usize, buyin: i64 },
+    JoinTable {
+        table_id: String,
+        buyin: i64,
+    },
+    TakeSeat {
+        table_id: String,
+        seat: usize,
+        buyin: i64,
+    },
     LeaveTable,
     StandUp,
-    TopUp { amount: i64 },
-    PlayerAction { action: PlayerAction },
+    TopUp {
+        amount: i64,
+    },
+    PlayerAction {
+        action: PlayerAction,
+    },
     GetTableState,
     Ping,
 
     // Bot management
-    AddBot { table_id: String, name: Option<String>, strategy: Option<String> },
-    RemoveBot { table_id: String, bot_user_id: String },
+    AddBot {
+        table_id: String,
+        name: Option<String>,
+        strategy: Option<String>,
+    },
+    RemoveBot {
+        table_id: String,
+        bot_user_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,14 +50,23 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     Connected,
     TableState(PublicTableState),
-    PlayerJoined { username: String, seat: usize },
-    PlayerLeft { username: String },
-    ActionRequired { your_turn: bool },
-    Error { message: String },
+    PlayerJoined {
+        username: String,
+        seat: usize,
+    },
+    PlayerLeft {
+        username: String,
+    },
+    ActionRequired {
+        your_turn: bool,
+    },
+    Error {
+        message: String,
+    },
     Pong,
     ClubUpdate,
     GlobalUpdate,
-    
+
     // Tournament events
     TournamentStarted {
         tournament_id: String,

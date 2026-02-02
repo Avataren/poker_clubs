@@ -297,9 +297,11 @@ class ApiService {
   Future<List<TournamentWithStats>> getTournaments({String? clubId}) async {
     if (!isAuthenticated) throw Exception('Not authenticated');
 
-    final uri = clubId != null
-        ? Uri.parse('$baseUrl/api/tournaments?club_id=$clubId')
-        : Uri.parse('$baseUrl/api/tournaments');
+    if (clubId == null) {
+      throw Exception('Club ID is required');
+    }
+
+    final uri = Uri.parse('$baseUrl/api/tournaments/club/$clubId');
 
     final response = await http.get(
       uri,
@@ -330,6 +332,26 @@ class ApiService {
       return TournamentDetail.fromJson(jsonDecode(response.body));
     } else {
       throw Exception('Failed to load tournament details');
+    }
+  }
+
+  /// Get tournament tables
+  Future<List<TournamentTableInfo>> getTournamentTables(
+    String tournamentId,
+  ) async {
+    if (!isAuthenticated) throw Exception('Not authenticated');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/tournaments/$tournamentId/tables'),
+      headers: {'Authorization': 'Bearer $_token'},
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final List<dynamic> tables = data['tables'];
+      return tables.map((json) => TournamentTableInfo.fromJson(json)).toList();
+    } else {
+      throw Exception('Failed to load tournament tables');
     }
   }
 
@@ -379,7 +401,7 @@ class ApiService {
   Future<void> cancelTournament(String tournamentId) async {
     if (!isAuthenticated) throw Exception('Not authenticated');
 
-    final response = await http.post(
+    final response = await http.delete(
       Uri.parse('$baseUrl/api/tournaments/$tournamentId/cancel'),
       headers: {'Authorization': 'Bearer $_token'},
     );

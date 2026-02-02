@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS tournament_blind_levels (
 CREATE INDEX IF NOT EXISTS idx_tournament_blind_levels ON tournament_blind_levels(tournament_id, level_number);
 
 -- Tournament tables (for MTTs with multiple tables, links tournaments to tables)
+-- Note: table_id does NOT have FK constraint because tournament tables are in-memory only
 CREATE TABLE IF NOT EXISTS tournament_tables (
     tournament_id TEXT NOT NULL,
     table_id TEXT NOT NULL,
@@ -83,8 +84,7 @@ CREATE TABLE IF NOT EXISTS tournament_tables (
     is_active INTEGER NOT NULL DEFAULT 1,
     
     PRIMARY KEY (tournament_id, table_id),
-    FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE,
-    FOREIGN KEY (table_id) REFERENCES tables(id) ON DELETE CASCADE
+    FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_tournament_tables_tournament ON tournament_tables(tournament_id);

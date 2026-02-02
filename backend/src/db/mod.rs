@@ -56,13 +56,7 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             "tournament_tables",
             include_str!("migrations/003_tournament_tables.sql"),
         ),
-        (
-            5,
-            "fix_tournament_tables_fk",
-            include_str!("migrations/005_fix_tournament_tables_fk.sql"),
-        ),
-        // Migration 4 is redundant as migration 3 already has all fields
-        // (4, "add_tournament_pre_seat", include_str!("migrations/004_add_tournament_pre_seat.sql")),
+        // Migration 4 was redundant - migration 3 already has pre_seat_secs field
     ];
 
     for (version, name, sql) in migrations {

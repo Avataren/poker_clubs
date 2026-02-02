@@ -2,9 +2,8 @@ use crate::{
     auth::JwtManager,
     bot::BotManager,
     game::{
-        constants::BROADCAST_CHANNEL_CAPACITY,
-        PokerTable, PokerVariant, GameFormat,
-        constants::DEFAULT_MAX_SEATS,
+        constants::BROADCAST_CHANNEL_CAPACITY, constants::DEFAULT_MAX_SEATS, GameFormat,
+        PokerTable, PokerVariant,
     },
     ws::messages::{ClientMessage, ServerMessage},
 };
@@ -17,11 +16,8 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
-use tokio::sync::{RwLock, broadcast};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{broadcast, RwLock};
 
 // Broadcast message types - prepared for pub/sub broadcasting
 #[allow(dead_code)]
@@ -83,11 +79,10 @@ impl GameServer {
     #[allow(dead_code)] // Prepared for club-level event subscriptions
     pub async fn subscribe_club(&self, club_id: &str) -> broadcast::Receiver<ClubBroadcast> {
         let mut broadcasts = self.club_broadcasts.write().await;
-        let tx = broadcasts.entry(club_id.to_string())
-            .or_insert_with(|| {
-                let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
-                tx
-            });
+        let tx = broadcasts.entry(club_id.to_string()).or_insert_with(|| {
+            let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+            tx
+        });
         tx.subscribe()
     }
 
@@ -107,7 +102,13 @@ impl GameServer {
     }
 
     #[allow(dead_code)] // Keep for backwards compatibility, new code uses create_table_with_options
-    pub async fn create_table(&self, table_id: String, name: String, small_blind: i64, big_blind: i64) {
+    pub async fn create_table(
+        &self,
+        table_id: String,
+        name: String,
+        small_blind: i64,
+        big_blind: i64,
+    ) {
         let table = PokerTable::new(table_id.clone(), name, small_blind, big_blind);
         self.tables.write().await.insert(table_id.clone(), table);
 
@@ -143,7 +144,11 @@ impl GameServer {
     }
 
     #[allow(dead_code)] // Useful for REST API to get table state
-    pub async fn get_table_state(&self, table_id: &str, user_id: Option<&str>) -> Option<crate::game::PublicTableState> {
+    pub async fn get_table_state(
+        &self,
+        table_id: &str,
+        user_id: Option<&str>,
+    ) -> Option<crate::game::PublicTableState> {
         let tables = self.tables.read().await;
         tables.get(table_id).map(|t| t.get_public_state(user_id))
     }
@@ -158,11 +163,12 @@ impl GameServer {
         stack: i64,
     ) -> Result<(), crate::game::error::GameError> {
         let mut tables = self.tables.write().await;
-        let table = tables.get_mut(table_id)
+        let table = tables
+            .get_mut(table_id)
             .ok_or(crate::game::error::GameError::InvalidTableId)?;
-        
+
         table.take_seat(user_id, username, seat, stack)?;
-        
+
         Ok(())
     }
 
@@ -171,7 +177,12 @@ impl GameServer {
         let mut tables = self.tables.write().await;
         if let Some(table) = tables.get_mut(table_id) {
             table.update_blinds(small_blind, big_blind);
-            tracing::info!("Updated blinds on table {} to {}/{}", table_id, small_blind, big_blind);
+            tracing::info!(
+                "Updated blinds on table {} to {}/{}",
+                table_id,
+                small_blind,
+                big_blind
+            );
         }
     }
 
@@ -201,7 +212,7 @@ impl GameServer {
     pub async fn broadcast_tournament_event(&self, tournament_id: &str, _message: ServerMessage) {
         let tables = self.tables.read().await;
         let mut table_ids = Vec::new();
-        
+
         // Find all tables for this tournament
         for (table_id, table) in tables.iter() {
             if let Some(tid) = &table.tournament_id {
@@ -210,32 +221,35 @@ impl GameServer {
                 }
             }
         }
-        
+
         drop(tables);
-        
+
         // Broadcast to all tournament tables
         let broadcasts = self.table_broadcasts.read().await;
         for table_id in table_ids {
             if let Some(tx) = broadcasts.get(&table_id) {
-                let _ = tx.send(TableBroadcast { table_id: table_id.clone() });
+                let _ = tx.send(TableBroadcast {
+                    table_id: table_id.clone(),
+                });
             }
         }
     }
 
     async fn get_or_create_broadcast(&self, table_id: &str) -> broadcast::Receiver<TableBroadcast> {
         let mut broadcasts = self.table_broadcasts.write().await;
-        let tx = broadcasts.entry(table_id.to_string())
-            .or_insert_with(|| {
-                let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
-                tx
-            });
+        let tx = broadcasts.entry(table_id.to_string()).or_insert_with(|| {
+            let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+            tx
+        });
         tx.subscribe()
     }
 
     async fn notify_table_update(&self, table_id: &str) {
         let broadcasts = self.table_broadcasts.read().await;
         if let Some(tx) = broadcasts.get(table_id) {
-            let _ = tx.send(TableBroadcast { table_id: table_id.to_string() });
+            let _ = tx.send(TableBroadcast {
+                table_id: table_id.to_string(),
+            });
         }
     }
 
@@ -243,15 +257,15 @@ impl GameServer {
     pub async fn check_all_tables_auto_advance(&self) {
         let mut tables = self.tables.write().await;
         let mut tables_to_notify = Vec::new();
-        
+
         for (table_id, table) in tables.iter_mut() {
             if table.check_auto_advance() {
                 tables_to_notify.push(table_id.clone());
             }
         }
-        
+
         drop(tables);
-        
+
         // Notify after releasing the lock
         for table_id in tables_to_notify {
             self.notify_table_update(&table_id).await;
@@ -265,13 +279,13 @@ impl GameServer {
             let tables = self.tables.read().await;
             let bot_mgr = self.bot_manager.read().await;
             let mut topups = Vec::new();
-            
+
             for (table_id, table) in tables.iter() {
                 // Only in cash games (can_top_up)
                 if !table.can_top_up() {
                     continue;
                 }
-                
+
                 for player in &table.players {
                     // Check if bot is broke or very low on chips
                     if bot_mgr.is_bot(&player.user_id) && player.stack < table.big_blind * 10 {
@@ -288,7 +302,12 @@ impl GameServer {
             let mut tables = self.tables.write().await;
             if let Some(table) = tables.get_mut(&table_id) {
                 if let Ok(()) = table.top_up(&user_id, amount) {
-                    tracing::info!("Bot {} topped up ${} at table {}", user_id, amount, table_id);
+                    tracing::info!(
+                        "Bot {} topped up ${} at table {}",
+                        user_id,
+                        amount,
+                        table_id
+                    );
                     // Notify clients about the top-up
                     drop(tables); // Release lock before notify
                     self.notify_table_update(&table_id).await;
@@ -341,9 +360,11 @@ impl GameServer {
         // Seat the bot at the table
         {
             let mut tables = self.tables.write().await;
-            let table = tables.get_mut(table_id)
+            let table = tables
+                .get_mut(table_id)
                 .ok_or_else(|| "Table not found".to_string())?;
-            table.add_player(bot_user_id.clone(), bot_username.clone(), buyin)
+            table
+                .add_player(bot_user_id.clone(), bot_username.clone(), buyin)
                 .map_err(|e| {
                     // Clean up bot registration on failure
                     // (can't await here, so we'll do a blocking attempt)
@@ -353,14 +374,23 @@ impl GameServer {
 
         self.notify_table_update(table_id).await;
 
-        tracing::info!("Bot {} ({}) added to table {} with {} chips",
-            bot_username, bot_user_id, table_id, buyin);
+        tracing::info!(
+            "Bot {} ({}) added to table {} with {} chips",
+            bot_username,
+            bot_user_id,
+            table_id,
+            buyin
+        );
 
         Ok((bot_user_id, bot_username))
     }
 
     /// Remove a bot from a table.
-    pub async fn remove_bot_from_table(&self, table_id: &str, bot_user_id: &str) -> Result<(), String> {
+    pub async fn remove_bot_from_table(
+        &self,
+        table_id: &str,
+        bot_user_id: &str,
+    ) -> Result<(), String> {
         // Remove from bot manager
         {
             let mut bot_mgr = self.bot_manager.write().await;
@@ -394,11 +424,13 @@ impl GameServer {
         .await
         .map_err(|e| format!("Database error: {}", e))?;
 
-        if let Some((id, _club_id, name, small_blind, big_blind, variant_id, _format_id)) = table_data {
+        if let Some((id, _club_id, name, small_blind, big_blind, variant_id, _format_id)) =
+            table_data
+        {
             // Get the variant from ID (default to holdem if not found)
             let variant = crate::game::variant_from_id(&variant_id)
                 .ok_or_else(|| format!("Unknown variant: {}", variant_id))?;
-            
+
             // Create in-memory table with the correct variant
             let table = PokerTable::with_variant(
                 id.clone(),
@@ -588,7 +620,11 @@ async fn handle_client_message(
             // Subscribe to club broadcasts for new tables
             *current_club_id = Some(club_id.clone());
             *club_broadcast_rx = Some(game_server.subscribe_club(&club_id).await);
-            tracing::debug!("User {} subscribed to club broadcasts for club {}", username, club_id);
+            tracing::debug!(
+                "User {} subscribed to club broadcasts for club {}",
+                username,
+                club_id
+            );
             ServerMessage::Connected
         }
 
@@ -624,7 +660,9 @@ async fn handle_client_message(
                     let state = table.get_public_state(Some(user_id));
                     ServerMessage::TableState(state)
                 } else {
-                    ServerMessage::Error { message: "Table not found".to_string() }
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
                 }
             } else {
                 // Join with a seat (legacy auto-seat behavior)
@@ -643,18 +681,28 @@ async fn handle_client_message(
                                 let state = table.get_public_state(Some(user_id));
                                 ServerMessage::TableState(state)
                             } else {
-                                ServerMessage::Error { message: "Table disappeared".to_string() }
+                                ServerMessage::Error {
+                                    message: "Table disappeared".to_string(),
+                                }
                             }
                         }
-                        Err(e) => ServerMessage::Error { message: e.to_string() },
+                        Err(e) => ServerMessage::Error {
+                            message: e.to_string(),
+                        },
                     }
                 } else {
-                    ServerMessage::Error { message: "Table not found".to_string() }
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
                 }
             }
         }
 
-        ClientMessage::TakeSeat { table_id, seat, buyin } => {
+        ClientMessage::TakeSeat {
+            table_id,
+            seat,
+            buyin,
+        } => {
             // Check if table exists, load from DB if needed
             let table_exists = game_server.tables.read().await.contains_key(&table_id);
 
@@ -686,13 +734,19 @@ async fn handle_client_message(
                             let state = table.get_public_state(Some(user_id));
                             ServerMessage::TableState(state)
                         } else {
-                            ServerMessage::Error { message: "Table disappeared".to_string() }
+                            ServerMessage::Error {
+                                message: "Table disappeared".to_string(),
+                            }
                         }
                     }
-                    Err(e) => ServerMessage::Error { message: e.to_string() },
+                    Err(e) => ServerMessage::Error {
+                        message: e.to_string(),
+                    },
                 }
             } else {
-                ServerMessage::Error { message: "Table not found".to_string() }
+                ServerMessage::Error {
+                    message: "Table not found".to_string(),
+                }
             }
         }
 
@@ -704,7 +758,7 @@ async fn handle_client_message(
                         Ok(_) => {
                             // Check if player is still at table (might have been removed)
                             let still_seated = table.players.iter().any(|p| p.user_id == user_id);
-                            
+
                             drop(tables);
                             game_server.notify_table_update(table_id).await;
 
@@ -716,13 +770,19 @@ async fn handle_client_message(
 
                             ServerMessage::Connected
                         }
-                        Err(e) => ServerMessage::Error { message: e.to_string() },
+                        Err(e) => ServerMessage::Error {
+                            message: e.to_string(),
+                        },
                     }
                 } else {
-                    ServerMessage::Error { message: "Table not found".to_string() }
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
                 }
             } else {
-                ServerMessage::Error { message: "Not at a table".to_string() }
+                ServerMessage::Error {
+                    message: "Not at a table".to_string(),
+                }
             }
         }
 
@@ -736,13 +796,19 @@ async fn handle_client_message(
                             game_server.notify_table_update(table_id).await;
                             ServerMessage::Connected
                         }
-                        Err(e) => ServerMessage::Error { message: e.to_string() },
+                        Err(e) => ServerMessage::Error {
+                            message: e.to_string(),
+                        },
                     }
                 } else {
-                    ServerMessage::Error { message: "Table not found".to_string() }
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
                 }
             } else {
-                ServerMessage::Error { message: "Not at a table".to_string() }
+                ServerMessage::Error {
+                    message: "Not at a table".to_string(),
+                }
             }
         }
 
@@ -767,18 +833,24 @@ async fn handle_client_message(
                     match table.handle_action(user_id, action) {
                         Ok(_) => {
                             drop(tables); // Release lock before notifying
-                            // Notify all players at table
+                                          // Notify all players at table
                             game_server.notify_table_update(table_id).await;
                             // Return success - table state will be sent via broadcast
                             ServerMessage::Connected
                         }
-                        Err(e) => ServerMessage::Error { message: e.to_string() },
+                        Err(e) => ServerMessage::Error {
+                            message: e.to_string(),
+                        },
                     }
                 } else {
-                    ServerMessage::Error { message: "Table not found".to_string() }
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
                 }
             } else {
-                ServerMessage::Error { message: "Not at a table".to_string() }
+                ServerMessage::Error {
+                    message: "Not at a table".to_string(),
+                }
             }
         }
 
@@ -789,30 +861,45 @@ async fn handle_client_message(
                     let state = table.get_public_state(Some(user_id));
                     ServerMessage::TableState(state)
                 } else {
-                    ServerMessage::Error { message: "Table not found".to_string() }
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
                 }
             } else {
-                ServerMessage::Error { message: "Not at a table".to_string() }
+                ServerMessage::Error {
+                    message: "Not at a table".to_string(),
+                }
             }
         }
 
         ClientMessage::Ping => ServerMessage::Pong,
 
-        ClientMessage::AddBot { table_id, name, strategy } => {
+        ClientMessage::AddBot {
+            table_id,
+            name,
+            strategy,
+        } => {
             // Default buyin: use table's big blind * 100
             let buyin = {
                 let tables = game_server.tables.read().await;
-                tables.get(&table_id).map(|t| t.big_blind * 100).unwrap_or(1000)
+                tables
+                    .get(&table_id)
+                    .map(|t| t.big_blind * 100)
+                    .unwrap_or(1000)
             };
 
-            match game_server.add_bot_to_table(
-                &table_id,
-                buyin,
-                name,
-                strategy.as_deref(),
-            ).await {
+            match game_server
+                .add_bot_to_table(&table_id, buyin, name, strategy.as_deref())
+                .await
+            {
                 Ok((bot_id, bot_name)) => {
-                    tracing::info!("User {} added bot {} ({}) to table {}", username, bot_name, bot_id, table_id);
+                    tracing::info!(
+                        "User {} added bot {} ({}) to table {}",
+                        username,
+                        bot_name,
+                        bot_id,
+                        table_id
+                    );
                     // Return current table state
                     let tables = game_server.tables.read().await;
                     if let Some(table) = tables.get(&table_id) {
@@ -826,8 +913,14 @@ async fn handle_client_message(
             }
         }
 
-        ClientMessage::RemoveBot { table_id, bot_user_id } => {
-            match game_server.remove_bot_from_table(&table_id, &bot_user_id).await {
+        ClientMessage::RemoveBot {
+            table_id,
+            bot_user_id,
+        } => {
+            match game_server
+                .remove_bot_from_table(&table_id, &bot_user_id)
+                .await
+            {
                 Ok(()) => {
                     let tables = game_server.tables.read().await;
                     if let Some(table) = tables.get(&table_id) {

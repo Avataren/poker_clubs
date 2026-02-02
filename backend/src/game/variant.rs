@@ -108,9 +108,18 @@ impl PokerVariant for TexasHoldem {
 
     fn streets(&self) -> Vec<StreetConfig> {
         vec![
-            StreetConfig { name: "Flop", cards_to_deal: 3 },
-            StreetConfig { name: "Turn", cards_to_deal: 1 },
-            StreetConfig { name: "River", cards_to_deal: 1 },
+            StreetConfig {
+                name: "Flop",
+                cards_to_deal: 3,
+            },
+            StreetConfig {
+                name: "Turn",
+                cards_to_deal: 1,
+            },
+            StreetConfig {
+                name: "River",
+                cards_to_deal: 1,
+            },
         ]
     }
 
@@ -146,9 +155,18 @@ impl PokerVariant for OmahaHi {
 
     fn streets(&self) -> Vec<StreetConfig> {
         vec![
-            StreetConfig { name: "Flop", cards_to_deal: 3 },
-            StreetConfig { name: "Turn", cards_to_deal: 1 },
-            StreetConfig { name: "River", cards_to_deal: 1 },
+            StreetConfig {
+                name: "Flop",
+                cards_to_deal: 3,
+            },
+            StreetConfig {
+                name: "Turn",
+                cards_to_deal: 1,
+            },
+            StreetConfig {
+                name: "River",
+                cards_to_deal: 1,
+            },
         ]
     }
 
@@ -197,9 +215,18 @@ impl PokerVariant for OmahaHiLo {
 
     fn streets(&self) -> Vec<StreetConfig> {
         vec![
-            StreetConfig { name: "Flop", cards_to_deal: 3 },
-            StreetConfig { name: "Turn", cards_to_deal: 1 },
-            StreetConfig { name: "River", cards_to_deal: 1 },
+            StreetConfig {
+                name: "Flop",
+                cards_to_deal: 3,
+            },
+            StreetConfig {
+                name: "Turn",
+                cards_to_deal: 1,
+            },
+            StreetConfig {
+                name: "River",
+                cards_to_deal: 1,
+            },
         ]
     }
 
@@ -252,9 +279,18 @@ impl PokerVariant for ShortDeckHoldem {
 
     fn streets(&self) -> Vec<StreetConfig> {
         vec![
-            StreetConfig { name: "Flop", cards_to_deal: 3 },
-            StreetConfig { name: "Turn", cards_to_deal: 1 },
-            StreetConfig { name: "River", cards_to_deal: 1 },
+            StreetConfig {
+                name: "Flop",
+                cards_to_deal: 3,
+            },
+            StreetConfig {
+                name: "Turn",
+                cards_to_deal: 1,
+            },
+            StreetConfig {
+                name: "River",
+                cards_to_deal: 1,
+            },
         ]
     }
 
@@ -307,7 +343,7 @@ mod tests {
         let variant = OmahaHi;
         assert_eq!(variant.name(), "Omaha");
         assert_eq!(variant.hole_cards_count(), 4);
-        
+
         let reqs = variant.hand_requirements();
         assert_eq!(reqs.must_use_hole_cards, Some(2));
         assert_eq!(reqs.must_use_community_cards, Some(3));
@@ -337,7 +373,7 @@ mod tests {
     #[test]
     fn test_omaha_evaluate_hand() {
         use super::super::deck::Card;
-        
+
         let variant = OmahaHi;
         // Hole: AA23 (four cards)
         // Board: KKKQ7 (five community)
