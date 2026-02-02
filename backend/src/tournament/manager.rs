@@ -29,6 +29,7 @@ pub struct SngConfig {
     pub buy_in: i64,
     pub starting_stack: i64,
     pub max_players: i32,
+    pub min_players: i32,
     pub level_duration_secs: i64,
 }
 
@@ -40,6 +41,7 @@ pub struct MttConfig {
     pub buy_in: i64,
     pub starting_stack: i64,
     pub max_players: i32,
+    pub min_players: i32,
     pub level_duration_secs: i64,
     pub scheduled_start: Option<String>,
     pub pre_seat_secs: i64,
@@ -71,6 +73,14 @@ impl TournamentManager {
 
     /// Create a new Sit & Go tournament
     pub async fn create_sng(&self, club_id: &str, config: SngConfig) -> Result<Tournament> {
+        let min_players = if config.min_players <= 0 { 2 } else { config.min_players };
+
+        if min_players < 2 || min_players > config.max_players {
+            return Err(AppError::BadRequest(
+                "Minimum players must be between 2 and max players".to_string(),
+            ));
+        }
+
         // Create tournament record
         let tournament = Tournament::new(
             club_id.to_string(),
@@ -80,6 +90,7 @@ impl TournamentManager {
             config.buy_in,
             config.starting_stack,
             config.max_players,
+            min_players,
             config.level_duration_secs,
             0,
         );
@@ -111,6 +122,14 @@ impl TournamentManager {
 
     /// Create a new Multi-Table Tournament
     pub async fn create_mtt(&self, club_id: &str, config: MttConfig) -> Result<Tournament> {
+        let min_players = if config.min_players <= 0 { 2 } else { config.min_players };
+
+        if min_players < 2 || min_players > config.max_players {
+            return Err(AppError::BadRequest(
+                "Minimum players must be between 2 and max players".to_string(),
+            ));
+        }
+
         let mut tournament = Tournament::new(
             club_id.to_string(),
             config.name,
@@ -119,6 +138,7 @@ impl TournamentManager {
             config.buy_in,
             config.starting_stack,
             config.max_players,
+            min_players,
             config.level_duration_secs,
             config.pre_seat_secs,
         );
@@ -159,7 +179,15 @@ impl TournamentManager {
         let mut tournament = self.load_tournament(tournament_id).await?;
 
         // Check status
-        if tournament.status != "registering" {
+        if tournament.status == "cancelled" {
+            let reason = tournament
+                .cancel_reason
+                .clone()
+                .unwrap_or_else(|| "Tournament was cancelled".to_string());
+            return Err(AppError::BadRequest(reason));
+        }
+
+        if tournament.status != "registering" && tournament.status != "seating" {
             return Err(AppError::BadRequest("Tournament is not accepting registrations".to_string()));
         }
 
@@ -232,7 +260,11 @@ impl TournamentManager {
     pub async fn unregister_player(&self, tournament_id: &str, user_id: &str) -> Result<()> {
         let tournament = self.load_tournament(tournament_id).await?;
 
-        if tournament.status != "registering" {
+        if tournament.status == "cancelled" {
+            return Err(AppError::BadRequest("Tournament has been cancelled".to_string()));
+        }
+
+        if tournament.status != "registering" && tournament.status != "seating" {
             return Err(AppError::BadRequest("Cannot unregister after tournament has started".to_string()));
         }
 
@@ -280,6 +312,13 @@ impl TournamentManager {
         if tournament.status == "running" {
             return Ok(());
         }
+        if tournament.status == "cancelled" {
+            let reason = tournament
+                .cancel_reason
+                .clone()
+                .unwrap_or_else(|| "Tournament was cancelled".to_string());
+            return Err(AppError::BadRequest(reason));
+        }
         self.start_tournament_with_state(tournament_id, &mut tournament)
             .await?;
 
@@ -292,6 +331,13 @@ impl TournamentManager {
 
         tracing::info!("Started tournament: {} ({})", tournament.name, tournament_id);
         Ok(())
+    }
+
+    /// Cancel a tournament manually with a reason.
+    pub async fn cancel_tournament(&self, tournament_id: &str, reason: Option<&str>) -> Result<()> {
+        let mut tournament = self.load_tournament(tournament_id).await?;
+        let reason = reason.unwrap_or("Tournament cancelled by admin");
+        self.cancel_tournament_with_state(&mut tournament, reason).await
     }
 
     /// Advance to the next blind level
@@ -476,10 +522,10 @@ impl TournamentManager {
         sqlx::query(
             "INSERT INTO tournaments (
                 id, club_id, name, format_id, variant_id, buy_in, starting_stack,
-                prize_pool, max_players, registered_players, remaining_players,
+                prize_pool, max_players, min_players, registered_players, remaining_players,
                 current_blind_level, level_duration_secs, level_start_time,
-                status, scheduled_start, pre_seat_secs, actual_start, finished_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                status, scheduled_start, pre_seat_secs, actual_start, finished_at, cancel_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&tournament.id)
         .bind(&tournament.club_id)
@@ -490,6 +536,7 @@ impl TournamentManager {
         .bind(tournament.starting_stack)
         .bind(tournament.prize_pool)
         .bind(tournament.max_players)
+        .bind(tournament.min_players)
         .bind(tournament.registered_players)
         .bind(tournament.remaining_players)
         .bind(tournament.current_blind_level)
@@ -500,6 +547,7 @@ impl TournamentManager {
         .bind(tournament.pre_seat_secs)
         .bind(&tournament.actual_start)
         .bind(&tournament.finished_at)
+        .bind(&tournament.cancel_reason)
         .bind(&tournament.created_at)
         .execute(&*self.pool)
         .await?;
@@ -572,10 +620,16 @@ impl TournamentManager {
         }
 
         if (tournament.status == "registering" || tournament.status == "seating") && now >= scheduled_start {
-            if tournament.registered_players >= 2 {
+            if tournament.registered_players >= tournament.min_players {
                 let tournament_id = tournament.id.clone();
                 self.start_tournament_with_state(&tournament_id, tournament)
                     .await?;
+            } else {
+                self.cancel_tournament_with_state(
+                    tournament,
+                    "Tournament cancelled due to insufficient players",
+                )
+                .await?;
             }
         }
 
@@ -591,8 +645,11 @@ impl TournamentManager {
             return Err(AppError::BadRequest("Tournament already started or finished".to_string()));
         }
 
-        if tournament.registered_players < 2 {
-            return Err(AppError::BadRequest("Need at least 2 players to start".to_string()));
+        if tournament.registered_players < tournament.min_players {
+            return Err(AppError::BadRequest(format!(
+                "Need at least {} players to start",
+                tournament.min_players
+            )));
         }
 
         // Update tournament status
@@ -613,6 +670,60 @@ impl TournamentManager {
         .bind(tournament_id)
         .execute(&*self.pool)
         .await?;
+
+        Ok(())
+    }
+
+    async fn cancel_tournament_with_state(&self, tournament: &mut Tournament, reason: &str) -> Result<()> {
+        if tournament.status == "cancelled" {
+            return Ok(());
+        }
+
+        if tournament.status == "finished" {
+            return Err(AppError::BadRequest("Tournament already finished".to_string()));
+        }
+
+        if tournament.status == "running" || tournament.status == "paused" {
+            return Err(AppError::BadRequest(
+                "Cannot cancel a tournament after it has started".to_string(),
+            ));
+        }
+
+        let registrations = sqlx::query_as::<_, TournamentRegistration>(
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ?"
+        )
+        .bind(&tournament.id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for registration in registrations {
+            self.refund_buy_in(&tournament.club_id, &registration.user_id, tournament.buy_in)
+                .await?;
+        }
+
+        tournament.status = "cancelled".to_string();
+        tournament.cancel_reason = Some(reason.to_string());
+        tournament.finished_at = Some(Utc::now().to_rfc3339());
+        tournament.prize_pool = 0;
+        tournament.remaining_players = 0;
+
+        sqlx::query(
+            "UPDATE tournaments SET status = ?, cancel_reason = ?, finished_at = ?, prize_pool = ?, remaining_players = ? WHERE id = ?"
+        )
+        .bind(&tournament.status)
+        .bind(&tournament.cancel_reason)
+        .bind(&tournament.finished_at)
+        .bind(tournament.prize_pool)
+        .bind(tournament.remaining_players)
+        .bind(&tournament.id)
+        .execute(&*self.pool)
+        .await?;
+
+        if let Some(state) = self.tournaments.write().await.get_mut(&tournament.id) {
+            state.tournament = tournament.clone();
+        }
+
+        tracing::info!("Cancelled tournament {}: {}", tournament.id, reason);
 
         Ok(())
     }

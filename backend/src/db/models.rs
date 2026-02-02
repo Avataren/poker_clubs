@@ -247,6 +247,7 @@ pub struct Tournament {
     pub starting_stack: i64,
     pub prize_pool: i64,
     pub max_players: i32,
+    pub min_players: i32,
     pub registered_players: i32,
     pub remaining_players: i32,
     pub current_blind_level: i32,
@@ -257,6 +258,7 @@ pub struct Tournament {
     pub pre_seat_secs: i64,
     pub actual_start: Option<String>,
     pub finished_at: Option<String>,
+    pub cancel_reason: Option<String>,
     pub created_at: String,
 }
 
@@ -269,6 +271,7 @@ impl Tournament {
         buy_in: i64,
         starting_stack: i64,
         max_players: i32,
+        min_players: i32,
         level_duration_secs: i64,
         pre_seat_secs: i64,
     ) -> Self {
@@ -282,6 +285,7 @@ impl Tournament {
             starting_stack,
             prize_pool: 0,
             max_players,
+            min_players,
             registered_players: 0,
             remaining_players: 0,
             current_blind_level: 0,
@@ -292,6 +296,7 @@ impl Tournament {
             pre_seat_secs,
             actual_start: None,
             finished_at: None,
+            cancel_reason: None,
             created_at: Utc::now().to_rfc3339(),
         }
     }

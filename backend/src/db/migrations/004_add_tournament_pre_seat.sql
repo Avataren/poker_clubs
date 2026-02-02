@@ -19,6 +19,7 @@ CREATE TABLE tournaments (
     
     -- Structure
     max_players INTEGER NOT NULL,
+    min_players INTEGER NOT NULL DEFAULT 2,
     registered_players INTEGER NOT NULL DEFAULT 0,
     remaining_players INTEGER NOT NULL DEFAULT 0,
     
@@ -35,6 +36,7 @@ CREATE TABLE tournaments (
     pre_seat_secs INTEGER NOT NULL DEFAULT 0,
     actual_start TEXT,
     finished_at TEXT,
+    cancel_reason TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
@@ -50,6 +52,7 @@ INSERT INTO tournaments (
     starting_stack,
     prize_pool,
     max_players,
+    min_players,
     registered_players,
     remaining_players,
     current_blind_level,
@@ -60,6 +63,7 @@ INSERT INTO tournaments (
     pre_seat_secs,
     actual_start,
     finished_at,
+    cancel_reason,
     created_at
 )
 SELECT
@@ -72,6 +76,7 @@ SELECT
     starting_stack,
     prize_pool,
     max_players,
+    2,
     registered_players,
     remaining_players,
     current_blind_level,
@@ -82,6 +87,7 @@ SELECT
     0,
     actual_start,
     finished_at,
+    NULL,
     created_at
 FROM tournaments_old;
 

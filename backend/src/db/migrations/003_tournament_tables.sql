@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS tournaments (
     
     -- Structure
     max_players INTEGER NOT NULL,
+    min_players INTEGER NOT NULL DEFAULT 2,
     registered_players INTEGER NOT NULL DEFAULT 0,
     remaining_players INTEGER NOT NULL DEFAULT 0,
     
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tournaments (
     pre_seat_secs INTEGER NOT NULL DEFAULT 0,
     actual_start TEXT,
     finished_at TEXT,
+    cancel_reason TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
