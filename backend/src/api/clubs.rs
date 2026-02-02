@@ -6,7 +6,7 @@ use crate::{
     game::constants::DEFAULT_STARTING_BALANCE,
 };
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::HeaderMap,
     routing::{get, post},
     Json, Router,
@@ -31,12 +31,23 @@ pub struct ClubResponse {
     pub balance: i64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AddBalanceRequest {
+    pub amount: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BalanceResponse {
+    pub new_balance: i64,
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", post(create_club))
         .route("/my", get(get_my_clubs))
         .route("/all", get(get_all_clubs))
         .route("/join", post(join_club))
+        .route("/:club_id/members/:user_id/balance", post(add_member_balance))
 }
 
 async fn create_club(
@@ -49,6 +60,19 @@ async fn create_club(
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+    
+    // Verify user exists in database (prevent FK constraint errors)
+    let user_exists: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
+        .bind(&auth_user.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    
+    if user_exists.is_none() {
+        return Err(crate::error::AppError::Auth(
+            "User account no longer exists. Please log in again.".to_string()
+        ));
+    }
+    
     let club = Club::new(req.name, auth_user.user_id.clone());
 
     // Insert club
@@ -209,4 +233,47 @@ async fn join_club(
         is_admin: false,
         balance: DEFAULT_STARTING_BALANCE,
     }))
+}
+
+async fn add_member_balance(
+    State(state): State<Arc<AppState>>,
+    Path((club_id, user_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(req): Json<AddBalanceRequest>,
+) -> Result<Json<BalanceResponse>> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(crate::error::AppError::Unauthorized)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    // Verify the requester is the club admin
+    let club: (String,) = sqlx::query_as("SELECT admin_id FROM clubs WHERE id = ?")
+        .bind(&club_id)
+        .fetch_one(&state.pool)
+        .await?;
+
+    if club.0 != auth_user.user_id {
+        return Err(crate::error::AppError::Auth(
+            "Only club admin can add balance".to_string(),
+        ));
+    }
+
+    // Update the member's balance
+    sqlx::query("UPDATE club_members SET balance = balance + ? WHERE club_id = ? AND user_id = ?")
+        .bind(req.amount)
+        .bind(&club_id)
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+
+    // Get the new balance
+    let (new_balance,): (i64,) =
+        sqlx::query_as("SELECT balance FROM club_members WHERE club_id = ? AND user_id = ?")
+            .bind(&club_id)
+            .bind(&user_id)
+            .fetch_one(&state.pool)
+            .await?;
+
+    Ok(Json(BalanceResponse { new_balance }))
 }

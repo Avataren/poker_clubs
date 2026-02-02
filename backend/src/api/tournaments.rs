@@ -308,21 +308,48 @@ async fn get_tournament_tables(
 
     verify_club_member(&state.pool, &tournament.club_id, &auth_user.user_id).await?;
 
-    // Get active tournament tables with player counts
-    let tables: Vec<TournamentTableInfo> = sqlx::query_as(
-        "SELECT tt.table_id, tt.table_number, t.name as table_name, 
-                COUNT(DISTINCT tr.user_id) as player_count
+    // Get active tournament tables with player counts from registrations
+    // Note: For accurate counts, we query based on which table each player was assigned to
+    let mut tables: Vec<TournamentTableInfo> = sqlx::query_as(
+        "SELECT tt.table_id, tt.table_number, 
+                '' as table_name,
+                0 as player_count
          FROM tournament_tables tt
-         JOIN tables t ON tt.table_id = t.id
-         LEFT JOIN tournament_registrations tr ON tr.tournament_id = tt.tournament_id 
-                                                AND tr.starting_table_id = tt.table_id
          WHERE tt.tournament_id = ? AND tt.is_active = 1
-         GROUP BY tt.table_id, tt.table_number, t.name
          ORDER BY tt.table_number",
     )
     .bind(&id)
     .fetch_all(&state.pool)
     .await?;
+
+    // Get player count for each table
+    for table in tables.iter_mut() {
+        let count: Option<(i32,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tournament_registrations 
+             WHERE tournament_id = ? AND starting_table_id = ? AND eliminated_at IS NULL"
+        )
+        .bind(&id)
+        .bind(&table.table_id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+        table.player_count = count.map(|(c,)| c).unwrap_or(0);
+    }
+
+    // If no players are assigned yet (starting_table_id not set), but we have one table,
+    // count all active registrations
+    if tables.len() == 1 && tables[0].player_count == 0 {
+        let total_players: Option<(i32,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL"
+        )
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+        if let Some((count,)) = total_players {
+            tables[0].player_count = count;
+        }
+    }
 
     Ok(Json(TournamentTablesResponse { tables }))
 }
@@ -657,13 +684,13 @@ async fn fill_with_bots(
 
         tracing::info!("Creating bot: {}", bot_username);
 
-        // Create bot user
+        // Create bot user with is_bot flag
         let bot_id = uuid::Uuid::new_v4().to_string();
-        let bot_password_hash = "$2b$12$placeholder"; // Bots don't need real passwords
+        let bot_password_hash = "$2b$12$BOTACCOUNT_NO_PASSWORD";
 
         let insert_result = sqlx::query(
-            "INSERT INTO users (id, username, email, password_hash) 
-             VALUES (?, ?, ?, ?)
+            "INSERT INTO users (id, username, email, password_hash, is_bot) 
+             VALUES (?, ?, ?, ?, 1)
              ON CONFLICT(username) DO NOTHING",
         )
         .bind(&bot_id)
@@ -709,6 +736,12 @@ async fn fill_with_bots(
 
     // Notify club members
     state.game_server.notify_club(&tournament.club_id).await;
+
+    // Reload tournament to get updated counts
+    let tournament: Tournament = sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await?;
 
     // Return updated tournament details
     let blind_levels = load_blind_levels(&state.pool, &id).await?;

@@ -476,10 +476,10 @@ async fn test_list_club_tournaments() {
         .await;
 
     list_response.assert_status_ok();
-    let tournaments: Value = list_response.json();
+    let body: Value = list_response.json();
 
-    assert!(tournaments.is_array());
-    assert_eq!(tournaments.as_array().unwrap().len(), 3);
+    assert!(body["tournaments"].is_array());
+    assert_eq!(body["tournaments"].as_array().unwrap().len(), 3);
 }
 
 // ============================================================================
@@ -983,163 +983,9 @@ async fn test_cancel_tournament_refunds_players() {
     assert_eq!(cancel_body["prize_pool"], 0);
 }
 
-#[tokio::test]
-async fn test_create_single_bot() {
-    let server = setup().await;
-    
-    // Create a bot user directly
-    let bot_username = "Bot_Test_1";
-    let bot_id = uuid::Uuid::new_v4().to_string();
-    
-    eprintln!("Creating bot user: {} with ID: {}", bot_username, bot_id);
-    
-    let response = server
-        .post("/api/auth/register")
-        .json(&json!({
-            "username": bot_username,
-            "email": format!("{}@bot.local", bot_username),
-            "password": "placeholder"
-        }))
-        .await;
-    
-    eprintln!("Bot registration response: {} - {:?}", response.status_code(), response.text());
-    response.assert_status_ok();
-}
-
-#[tokio::test]
-async fn test_register_bot_directly() {
-    let server = setup().await;
-    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
-
-    // Create tournament
-    let response = server
-        .post("/api/tournaments/sng")
-        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
-        .json(&json!({
-            "club_id": club_id,
-            "name": "Test Direct Bot Registration",
-            "variant_id": "holdem",
-            "buy_in": 100,
-            "starting_stack": 1500,
-            "max_players": 6,
-            "min_players": 2,
-            "level_duration_mins": 5
-        }))
-        .await;
-
-    response.assert_status_ok();
-    let body: Value = response.json();
-    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
-
-    // Create a bot user manually
-    let bot_response = server
-        .post("/api/auth/register")
-        .json(&json!({
-            "username": "Bot_DirectTest",
-            "email": "Bot_DirectTest@bot.local",
-            "password": "testpass"
-        }))
-        .await;
-
-    bot_response.assert_status_ok();
-    let bot_body: Value = bot_response.json();
-    let bot_id = bot_body["user"]["id"].as_str().unwrap();
-    
-    eprintln!("Created bot user with ID: {}", bot_id);
-
-    // Try to register the bot for the tournament
-    let reg_response = server
-        .post(&format!("/api/tournaments/{}/register", tournament_id))
-        .add_header(AUTHORIZATION, format!("Bearer {}", bot_body["token"].as_str().unwrap()))
-        .await;
-
-    eprintln!("Registration status: {}", reg_response.status_code());
-    eprintln!("Registration body: {}", reg_response.text());
-    
-    // This should work since Bot_ users bypass balance checks
-    assert_eq!(reg_response.status_code(), 200);
-}
-
-#[tokio::test]
-async fn test_fill_bots_manual() {
-    let server = setup().await;
-    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
-
-    // Create tournament
-    let response = server
-        .post("/api/tournaments/sng")
-        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
-        .json(&json!({
-            "club_id": club_id,
-            "name": "Test Manual Fill",
-            "variant_id": "holdem",
-            "buy_in": 100,
-            "starting_stack": 1500,
-            "max_players": 3,
-            "min_players": 2,
-            "level_duration_mins": 5
-        }))
-        .await;
-
-    response.assert_status_ok();
-    let body: Value = response.json();
-    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
-
-    // Manually create and register 3 bots (mimics fill_with_bots logic)
-    for i in 1..=3 {
-        let bot_username = format!("Bot_{}", i);
-        
-        // Try to create bot (will conflict if exists)
-        let _create_response = server
-            .post("/api/auth/register")
-            .json(&json!({
-                "username": &bot_username,
-                "email": format!("{}@bot.local", bot_username),
-                "password": "placeholder"
-            }))
-            .await;
-        // Ignore response - might already exist
-
-        // Now try to register for tournament
-        eprintln!("Attempting to register {} for tournament", bot_username);
-        
-        // We need the bot's token to register
-        let login_response = server
-            .post("/api/auth/login")
-            .json(&json!({
-                "username": &bot_username,
-                "password": "placeholder"
-            }))
-            .await;
-
-        if login_response.status_code() != 200 {
-            eprintln!("Login failed for {}: {}", bot_username, login_response.text());
-            continue;
-        }
-
-        let login_body: Value = login_response.json();
-        let bot_token = login_body["token"].as_str().unwrap();
-
-        let reg_response = server
-            .post(&format!("/api/tournaments/{}/register", tournament_id))
-            .add_header(AUTHORIZATION, format!("Bearer {}", bot_token))
-            .await;
-
-        eprintln!("Registration for {} - Status: {}, Body: {}", 
-                  bot_username, reg_response.status_code(), reg_response.text());
-    }
-
-    // Check tournament
-    let details = server
-        .get(&format!("/api/tournaments/{}", tournament_id))
-        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
-        .await;
-
-    details.assert_status_ok();
-    let tournament: Value = details.json();
-    eprintln!("Final registered players: {}", tournament["tournament"]["registered_players"]);
-    assert_eq!(tournament["tournament"]["registered_players"], 3);
-}
+// ============================================================================
+// Prize Distribution Tests
+// ============================================================================
 
 #[tokio::test]
 async fn test_tournament_complete_flow() {
@@ -1200,12 +1046,28 @@ async fn test_tournament_complete_flow() {
         .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
         .await;
 
+    if tables_response.status_code() != 200 {
+        eprintln!("Get tables failed: {}", tables_response.text());
+        panic!("Failed to get tables");
+    }
+
     tables_response.assert_status_ok();
     let tables_body: Value = tables_response.json();
+    eprintln!("Tables response: {}", serde_json::to_string_pretty(&tables_body).unwrap());
+    
+    if !tables_body["tables"].is_array() {
+        panic!("tables_body['tables'] is not an array: {:?}", tables_body);
+    }
+    
     let tables = tables_body["tables"].as_array().unwrap();
+    
+    if tables.is_empty() {
+        panic!("No tables were created!");
+    }
     
     assert_eq!(tables.len(), 1, "Should create exactly 1 table for SNG");
     assert_eq!(tables[0]["table_number"], 1);
+    eprintln!("Player count in table: {}", tables[0]["player_count"]);
     assert_eq!(tables[0]["player_count"], 6, "Table should have all 6 players");
 
     // 5. Get tournament details

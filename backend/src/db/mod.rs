@@ -56,7 +56,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             "tournament_tables",
             include_str!("migrations/003_tournament_tables.sql"),
         ),
-        // Migration 4 was redundant - migration 3 already has pre_seat_secs field
+        (
+            4,
+            "add_is_bot_field",
+            include_str!("migrations/004_add_is_bot_field.sql"),
+        ),
     ];
 
     for (version, name, sql) in migrations {

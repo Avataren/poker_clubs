@@ -884,12 +884,12 @@ impl TournamentManager {
 
     async fn deduct_buy_in(&self, club_id: &str, user_id: &str, amount: i64) -> Result<()> {
         // Check if this is a bot user - bots don't need balance
-        let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+        let (is_bot,): (bool,) = sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
             .bind(user_id)
             .fetch_one(&*self.pool)
             .await?;
 
-        if username.starts_with("Bot_") {
+        if is_bot {
             // Bots bypass balance requirements
             return Ok(());
         }
@@ -913,12 +913,12 @@ impl TournamentManager {
 
     async fn refund_buy_in(&self, club_id: &str, user_id: &str, amount: i64) -> Result<()> {
         // Check if this is a bot user - bots don't have club membership
-        let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+        let (is_bot,): (bool,) = sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
             .bind(user_id)
             .fetch_one(&*self.pool)
             .await?;
 
-        if username.starts_with("Bot_") {
+        if is_bot {
             // Bots bypass refund logic
             return Ok(());
         }
@@ -937,12 +937,12 @@ impl TournamentManager {
 
     async fn credit_prize(&self, club_id: &str, user_id: &str, amount: i64) -> Result<()> {
         // Check if this is a bot user - bots don't have club membership
-        let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+        let (is_bot,): (bool,) = sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
             .bind(user_id)
             .fetch_one(&*self.pool)
             .await?;
 
-        if username.starts_with("Bot_") {
+        if is_bot {
             // Bots bypass prize credit logic
             return Ok(());
         }

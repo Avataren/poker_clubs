@@ -65,6 +65,13 @@ async fn register(
         return Err(AppError::Validation("All fields are required".to_string()));
     }
 
+    // Prevent users from registering with bot-like usernames
+    if req.username.starts_with("Bot_") || req.username.to_lowercase().starts_with("bot_") {
+        return Err(AppError::Validation(
+            "Username cannot start with 'Bot_' - this prefix is reserved for system bots".to_string(),
+        ));
+    }
+
     if req.password.len() < 6 {
         return Err(AppError::Validation(
             "Password must be at least 6 characters".to_string(),
@@ -94,13 +101,14 @@ async fn register(
     let user = User::new(req.username, req.email, password_hash);
 
     sqlx::query(
-        "INSERT INTO users (id, username, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, username, email, password_hash, created_at, is_bot) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&user.id)
     .bind(&user.username)
     .bind(&user.email)
     .bind(&user.password_hash)
     .bind(&user.created_at)
+    .bind(false)
     .execute(&state.pool)
     .await?;
 

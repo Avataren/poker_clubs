@@ -11,6 +11,8 @@ pub struct User {
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub created_at: String,
+    #[serde(skip_serializing)]
+    pub is_bot: bool,
 }
 
 impl User {
@@ -21,6 +23,18 @@ impl User {
             email,
             password_hash,
             created_at: Utc::now().to_rfc3339(),
+            is_bot: false,
+        }
+    }
+
+    pub fn new_bot(username: String) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            username: username.clone(),
+            email: format!("{}@bot.local", username),
+            password_hash: "$2b$12$BOTACCOUNT_NO_PASSWORD".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            is_bot: true,
         }
     }
 }
