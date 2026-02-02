@@ -408,6 +408,22 @@ class ApiService {
       throw Exception('Failed to load tournament results');
     }
   }
+
+  /// Fill tournament with bots (admin only)
+  Future<TournamentDetail> fillTournamentWithBots(String tournamentId) async {
+    if (!isAuthenticated) throw Exception('Not authenticated');
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/tournaments/$tournamentId/fill-bots'),
+      headers: {'Authorization': 'Bearer $_token'},
+    );
+
+    if (response.statusCode == 200) {
+      return TournamentDetail.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to fill with bots: ${response.body}');
+    }
+  }
 }
 
 /// Poker variant information

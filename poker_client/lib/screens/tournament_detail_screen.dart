@@ -192,6 +192,46 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     }
   }
 
+  Future<void> _fillWithBots() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Fill with Bots'),
+        content: const Text(
+          'This will fill all remaining seats with bot players. Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Fill'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isProcessing = true);
+
+    try {
+      final updatedDetail = await widget.apiService.fillTournamentWithBots(
+        widget.tournamentId,
+      );
+      setState(() {
+        _detail = updatedDetail;
+      });
+      _showSnackBar('Tournament filled with bots!');
+    } catch (e) {
+      _showSnackBar('Error: $e');
+    } finally {
+      setState(() => _isProcessing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -352,10 +392,39 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ],
       ),
       child: SafeArea(
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: _buildActionButton(tournament, isRegistered, canRegister),
+            // Show Fill with Bots button if tournament is in registration and not full
+            if (tournament.status == 'registration' &&
+                _detail!.registrations.length < tournament.maxPlayers) ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _isProcessing ? null : _fillWithBots,
+                  icon: const Icon(Icons.smart_toy),
+                  label: Text(
+                    'Fill ${tournament.maxPlayers - _detail!.registrations.length} Remaining Seats with Bots',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: _buildActionButton(
+                    tournament,
+                    isRegistered,
+                    canRegister,
+                  ),
+                ),
+              ],
             ),
           ],
         ),

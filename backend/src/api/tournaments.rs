@@ -8,9 +8,8 @@ use crate::{
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
-    Json,
-    Router,
     routing::{delete, get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -130,6 +129,7 @@ pub fn router() -> Router<Arc<TournamentAppState>> {
         .route("/:id/players", get(get_tournament_players))
         // Administration
         .route("/:id/start", post(start_tournament))
+        .route("/:id/fill-bots", post(fill_with_bots))
         // Results
         .route("/:id/results", get(get_tournament_results))
         .route("/:id/prizes", get(get_tournament_prizes))
@@ -169,10 +169,7 @@ async fn create_sng(
     let blind_levels = load_blind_levels(&state.pool, &tournament.id).await?;
 
     // Notify club members
-    state
-        .game_server
-        .notify_club(&req.club_id)
-        .await;
+    state.game_server.notify_club(&req.club_id).await;
 
     Ok(Json(TournamentResponse {
         tournament,
@@ -214,10 +211,7 @@ async fn create_mtt(
     let blind_levels = load_blind_levels(&state.pool, &tournament.id).await?;
 
     // Notify club members
-    state
-        .game_server
-        .notify_club(&req.club_id)
-        .await;
+    state.game_server.notify_club(&req.club_id).await;
 
     Ok(Json(TournamentResponse {
         tournament,
@@ -315,9 +309,7 @@ async fn get_tournament_details(
     .await?;
 
     // Check if current user is registered
-    let is_registered = registrations
-        .iter()
-        .any(|r| r.user_id == auth_user.user_id);
+    let is_registered = registrations.iter().any(|r| r.user_id == auth_user.user_id);
 
     let can_register = tournament.status == "registering"
         && tournament.registered_players < tournament.max_players
@@ -354,10 +346,7 @@ async fn register_for_tournament(
         .await?;
 
     // Notify club members of registration
-    state
-        .game_server
-        .notify_club(&tournament.club_id)
-        .await;
+    state.game_server.notify_club(&tournament.club_id).await;
 
     Ok(Json(RegistrationResponse {
         success: true,
@@ -387,10 +376,7 @@ async fn unregister_from_tournament(
         .await?;
 
     // Notify club members
-    state
-        .game_server
-        .notify_club(&tournament.club_id)
-        .await;
+    state.game_server.notify_club(&tournament.club_id).await;
 
     Ok(Json(RegistrationResponse {
         success: true,
@@ -461,10 +447,7 @@ async fn start_tournament(
         .await?;
 
     // Notify all registered players
-    state
-        .game_server
-        .notify_club(&tournament.club_id)
-        .await;
+    state.game_server.notify_club(&tournament.club_id).await;
 
     Ok(Json(updated_tournament))
 }
@@ -500,10 +483,7 @@ async fn cancel_tournament(
         .await?;
 
     // Notify club members
-    state
-        .game_server
-        .notify_club(&tournament.club_id)
-        .await;
+    state.game_server.notify_club(&tournament.club_id).await;
 
     Ok(Json(updated_tournament))
 }
@@ -575,19 +555,116 @@ async fn get_tournament_prizes(
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(PrizesResponse {
+    Ok(Json(PrizesResponse { tournament, prizes }))
+}
+
+async fn fill_with_bots(
+    State(state): State<Arc<TournamentAppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<TournamentDetailResponse>> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    let tournament: Tournament = sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound("Tournament not found".to_string()))?;
+
+    // Only allow during registration phase
+    if tournament.status != "registration" {
+        return Err(AppError::BadRequest(
+            "Can only add bots during registration".to_string(),
+        ));
+    }
+
+    verify_club_admin(&state.pool, &tournament.club_id, &auth_user.user_id).await?;
+
+    // Get current registration count
+    let (current_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM tournament_registrations WHERE tournament_id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await?;
+
+    let current_count = current_count as i32;
+    let spots_remaining = tournament.max_players - current_count;
+
+    if spots_remaining <= 0 {
+        return Err(AppError::BadRequest("Tournament is full".to_string()));
+    }
+
+    // Add bots to fill remaining spots
+    for i in 0..spots_remaining {
+        let bot_username = format!("Bot_{}", current_count + i + 1);
+
+        // Create bot user
+        let bot_id = uuid::Uuid::new_v4().to_string();
+        let bot_password_hash = "$2b$12$placeholder"; // Bots don't need real passwords
+
+        sqlx::query(
+            "INSERT INTO users (id, username, email, password_hash) 
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(username) DO NOTHING",
+        )
+        .bind(&bot_id)
+        .bind(&bot_username)
+        .bind(format!("{}@bot.local", bot_username))
+        .bind(bot_password_hash)
+        .execute(&state.pool)
+        .await?;
+
+        // Get the bot's actual ID (in case it already existed)
+        let (actual_bot_id,): (String,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+            .bind(&bot_username)
+            .fetch_one(&state.pool)
+            .await?;
+
+        // Register bot for tournament
+        state
+            .tournament_manager
+            .register_player(&id, &actual_bot_id, &bot_username)
+            .await?;
+    }
+
+    // Notify club members
+    state.game_server.notify_club(&tournament.club_id).await;
+
+    // Return updated tournament details
+    let blind_levels = load_blind_levels(&state.pool, &id).await?;
+
+    let registrations: Vec<PlayerRegistration> = sqlx::query_as(
+        "SELECT tr.user_id, u.username, tr.registered_at, tr.finish_position, tr.prize_amount
+         FROM tournament_registrations tr
+         JOIN users u ON tr.user_id = u.id
+         WHERE tr.tournament_id = ?
+         ORDER BY tr.registered_at",
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let is_registered = registrations.iter().any(|r| r.user_id == auth_user.user_id);
+
+    let can_register = tournament.status == "registration"
+        && registrations.len() < tournament.max_players as usize;
+
+    Ok(Json(TournamentDetailResponse {
         tournament,
-        prizes,
+        blind_levels,
+        registrations,
+        is_registered,
+        can_register,
     }))
 }
 
 // ==================== Helper Functions ====================
 
-async fn verify_club_admin(
-    pool: &crate::db::DbPool,
-    club_id: &str,
-    user_id: &str,
-) -> Result<()> {
+async fn verify_club_admin(pool: &crate::db::DbPool, club_id: &str, user_id: &str) -> Result<()> {
     let club: Option<(String,)> =
         sqlx::query_as("SELECT id FROM clubs WHERE id = ? AND admin_id = ?")
             .bind(club_id)
@@ -602,11 +679,7 @@ async fn verify_club_admin(
     Ok(())
 }
 
-async fn verify_club_member(
-    pool: &crate::db::DbPool,
-    club_id: &str,
-    user_id: &str,
-) -> Result<()> {
+async fn verify_club_member(pool: &crate::db::DbPool, club_id: &str, user_id: &str) -> Result<()> {
     let member: Option<(String,)> =
         sqlx::query_as("SELECT user_id FROM club_members WHERE club_id = ? AND user_id = ?")
             .bind(club_id)
