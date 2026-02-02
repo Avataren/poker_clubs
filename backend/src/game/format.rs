@@ -180,6 +180,8 @@ impl Default for FormatConfig {
 pub enum TournamentStatus {
     /// Waiting for registrations
     Registering,
+    /// Countdown window before start
+    Seating,
     /// Game is in progress
     Running,
     /// Game is paused (for breaks)
