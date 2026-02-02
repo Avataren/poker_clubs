@@ -63,9 +63,9 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
@@ -81,9 +81,9 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
@@ -99,7 +99,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
       if (mounted) {
         final errorMsg = e.toString();
         // Check if it's an authentication error
-        if (errorMsg.contains('no longer exists') || 
+        if (errorMsg.contains('no longer exists') ||
             errorMsg.contains('Unauthorized') ||
             errorMsg.contains('401')) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -114,9 +114,9 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
             Navigator.of(context).pushReplacementNamed('/login');
           }
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Error: $e')));
         }
       }
     }
@@ -199,7 +199,8 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (_) => TablesScreen(club: club),
+                                        builder: (_) =>
+                                            TablesScreen(club: club),
                                       ),
                                     );
                                   },

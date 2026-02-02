@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'services/api_service.dart';
 import 'services/websocket_service.dart';
 import 'screens/login_screen.dart';
+import 'screens/game_screen.dart';
+import 'models/club.dart';
 
 void main() {
   runApp(const PokerApp());
@@ -26,8 +28,18 @@ class PokerApp extends StatelessWidget {
           brightness: Brightness.dark,
           useMaterial3: true,
         ),
-        routes: {
-          '/login': (context) => const LoginScreen(),
+        routes: {'/login': (context) => const LoginScreen()},
+        onGenerateRoute: (settings) {
+          if (settings.name == '/table') {
+            final args = settings.arguments as Map<String, dynamic>;
+            final table = args['table'] as PokerTable;
+            return MaterialPageRoute(
+              builder: (context) => GameScreen(
+                table: table,
+              ),
+            );
+          }
+          return null;
         },
         home: const LoginScreen(),
       ),

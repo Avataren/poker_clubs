@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/tournament.dart';
+import '../models/club.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../widgets/blind_structure_widget.dart';
@@ -499,14 +500,25 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
               subtitle: Text('${table.playerCount} players'),
               trailing: ElevatedButton.icon(
                 onPressed: () {
+                  // Create a PokerTable object for tournament table
+                  // Tournament tables are in-memory and use default values
+                  final pokerTable = PokerTable(
+                    id: table.tableId,
+                    clubId: _detail!.tournament.clubId,
+                    name: table.tableName.isEmpty
+                        ? 'Table ${table.tableNumber}'
+                        : table.tableName,
+                    smallBlind: 50, // Default values for tournament
+                    bigBlind: 100,
+                    minBuyin: 0,
+                    maxBuyin: 0,
+                    maxPlayers: 9,
+                  );
+
                   Navigator.pushNamed(
                     context,
                     '/table',
-                    arguments: {
-                      'tableId': table.tableId,
-                      'apiService': widget.apiService,
-                      'websocketService': widget.websocketService,
-                    },
+                    arguments: {'table': pokerTable},
                   );
                 },
                 icon: const Icon(Icons.visibility, size: 18),
