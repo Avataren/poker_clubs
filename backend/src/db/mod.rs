@@ -34,16 +34,33 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             success BOOLEAN NOT NULL,
             execution_time BIGINT NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // List of migrations: (version, name, sql)
     let migrations: Vec<(i64, &str, &str)> = vec![
-        (1, "initial_schema", include_str!("migrations/001_initial_schema.sql")),
-        (2, "add_variant_and_format", include_str!("migrations/002_add_variant_and_format.sql")),
-        (3, "tournament_tables", include_str!("migrations/003_tournament_tables.sql")),
+        (
+            1,
+            "initial_schema",
+            include_str!("migrations/001_initial_schema.sql"),
+        ),
+        (
+            2,
+            "add_variant_and_format",
+            include_str!("migrations/002_add_variant_and_format.sql"),
+        ),
+        (
+            3,
+            "tournament_tables",
+            include_str!("migrations/003_tournament_tables.sql"),
+        ),
+        (
+            5,
+            "fix_tournament_tables_fk",
+            include_str!("migrations/005_fix_tournament_tables_fk.sql"),
+        ),
         // Migration 4 is redundant as migration 3 already has all fields
         // (4, "add_tournament_pre_seat", include_str!("migrations/004_add_tournament_pre_seat.sql")),
     ];
@@ -64,40 +81,45 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
         tracing::info!("Running migration {} ({})", version, name);
 
         let start_time = std::time::Instant::now();
-        
+
         // Execute the migration
         match execute_migration_sql(pool, sql).await {
             Ok(_) => {
                 let elapsed = start_time.elapsed().as_millis() as i64;
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations (version, description, success, execution_time) 
-                     VALUES (?, ?, TRUE, ?)"
+                     VALUES (?, ?, TRUE, ?)",
                 )
                 .bind(version)
                 .bind(name)
                 .bind(elapsed)
                 .execute(pool)
                 .await?;
-                
-                tracing::info!("Migration {} ({}) completed successfully in {}ms", version, name, elapsed);
+
+                tracing::info!(
+                    "Migration {} ({}) completed successfully in {}ms",
+                    version,
+                    name,
+                    elapsed
+                );
             }
             Err(e) => {
                 let elapsed = start_time.elapsed().as_millis() as i64;
-                
+
                 // Try to record the failure, but don't fail if this fails
                 let _ = sqlx::query(
                     "INSERT INTO _sqlx_migrations (version, description, success, execution_time) 
-                     VALUES (?, ?, FALSE, ?)"
+                     VALUES (?, ?, FALSE, ?)",
                 )
                 .bind(version)
                 .bind(name)
                 .bind(elapsed)
                 .execute(pool)
                 .await;
-                
+
                 // Re-enable foreign keys before returning error
                 let _ = sqlx::query("PRAGMA foreign_keys = ON").execute(pool).await;
-                
+
                 tracing::error!("Migration {} ({}) failed: {}", version, name, e);
                 return Err(e);
             }
@@ -115,24 +137,26 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
 
 async fn execute_migration_sql(pool: &DbPool, sql: &str) -> Result<(), sqlx::Error> {
     // Split by semicolon and execute each statement
-    let statements: Vec<&str> = sql.split(';')
+    let statements: Vec<&str> = sql
+        .split(';')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    
+
     for statement in statements.iter() {
         // Filter out pure comment blocks - only keep non-empty, non-comment lines
-        let non_comment_lines: Vec<&str> = statement.lines()
+        let non_comment_lines: Vec<&str> = statement
+            .lines()
             .filter(|line| !line.trim().starts_with("--") && !line.trim().is_empty())
             .collect();
-        
+
         if non_comment_lines.is_empty() {
             continue;
         }
-        
+
         // Reconstruct statement without leading comments
         let clean_statement = non_comment_lines.join("\n");
-        
+
         sqlx::query(&clean_statement).execute(pool).await?;
     }
 

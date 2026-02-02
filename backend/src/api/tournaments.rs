@@ -104,6 +104,19 @@ pub struct PrizesResponse {
     pub prizes: Vec<PrizeWinner>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct TournamentTableInfo {
+    pub table_id: String,
+    pub table_number: i32,
+    pub table_name: String,
+    pub player_count: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TournamentTablesResponse {
+    pub tables: Vec<TournamentTableInfo>,
+}
+
 // ==================== Extended AppState for Tournaments ====================
 
 pub struct TournamentAppState {
@@ -127,6 +140,7 @@ pub fn router() -> Router<Arc<TournamentAppState>> {
         .route("/:id/register", post(register_for_tournament))
         .route("/:id/unregister", delete(unregister_from_tournament))
         .route("/:id/players", get(get_tournament_players))
+        .route("/:id/tables", get(get_tournament_tables))
         // Administration
         .route("/:id/start", post(start_tournament))
         .route("/:id/fill-bots", post(fill_with_bots))
@@ -272,6 +286,45 @@ async fn list_club_tournaments(
     Ok(Json(TournamentListResponse {
         tournaments: results,
     }))
+}
+
+async fn get_tournament_tables(
+    State(state): State<Arc<TournamentAppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<TournamentTablesResponse>> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    // Get tournament to verify club membership
+    let tournament: Tournament = sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound("Tournament not found".to_string()))?;
+
+    verify_club_member(&state.pool, &tournament.club_id, &auth_user.user_id).await?;
+
+    // Get active tournament tables with player counts
+    let tables: Vec<TournamentTableInfo> = sqlx::query_as(
+        "SELECT tt.table_id, tt.table_number, t.name as table_name, 
+                COUNT(DISTINCT tr.user_id) as player_count
+         FROM tournament_tables tt
+         JOIN tables t ON tt.table_id = t.id
+         LEFT JOIN tournament_registrations tr ON tr.tournament_id = tt.tournament_id 
+                                                AND tr.starting_table_id = tt.table_id
+         WHERE tt.tournament_id = ? AND tt.is_active = 1
+         GROUP BY tt.table_id, tt.table_number, t.name
+         ORDER BY tt.table_number",
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(TournamentTablesResponse { tables }))
 }
 
 async fn get_tournament_details(
@@ -576,7 +629,7 @@ async fn fill_with_bots(
         .ok_or(AppError::NotFound("Tournament not found".to_string()))?;
 
     // Only allow during registration phase
-    if tournament.status != "registration" {
+    if tournament.status != "registering" {
         return Err(AppError::BadRequest(
             "Can only add bots during registration".to_string(),
         ));
@@ -602,11 +655,13 @@ async fn fill_with_bots(
     for i in 0..spots_remaining {
         let bot_username = format!("Bot_{}", current_count + i + 1);
 
+        tracing::info!("Creating bot: {}", bot_username);
+
         // Create bot user
         let bot_id = uuid::Uuid::new_v4().to_string();
         let bot_password_hash = "$2b$12$placeholder"; // Bots don't need real passwords
 
-        sqlx::query(
+        let insert_result = sqlx::query(
             "INSERT INTO users (id, username, email, password_hash) 
              VALUES (?, ?, ?, ?)
              ON CONFLICT(username) DO NOTHING",
@@ -616,19 +671,40 @@ async fn fill_with_bots(
         .bind(format!("{}@bot.local", bot_username))
         .bind(bot_password_hash)
         .execute(&state.pool)
-        .await?;
+        .await;
+
+        if let Err(e) = insert_result {
+            tracing::error!("Failed to insert bot user {}: {:?}", bot_username, e);
+            return Err(e.into());
+        }
 
         // Get the bot's actual ID (in case it already existed)
-        let (actual_bot_id,): (String,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+        let actual_bot_id = match sqlx::query_as::<_, (String,)>("SELECT id FROM users WHERE username = ?")
             .bind(&bot_username)
             .fetch_one(&state.pool)
-            .await?;
+            .await
+        {
+            Ok((id,)) => {
+                tracing::info!("Bot {} has ID: {}", bot_username, id);
+                id
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch bot ID for {}: {:?}", bot_username, e);
+                return Err(e.into());
+            }
+        };
 
-        // Register bot for tournament
-        state
+        // Register bot for tournament (bots don't need club membership or balance)
+        tracing::info!("Registering bot {} for tournament", bot_username);
+        if let Err(e) = state
             .tournament_manager
             .register_player(&id, &actual_bot_id, &bot_username)
-            .await?;
+            .await
+        {
+            tracing::error!("Failed to register bot {}: {:?}", bot_username, e);
+            return Err(e);
+        }
+        tracing::info!("Successfully registered bot {}", bot_username);
     }
 
     // Notify club members
