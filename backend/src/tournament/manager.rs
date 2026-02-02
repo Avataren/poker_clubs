@@ -17,7 +17,7 @@ use crate::{
     tournament::prizes::{PrizeStructure, PrizeWinner},
     ws::GameServer,
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -42,6 +42,7 @@ pub struct MttConfig {
     pub max_players: i32,
     pub level_duration_secs: i64,
     pub scheduled_start: Option<String>,
+    pub pre_seat_secs: i64,
 }
 
 /// Manages all tournaments
@@ -80,6 +81,7 @@ impl TournamentManager {
             config.starting_stack,
             config.max_players,
             config.level_duration_secs,
+            0,
         );
 
         // Generate blind schedule
@@ -118,6 +120,7 @@ impl TournamentManager {
             config.starting_stack,
             config.max_players,
             config.level_duration_secs,
+            config.pre_seat_secs,
         );
 
         tournament.scheduled_start = config.scheduled_start;
@@ -274,33 +277,8 @@ impl TournamentManager {
     /// Start a tournament
     pub async fn start_tournament(&self, tournament_id: &str) -> Result<()> {
         let mut tournament = self.load_tournament(tournament_id).await?;
-
-        if tournament.status != "registering" {
-            return Err(AppError::BadRequest("Tournament already started or finished".to_string()));
-        }
-
-        if tournament.registered_players < 2 {
-            return Err(AppError::BadRequest("Need at least 2 players to start".to_string()));
-        }
-
-        // Update tournament status
-        tournament.status = "running".to_string();
-        tournament.actual_start = Some(Utc::now().to_rfc3339());
-        tournament.level_start_time = Some(Utc::now().to_rfc3339());
-        tournament.remaining_players = tournament.registered_players;
-
-        sqlx::query(
-            "UPDATE tournaments 
-             SET status = ?, actual_start = ?, level_start_time = ?, remaining_players = ? 
-             WHERE id = ?"
-        )
-        .bind(&tournament.status)
-        .bind(&tournament.actual_start)
-        .bind(&tournament.level_start_time)
-        .bind(tournament.remaining_players)
-        .bind(tournament_id)
-        .execute(&*self.pool)
-        .await?;
+        self.start_tournament_with_state(tournament_id, &mut tournament)
+            .await?;
 
         // Create table(s) and seat players
         if tournament.format_id == "sng" {
@@ -497,8 +475,8 @@ impl TournamentManager {
                 id, club_id, name, format_id, variant_id, buy_in, starting_stack,
                 prize_pool, max_players, registered_players, remaining_players,
                 current_blind_level, level_duration_secs, level_start_time,
-                status, scheduled_start, actual_start, finished_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                status, scheduled_start, pre_seat_secs, actual_start, finished_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&tournament.id)
         .bind(&tournament.club_id)
@@ -516,6 +494,7 @@ impl TournamentManager {
         .bind(&tournament.level_start_time)
         .bind(&tournament.status)
         .bind(&tournament.scheduled_start)
+        .bind(tournament.pre_seat_secs)
         .bind(&tournament.actual_start)
         .bind(&tournament.finished_at)
         .bind(&tournament.created_at)
@@ -552,14 +531,86 @@ impl TournamentManager {
     }
 
     async fn load_tournament(&self, tournament_id: &str) -> Result<Tournament> {
-        sqlx::query_as::<_, Tournament>("SELECT * FROM tournaments WHERE id = ?")
+        let mut tournament = sqlx::query_as::<_, Tournament>("SELECT * FROM tournaments WHERE id = ?")
             .bind(tournament_id)
             .fetch_one(&*self.pool)
             .await
             .map_err(|e| match e {
                 sqlx::Error::RowNotFound => AppError::NotFound("Tournament not found".to_string()),
                 _ => AppError::Database(e),
-            })
+            })?;
+
+        self.refresh_tournament_timing(&mut tournament).await?;
+
+        Ok(tournament)
+    }
+
+    async fn refresh_tournament_timing(&self, tournament: &mut Tournament) -> Result<()> {
+        let scheduled_start = match tournament.scheduled_start.as_ref() {
+            Some(value) => value,
+            None => return Ok(()),
+        };
+
+        let scheduled_start = match DateTime::parse_from_rfc3339(scheduled_start) {
+            Ok(value) => value.with_timezone(&Utc),
+            Err(_) => return Ok(()),
+        };
+
+        let pre_seat_at = scheduled_start - Duration::seconds(tournament.pre_seat_secs.max(0));
+        let now = Utc::now();
+
+        if tournament.status == "registering" && now >= pre_seat_at && now < scheduled_start {
+            tournament.status = "seating".to_string();
+            sqlx::query("UPDATE tournaments SET status = ? WHERE id = ?")
+                .bind(&tournament.status)
+                .bind(&tournament.id)
+                .execute(&*self.pool)
+                .await?;
+        }
+
+        if (tournament.status == "registering" || tournament.status == "seating") && now >= scheduled_start {
+            if tournament.registered_players >= 2 {
+                self.start_tournament_with_state(&tournament.id, tournament)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn start_tournament_with_state(
+        &self,
+        tournament_id: &str,
+        tournament: &mut Tournament,
+    ) -> Result<()> {
+        if tournament.status != "registering" && tournament.status != "seating" {
+            return Err(AppError::BadRequest("Tournament already started or finished".to_string()));
+        }
+
+        if tournament.registered_players < 2 {
+            return Err(AppError::BadRequest("Need at least 2 players to start".to_string()));
+        }
+
+        // Update tournament status
+        tournament.status = "running".to_string();
+        tournament.actual_start = Some(Utc::now().to_rfc3339());
+        tournament.level_start_time = Some(Utc::now().to_rfc3339());
+        tournament.remaining_players = tournament.registered_players;
+
+        sqlx::query(
+            "UPDATE tournaments 
+             SET status = ?, actual_start = ?, level_start_time = ?, remaining_players = ? 
+             WHERE id = ?"
+        )
+        .bind(&tournament.status)
+        .bind(&tournament.actual_start)
+        .bind(&tournament.level_start_time)
+        .bind(tournament.remaining_players)
+        .bind(tournament_id)
+        .execute(&*self.pool)
+        .await?;
+
+        Ok(())
     }
 
     async fn load_blind_levels(&self, tournament_id: &str) -> Result<Vec<TournamentBlindLevel>> {

@@ -254,6 +254,7 @@ pub struct Tournament {
     pub level_start_time: Option<String>,
     pub status: String,
     pub scheduled_start: Option<String>,
+    pub pre_seat_secs: i64,
     pub actual_start: Option<String>,
     pub finished_at: Option<String>,
     pub created_at: String,
@@ -269,6 +270,7 @@ impl Tournament {
         starting_stack: i64,
         max_players: i32,
         level_duration_secs: i64,
+        pre_seat_secs: i64,
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -287,6 +289,7 @@ impl Tournament {
             level_start_time: None,
             status: "registering".to_string(),
             scheduled_start: None,
+            pre_seat_secs,
             actual_start: None,
             finished_at: None,
             created_at: Utc::now().to_rfc3339(),

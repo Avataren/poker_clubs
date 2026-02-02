@@ -24,11 +24,12 @@ CREATE TABLE IF NOT EXISTS tournaments (
     level_duration_secs INTEGER NOT NULL,
     level_start_time TEXT,
     
-    -- Status: registering, running, paused, finished, cancelled
-    status TEXT NOT NULL CHECK (status IN ('registering', 'running', 'paused', 'finished', 'cancelled')),
+    -- Status: registering, seating, running, paused, finished, cancelled
+    status TEXT NOT NULL CHECK (status IN ('registering', 'seating', 'running', 'paused', 'finished', 'cancelled')),
     
     -- Timing
     scheduled_start TEXT,
+    pre_seat_secs INTEGER NOT NULL DEFAULT 0,
     actual_start TEXT,
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
