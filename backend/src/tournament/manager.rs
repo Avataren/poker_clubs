@@ -379,8 +379,21 @@ impl TournamentManager {
             new_level.big_blind
         );
 
-        // TODO: Update blinds on all active tournament tables
-        // This will be implemented in Phase 3
+        // Update blinds on all active tournament tables
+        let tournament_tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1"
+        )
+        .bind(tournament_id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for (table_id,) in tournament_tables {
+            self.game_server.update_table_blinds(
+                &table_id,
+                new_level.small_blind,
+                new_level.big_blind,
+            ).await;
+        }
 
         Ok(true)
     }
@@ -791,20 +804,214 @@ impl TournamentManager {
         Ok(result.0)
     }
 
-    async fn start_sng_table(&self, _tournament: &Tournament) -> Result<()> {
-        // TODO: Implement in Phase 3
-        // - Create a single table
-        // - Seat all registered players
-        // - Link table to tournament
+    async fn start_sng_table(&self, tournament: &Tournament) -> Result<()> {
+        use crate::game::{format::SitAndGo, variant::variant_from_id};
+        use uuid::Uuid;
+
+        // Get all registered players
+        let registrations: Vec<TournamentRegistration> = sqlx::query_as(
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at"
+        )
+        .bind(&tournament.id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        if registrations.is_empty() {
+            return Err(AppError::BadRequest("No players registered".to_string()));
+        }
+
+        // Create table ID and name
+        let table_id = Uuid::new_v4().to_string();
+        let table_name = format!("{} - Table 1", tournament.name);
+
+        // Get current blind level
+        let blind_levels = self.load_blind_levels(&tournament.id).await?;
+        let current_level = &blind_levels[tournament.current_blind_level as usize];
+
+        // Create variant
+        let variant = variant_from_id(&tournament.variant_id)
+            .ok_or_else(|| AppError::BadRequest(format!("Invalid variant: {}", tournament.variant_id)))?;
+
+        // Create SNG format
+        let format = SitAndGo::new(
+            tournament.buy_in,
+            tournament.starting_stack,
+            tournament.max_players as usize,
+            tournament.level_duration_secs as u64,
+        );
+
+        // Create the table
+        self.game_server
+            .create_table_with_options(
+                table_id.clone(),
+                table_name,
+                current_level.small_blind,
+                current_level.big_blind,
+                variant,
+                Box::new(format),
+            )
+            .await;
+
+        // Add all registered players to the table
+        for (seat, registration) in registrations.iter().enumerate() {
+            let username = self.get_username(&registration.user_id).await?;
+            
+            // Add player to table via game server
+            if let Err(e) = self.game_server.add_player_to_table(
+                &table_id,
+                registration.user_id.clone(),
+                username,
+                seat,
+                tournament.starting_stack,
+            ).await {
+                tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
+            }
+
+            // Update registration with table assignment
+            sqlx::query(
+                "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?"
+            )
+            .bind(&table_id)
+            .bind(&tournament.id)
+            .bind(&registration.user_id)
+            .execute(&*self.pool)
+            .await?;
+        }
+
+        // Link table to tournament
+        sqlx::query(
+            "INSERT INTO tournament_tables (tournament_id, table_id, table_number, is_active) VALUES (?, ?, ?, 1)"
+        )
+        .bind(&tournament.id)
+        .bind(&table_id)
+        .bind(1)
+        .execute(&*self.pool)
+        .await?;
+
+        tracing::info!(
+            "Created SNG table {} for tournament {} with {} players",
+            table_id,
+            tournament.id,
+            registrations.len()
+        );
+
         Ok(())
     }
 
-    async fn start_mtt_tables(&self, _tournament: &Tournament) -> Result<()> {
-        // TODO: Implement in Phase 3  
-        // - Calculate number of tables needed
-        // - Create tables
-        // - Distribute players evenly
-        // - Link tables to tournament
+    async fn start_mtt_tables(&self, tournament: &Tournament) -> Result<()> {
+        use crate::game::{format::MultiTableTournament, variant::variant_from_id, constants::DEFAULT_MAX_SEATS};
+        use uuid::Uuid;
+
+        // Get all registered players
+        let registrations: Vec<TournamentRegistration> = sqlx::query_as(
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at"
+        )
+        .bind(&tournament.id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        if registrations.is_empty() {
+            return Err(AppError::BadRequest("No players registered".to_string()));
+        }
+
+        let player_count = registrations.len();
+        
+        // Calculate number of tables needed (max 9 players per table)
+        let players_per_table = DEFAULT_MAX_SEATS;
+        let table_count = (player_count + players_per_table - 1) / players_per_table;
+
+        // Get current blind level
+        let blind_levels = self.load_blind_levels(&tournament.id).await?;
+        let current_level = &blind_levels[tournament.current_blind_level as usize];
+
+        // Create variant
+        let variant_id = tournament.variant_id.clone();
+
+        // Distribute players across tables
+        let mut player_index = 0;
+        for table_num in 0..table_count {
+            let table_id = Uuid::new_v4().to_string();
+            let table_name = format!("{} - Table {}", tournament.name, table_num + 1);
+
+            // Create MTT format
+            let format = MultiTableTournament::new(
+                table_name.clone(),
+                tournament.buy_in,
+                tournament.starting_stack,
+                tournament.level_duration_secs as u64,
+            );
+
+            // Create the table
+            let variant = variant_from_id(&variant_id)
+                .ok_or_else(|| AppError::BadRequest(format!("Invalid variant: {}", variant_id)))?;
+            self.game_server
+                .create_table_with_options(
+                    table_id.clone(),
+                    table_name,
+                    current_level.small_blind,
+                    current_level.big_blind,
+                    variant,
+                    Box::new(format),
+                )
+                .await;
+
+            // Seat players at this table
+            let mut seat = 0;
+            while player_index < player_count && seat < players_per_table {
+                let registration = &registrations[player_index];
+                let username = self.get_username(&registration.user_id).await?;
+
+                // Add player to table
+                if let Err(e) = self.game_server.add_player_to_table(
+                    &table_id,
+                    registration.user_id.clone(),
+                    username,
+                    seat,
+                    tournament.starting_stack,
+                ).await {
+                    tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
+                }
+
+                // Update registration with table assignment
+                sqlx::query(
+                    "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?"
+                )
+                .bind(&table_id)
+                .bind(&tournament.id)
+                .bind(&registration.user_id)
+                .execute(&*self.pool)
+                .await?;
+
+                player_index += 1;
+                seat += 1;
+            }
+
+            // Link table to tournament
+            sqlx::query(
+                "INSERT INTO tournament_tables (tournament_id, table_id, table_number, is_active) VALUES (?, ?, ?, 1)"
+            )
+            .bind(&tournament.id)
+            .bind(&table_id)
+            .bind((table_num + 1) as i32)
+            .execute(&*self.pool)
+            .await?;
+
+            tracing::info!(
+                "Created MTT table {} (#{}) for tournament {} with {} players",
+                table_id,
+                table_num + 1,
+                tournament.id,
+                seat
+            );
+        }
+
+        tracing::info!(
+            "Created {} tables for MTT {} with {} total players",
+            table_count,
+            tournament.id,
+            player_count
+        );
+
         Ok(())
     }
 

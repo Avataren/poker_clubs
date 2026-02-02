@@ -148,6 +148,33 @@ impl GameServer {
         tables.get(table_id).map(|t| t.get_public_state(user_id))
     }
 
+    /// Add a player to a table at a specific seat (for tournaments)
+    pub async fn add_player_to_table(
+        &self,
+        table_id: &str,
+        user_id: String,
+        username: String,
+        seat: usize,
+        stack: i64,
+    ) -> Result<(), crate::game::error::GameError> {
+        let mut tables = self.tables.write().await;
+        let table = tables.get_mut(table_id)
+            .ok_or(crate::game::error::GameError::InvalidTableId)?;
+        
+        table.take_seat(user_id, username, seat, stack)?;
+        
+        Ok(())
+    }
+
+    /// Update blinds on a table (for tournaments)
+    pub async fn update_table_blinds(&self, table_id: &str, small_blind: i64, big_blind: i64) {
+        let mut tables = self.tables.write().await;
+        if let Some(table) = tables.get_mut(table_id) {
+            table.update_blinds(small_blind, big_blind);
+            tracing::info!("Updated blinds on table {} to {}/{}", table_id, small_blind, big_blind);
+        }
+    }
+
     async fn get_or_create_broadcast(&self, table_id: &str) -> broadcast::Receiver<TableBroadcast> {
         let mut broadcasts = self.table_broadcasts.write().await;
         let tx = broadcasts.entry(table_id.to_string())

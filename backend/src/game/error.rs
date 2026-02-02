@@ -17,6 +17,7 @@ pub enum GameError {
     // Table errors
     TableFull,
     TableNotFound,
+    InvalidTableId,
     InvalidSeat { seat: usize, max_seats: usize },
     SeatOccupied { seat: usize },
     
@@ -48,6 +49,7 @@ impl fmt::Display for GameError {
             // Table errors
             GameError::TableFull => write!(f, "Table is full"),
             GameError::TableNotFound => write!(f, "Table not found"),
+            GameError::InvalidTableId => write!(f, "Invalid table ID"),
             GameError::InvalidSeat { seat, max_seats } => {
                 write!(f, "Invalid seat number {}. Max seats: {}", seat, max_seats)
             }
