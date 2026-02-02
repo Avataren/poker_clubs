@@ -277,6 +277,9 @@ impl TournamentManager {
     /// Start a tournament
     pub async fn start_tournament(&self, tournament_id: &str) -> Result<()> {
         let mut tournament = self.load_tournament(tournament_id).await?;
+        if tournament.status == "running" {
+            return Ok(());
+        }
         self.start_tournament_with_state(tournament_id, &mut tournament)
             .await?;
 
@@ -570,7 +573,8 @@ impl TournamentManager {
 
         if (tournament.status == "registering" || tournament.status == "seating") && now >= scheduled_start {
             if tournament.registered_players >= 2 {
-                self.start_tournament_with_state(&tournament.id, tournament)
+                let tournament_id = tournament.id.clone();
+                self.start_tournament_with_state(&tournament_id, tournament)
                     .await?;
             }
         }
