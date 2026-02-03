@@ -141,6 +141,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
             icon: const Icon(Icons.logout),
             onPressed: () {
               context.read<ApiService>().logout();
+              context.read<WebSocketService>().disconnect();
               Navigator.of(context).pushReplacementNamed('/login');
             },
             tooltip: 'Logout',

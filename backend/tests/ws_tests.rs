@@ -12,6 +12,51 @@ use serde_json::json;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::time::{sleep, Duration};
+
+async fn register_and_get_token(
+    client: &reqwest::Client,
+    base_url: &str,
+    username: &str,
+    email: &str,
+) -> String {
+    let mut attempts = 0;
+    let mut last_error = None;
+    loop {
+        attempts += 1;
+        let response = client
+            .post(format!("{}/api/auth/register", base_url))
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "password123"
+            }))
+            .send()
+            .await;
+
+        if let Ok(response) = response {
+            if response.status().is_success() {
+                let body: serde_json::Value = response.json().await.unwrap();
+                return body["token"].as_str().unwrap().to_string();
+            }
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            last_error = Some(format!("status: {}, body: {}", status, body_text));
+        } else if let Err(err) = response {
+            last_error = Some(format!("error: {}", err));
+        }
+
+        if attempts >= 20 {
+            panic!(
+                "Failed to register user after {} attempts ({})",
+                attempts,
+                last_error.unwrap_or_else(|| "unknown error".to_string())
+            );
+        }
+
+        sleep(Duration::from_millis(100)).await;
+    }
+}
 
 /// Test helper to spin up a server and return its address
 async fn spawn_server() -> (SocketAddr, String) {
@@ -35,22 +80,13 @@ async fn spawn_server() -> (SocketAddr, String) {
     });
 
     // Create a user and get token for WebSocket auth
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("failed to build reqwest client");
     let base_url = format!("http://{}", addr);
 
-    let response = client
-        .post(format!("{}/api/auth/register", base_url))
-        .json(&json!({
-            "username": "testuser",
-            "email": "test@example.com",
-            "password": "password123"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let body: serde_json::Value = response.json().await.unwrap();
-    let token = body["token"].as_str().unwrap().to_string();
+    let token = register_and_get_token(&client, &base_url, "testuser", "test@example.com").await;
 
     (addr, token)
 }
@@ -76,45 +112,29 @@ async fn spawn_server_with_two_users() -> (SocketAddr, String, String) {
         axum::serve(listener, app).await.unwrap();
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("failed to build reqwest client");
     let base_url = format!("http://{}", addr);
 
     // Register first user
-    let response = client
-        .post(format!("{}/api/auth/register", base_url))
-        .json(&json!({
-            "username": "player1",
-            "email": "player1@example.com",
-            "password": "password123"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let body: serde_json::Value = response.json().await.unwrap();
-    let token1 = body["token"].as_str().unwrap().to_string();
+    let token1 =
+        register_and_get_token(&client, &base_url, "player1", "player1@example.com").await;
 
     // Register second user
-    let response = client
-        .post(format!("{}/api/auth/register", base_url))
-        .json(&json!({
-            "username": "player2",
-            "email": "player2@example.com",
-            "password": "password123"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let body: serde_json::Value = response.json().await.unwrap();
-    let token2 = body["token"].as_str().unwrap().to_string();
+    let token2 =
+        register_and_get_token(&client, &base_url, "player2", "player2@example.com").await;
 
     (addr, token1, token2)
 }
 
 /// Helper to create a club and table via HTTP API
 async fn create_club_and_table(addr: SocketAddr, token: &str) -> (String, String) {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("failed to build reqwest client");
     let base_url = format!("http://{}", addr);
 
     // Create a club

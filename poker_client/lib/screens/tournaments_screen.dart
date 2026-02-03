@@ -130,6 +130,13 @@ class _TournamentsScreenState extends State<TournamentsScreen> {
   }
 
   @override
+  void dispose() {
+    widget.websocketService.onTournamentStarted = null;
+    widget.websocketService.onTournamentFinished = null;
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(

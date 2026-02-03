@@ -225,14 +225,6 @@ async fn test_sng_unregister() {
         .await
         .assert_status_ok();
 
-    let user_response = server
-        .get("/api/auth/me")
-        .add_header(AUTHORIZATION, format!("Bearer {}", token))
-        .await;
-    user_response.assert_status_ok();
-    let user_body: Value = user_response.json();
-    let user_id = user_body["tournament"]["id"].as_str().unwrap();
-
     add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
 
     server
@@ -302,14 +294,6 @@ async fn test_sng_auto_start() {
             .add_header(AUTHORIZATION, format!("Bearer {}", token))
             .await
             .assert_status_ok();
-
-        let user_response = server
-            .get("/api/auth/me")
-            .add_header(AUTHORIZATION, format!("Bearer {}", token))
-            .await;
-        user_response.assert_status_ok();
-        let user_body: Value = user_response.json();
-        let user_id = user_body["tournament"]["id"].as_str().unwrap();
 
         add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
 
@@ -404,14 +388,6 @@ async fn test_mtt_manual_start() {
             .add_header(AUTHORIZATION, format!("Bearer {}", token))
             .await
             .assert_status_ok();
-
-        let user_response = server
-            .get("/api/auth/me")
-            .add_header(AUTHORIZATION, format!("Bearer {}", token))
-            .await;
-        user_response.assert_status_ok();
-        let user_body: Value = user_response.json();
-        let user_id = user_body["tournament"]["id"].as_str().unwrap();
 
         add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
 
@@ -528,14 +504,6 @@ async fn test_blind_level_advancement() {
             .await
             .assert_status_ok();
 
-        let user_response = server
-            .get("/api/auth/me")
-            .add_header(AUTHORIZATION, format!("Bearer {}", token))
-            .await;
-        user_response.assert_status_ok();
-        let user_body: Value = user_response.json();
-        let user_id = user_body["tournament"]["id"].as_str().unwrap();
-
         add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
 
         server
@@ -605,14 +573,6 @@ async fn test_prize_structure() {
             .await
             .assert_status_ok();
 
-        let user_response = server
-            .get("/api/auth/me")
-            .add_header(AUTHORIZATION, format!("Bearer {}", token))
-            .await;
-        user_response.assert_status_ok();
-        let user_body: Value = user_response.json();
-        let user_id = user_body["tournament"]["id"].as_str().unwrap();
-
         add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
 
         server
@@ -647,7 +607,7 @@ async fn test_insufficient_balance() {
             "club_id": club_id,
             "name": "Test SNG",
             "variant_id": "holdem",
-            "buy_in": 100,
+            "buy_in": 20000,
             "starting_stack": 1500,
             "max_players": 6,
             "level_duration_mins": 5
@@ -659,7 +619,8 @@ async fn test_insufficient_balance() {
     let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
 
     // Register player without sufficient balance
-    let (token, user_id) = register_user(&server, "poorplayer", "poor@example.com", "password123").await;
+    let (token, _user_id) =
+        register_user(&server, "poorplayer", "poor@example.com", "password123").await;
 
     server
         .post("/api/clubs/join")

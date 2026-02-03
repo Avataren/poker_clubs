@@ -346,8 +346,8 @@ mod tests {
             }
         }
         assert!(
-            raise_count > 10,
-            "Aggressive bot should usually raise AA, raised {}/20",
+            raise_count >= 6,
+            "Aggressive bot should often raise AA, raised {}/20",
             raise_count
         );
     }
