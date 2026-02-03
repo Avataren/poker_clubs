@@ -188,8 +188,9 @@ impl SimpleStrategy {
                 0.1
             };
             let multiplier = 2.5 + strength * 1.5 + self.aggression * 0.5 + opponent_modifier;
-            let raise = (bb as f64 * multiplier) as i64;
-            return raise.max(min_raise).min(stack_after_call);
+            let target_total = (bb as f64 * multiplier) as i64;
+            let raise = (target_total - view.current_bet).max(min_raise);
+            return raise.min(stack_after_call);
         }
 
         // Postflop: use pot-based sizing like real players
