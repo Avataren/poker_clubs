@@ -85,6 +85,25 @@ impl BotManager {
         (user_id, username)
     }
 
+    /// Register an existing user as a bot (for tournament bots created in DB)
+    pub fn register_existing_bot(
+        &mut self,
+        table_id: &str,
+        user_id: String,
+        username: String,
+        strategy_name: Option<&str>,
+    ) {
+        let strategy: Box<dyn BotStrategy> = match strategy_name {
+            Some("tight") => Box::new(SimpleStrategy::tight()),
+            Some("aggressive") => Box::new(SimpleStrategy::aggressive()),
+            Some("calling_station") => Box::new(strategy::CallingStation),
+            _ => Box::new(SimpleStrategy::balanced()),
+        };
+
+        let bot = BotPlayer::new(user_id, username, strategy);
+        self.bots.entry(table_id.to_string()).or_default().push(bot);
+    }
+
     /// Remove a bot from a table.
     pub fn remove_bot(&mut self, table_id: &str, user_id: &str) -> bool {
         if let Some(bots) = self.bots.get_mut(table_id) {

@@ -223,6 +223,13 @@ pub trait GameFormat: Send + Sync + std::fmt::Debug {
         1
     }
 
+    /// Should the game auto-start when min players reached?
+    /// For cash games: yes (start with 2+ players)
+    /// For tournaments: no (wait for explicit start or all players seated)
+    fn should_auto_start(&self) -> bool {
+        true // Default for cash games
+    }
+
     /// Clone into a boxed trait object
     fn clone_box(&self) -> Box<dyn GameFormat>;
 }
@@ -282,6 +289,10 @@ impl GameFormat for CashGame {
 
     fn eliminates_players(&self) -> bool {
         false // Players can rebuy in cash games
+    }
+
+    fn should_auto_start(&self) -> bool {
+        true // Cash games start as soon as 2+ players are seated
     }
 
     fn clone_box(&self) -> Box<dyn GameFormat> {
@@ -386,6 +397,10 @@ impl GameFormat for SitAndGo {
         true
     }
 
+    fn should_auto_start(&self) -> bool {
+        false // SNGs do NOT auto-start - must be explicitly started
+    }
+
     fn clone_box(&self) -> Box<dyn GameFormat> {
         Box::new(self.clone())
     }
@@ -462,6 +477,10 @@ impl GameFormat for MultiTableTournament {
 
     fn eliminates_players(&self) -> bool {
         true
+    }
+
+    fn should_auto_start(&self) -> bool {
+        false // MTTs do NOT auto-start - must be explicitly started
     }
 
     fn clone_box(&self) -> Box<dyn GameFormat> {

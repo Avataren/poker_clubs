@@ -208,6 +208,13 @@ impl PokerTable {
         self.format.can_top_up()
     }
 
+    /// Force start a new hand (used for tournaments after all players are seated)
+    pub fn force_start_hand(&mut self) {
+        if self.phase == GamePhase::Waiting {
+            self.start_new_hand();
+        }
+    }
+
     pub fn add_player(
         &mut self,
         user_id: String,
@@ -242,8 +249,12 @@ impl PokerTable {
 
         self.players.push(player);
 
-        // Start game if we have enough players
-        if self.players.len() >= MIN_PLAYERS_TO_START && self.phase == GamePhase::Waiting {
+        // Start game if we have enough players AND the format allows auto-start
+        // Cash games: auto-start with 2+ players
+        // Tournaments (SNG/MTT): do NOT auto-start, wait for explicit start
+        if self.players.len() >= MIN_PLAYERS_TO_START 
+            && self.phase == GamePhase::Waiting 
+            && self.format.should_auto_start() {
             self.start_new_hand();
         }
 
@@ -300,8 +311,12 @@ impl PokerTable {
 
         self.players.push(player);
 
-        // Start game if we have enough active players
-        if self.active_players_count() >= MIN_PLAYERS_TO_START && self.phase == GamePhase::Waiting {
+        // Start game if we have enough active players AND the format allows auto-start
+        // Cash games: auto-start with 2+ players
+        // Tournaments (SNG/MTT): do NOT auto-start, wait for explicit start
+        if self.active_players_count() >= MIN_PLAYERS_TO_START 
+            && self.phase == GamePhase::Waiting 
+            && self.format.should_auto_start() {
             self.start_new_hand();
         }
 
@@ -416,46 +431,92 @@ impl PokerTable {
         self.min_raise = self.big_blind;
 
         // Move dealer button to next eligible player (skip sitting out/broke players)
-        self.dealer_seat = self.next_eligible_player_for_button(self.dealer_seat);
+        // For the first hand from Waiting phase, find the first eligible player (not the next one)
+        if self.phase == GamePhase::Waiting {
+            self.dealer_seat = self.first_eligible_player_for_button();
+        } else {
+            self.dealer_seat = self.next_eligible_player_for_button(self.dealer_seat);
+        }
 
-        // Post blinds
+        // Post blinds (also sets current_player)
         self.post_blinds();
 
         // Deal hole cards
         self.deal_hole_cards();
 
-        // Set phase and current player
+        // Set phase - current_player was already set by post_blinds
         self.phase = GamePhase::PreFlop;
-        self.current_player = self.next_active_player(self.dealer_seat);
     }
 
     fn post_blinds(&mut self) {
-        // Small blind is the next eligible player after dealer
-        let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
-        let sb_amount = self.players[sb_seat].place_bet(self.small_blind);
-        self.pot.add_bet(sb_seat, sb_amount);
-        // Posting blind does NOT count as acting - player can still raise
+        let num_players = self.players.len();
+        
+        if num_players == 2 {
+            // Heads-up special case: dealer posts SB, other player posts BB
+            // Dealer is at self.dealer_seat
+            let dealer_idx = self.dealer_seat;
+            let other_idx = (dealer_idx + 1) % 2;
+            
+            // Dealer posts SB
+            let sb_amount = self.players[dealer_idx].place_bet(self.small_blind);
+            self.pot.add_bet(dealer_idx, sb_amount);
+            
+            // Other player posts BB
+            let bb_amount = self.players[other_idx].place_bet(self.big_blind);
+            self.pot.add_bet(other_idx, bb_amount);
+            
+            self.current_bet = self.big_blind;
+            
+            // In heads-up, dealer acts first pre-flop (after posting SB)
+            self.current_player = dealer_idx;
+            
+            tracing::info!(
+                "Heads-up blinds posted: Dealer (SB) at idx {} (seat {}, {}) posted ${}, BB at idx {} (seat {}, {}) posted ${}",
+                dealer_idx,
+                self.players[dealer_idx].seat,
+                self.players[dealer_idx].username,
+                sb_amount,
+                other_idx,
+                self.players[other_idx].seat,
+                self.players[other_idx].username,
+                bb_amount
+            );
+        } else {
+            // 3+ players: normal blind posting
+            // Small blind is the next eligible player after dealer
+            let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
+            tracing::info!("post_blinds: dealer_seat={}, sb_seat={}", self.dealer_seat, sb_seat);
+            let sb_amount = self.players[sb_seat].place_bet(self.small_blind);
+            self.pot.add_bet(sb_seat, sb_amount);
+            // Posting blind does NOT count as acting - player can still raise
 
-        // Big blind is the next eligible player after small blind
-        let bb_seat = self.next_eligible_player_for_button(sb_seat);
-        let bb_amount = self.players[bb_seat].place_bet(self.big_blind);
-        self.pot.add_bet(bb_seat, bb_amount);
-        // Posting blind does NOT count as acting - BB has option to raise
+            // Big blind is the next eligible player after small blind
+            let bb_seat = self.next_eligible_player_for_button(sb_seat);
+            tracing::info!("post_blinds: bb_seat={}", bb_seat);
+            let bb_amount = self.players[bb_seat].place_bet(self.big_blind);
+            self.pot.add_bet(bb_seat, bb_amount);
+            // Posting blind does NOT count as acting - BB has option to raise
 
-        self.current_bet = self.big_blind;
+            self.current_bet = self.big_blind;
 
-        // First to act is after big blind
-        self.current_player = self.next_active_player(bb_seat);
+            // First to act is after big blind
+            self.current_player = self.next_active_player(bb_seat);
 
-        tracing::info!(
-            "Blinds posted: SB=${} at seat {}, BB=${} at seat {}. SB state={:?}, BB state={:?}",
-            sb_amount,
-            sb_seat,
-            bb_amount,
-            bb_seat,
-            self.players[sb_seat].state,
-            self.players[bb_seat].state
-        );
+            tracing::info!(
+                "Blinds posted: Dealer at idx {} (seat {}, {}), SB=${} at idx {} (seat {}, {}), BB=${} at idx {} (seat {}, {})",
+                self.dealer_seat,
+                self.players[self.dealer_seat].seat,
+                self.players[self.dealer_seat].username,
+                sb_amount,
+                sb_seat,
+                self.players[sb_seat].seat,
+                self.players[sb_seat].username,
+                bb_amount,
+                bb_seat,
+                self.players[bb_seat].seat,
+                self.players[bb_seat].username
+            );
+        }
     }
 
     fn deal_hole_cards(&mut self) {
@@ -904,6 +965,25 @@ impl PokerTable {
         after // Fallback
     }
 
+    /// Find the first player eligible for dealer/blind positions starting from seat 0
+    /// (must have chips and not be sitting out voluntarily)
+    fn first_eligible_player_for_button(&self) -> usize {
+        for (idx, player) in self.players.iter().enumerate() {
+            // Player is eligible if they have chips and aren't voluntarily sitting out
+            if player.stack > 0 && player.state != PlayerState::SittingOut {
+                tracing::info!(
+                    "first_eligible_player_for_button: returning idx={} (seat {}, {})",
+                    idx,
+                    player.seat,
+                    player.username
+                );
+                return idx;
+            }
+        }
+        tracing::warn!("first_eligible_player_for_button: No eligible players found! Returning 0");
+        0 // Fallback
+    }
+
     /// Find the next player eligible for dealer/blind positions
     /// (must have chips and not be sitting out voluntarily)
     fn next_eligible_player_for_button(&self, after: usize) -> usize {
@@ -921,8 +1001,9 @@ impl PokerTable {
             // Player is eligible if they have chips and aren't voluntarily sitting out
             if player.stack > 0 && player.state != PlayerState::SittingOut {
                 tracing::info!(
-                    "next_eligible_player_for_button: returning idx={} ({})",
+                    "next_eligible_player_for_button: returning idx={} (seat {}, {})",
                     idx,
+                    player.seat,
                     player.username
                 );
                 return idx;
@@ -1335,4 +1416,306 @@ mod tests {
         assert!(!table.can_cash_out());
         assert!(!table.can_top_up());
     }
+
+    #[test]
+    fn test_first_hand_dealer_position() {
+        // Test that the first hand assigns dealer to the first eligible player
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+        
+        // Add 3 players
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
+        
+        // Table should have started the hand automatically
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        
+        // Dealer should be at position 0 (first eligible player)
+        assert_eq!(table.dealer_seat, 0);
+        assert_eq!(table.players[0].username, "Player 1");
+    }
+
+    #[test]
+    fn test_blinds_posted_correctly() {
+        // Test that SB and BB are posted by the correct players in a 3-player game
+        use crate::game::format::SitAndGo;
+        
+        // Create table with SNG format to prevent auto-start
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+        
+        // Add 3 players at seats 0, 1, 2
+        println!("Adding players...");
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
+        println!("After adding p1, phase={:?}, players.len()={}", table.phase, table.players.len());
+        
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        println!("After adding p2, phase={:?}, players.len()={}", table.phase, table.players.len());
+        
+        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
+        println!("After adding p3, phase={:?}, players.len()={}", table.phase, table.players.len());
+        
+        // Game should NOT have auto-started (SNG format)
+        assert_eq!(table.phase, GamePhase::Waiting);
+        
+        // Force start the hand
+        table.force_start_hand();
+        
+        // Verify game started
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        
+        // Debug: print all players and their bets
+        println!("Dealer at array index: {}", table.dealer_seat);
+        for (idx, player) in table.players.iter().enumerate() {
+            println!("Player[{}]: name={}, seat={}, bet={}, stack={}", 
+                idx, player.username, player.seat, player.current_bet, player.stack);
+        }
+        
+        // Dealer at array position 0, so:
+        // - SB should be at array position 1 (Player 2)
+        // - BB should be at array position 2 (Player 3)
+        assert_eq!(table.dealer_seat, 0);
+        assert_eq!(table.players[1].current_bet, 50, "Player at index 1 should have posted SB");
+        assert_eq!(table.players[2].current_bet, 100, "Player at index 2 should have posted BB");
+        assert_eq!(table.players[0].current_bet, 0, "Dealer at index 0 should not have posted");
+        
+        // Verify stacks are reduced correctly
+        assert_eq!(table.players[0].stack, 1000, "Dealer stack should be unchanged");
+        assert_eq!(table.players[1].stack, 950, "SB stack should be reduced by 50");
+        assert_eq!(table.players[2].stack, 900, "BB stack should be reduced by 100");
+    }
+
+    #[test]
+    fn test_first_to_act_after_blinds() {
+        // Test that the first player to act is the one after BB
+        use crate::game::format::SitAndGo;
+        
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+        
+        // Add 4 players
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
+        table.take_seat("p4".to_string(), "Player 4".to_string(), 3, 1000).unwrap();
+        
+        // Force start
+        table.force_start_hand();
+        
+        // Dealer at position 0, SB at 1, BB at 2
+        // First to act should be position 3 (after BB)
+        assert_eq!(table.dealer_seat, 0);
+        assert_eq!(table.current_player, 3, "First to act should be position 3");
+        assert_eq!(table.players[table.current_player].username, "Player 4");
+    }
+
+    #[test]
+    fn test_heads_up_blind_positions_simple() {
+        // Test heads-up setup in isolation
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+        
+        // Add exactly 2 players
+        println!("Adding first player...");
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
+        println!("Phase after p1: {:?}, players.len()={}", table.phase, table.players.len());
+        
+        println!("Adding second player...");
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        println!("Phase after p2: {:?}, players.len()={}", table.phase, table.players.len());
+        
+        // Game should have started
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        assert_eq!(table.players.len(), 2);
+        
+        println!("Dealer at index: {}", table.dealer_seat);
+        for (idx, p) in table.players.iter().enumerate() {
+            println!("Player[{}]: seat={}, name={}, bet={}, stack={}", 
+                idx, p.seat, p.username, p.current_bet, p.stack);
+        }
+        
+        // In heads-up: dealer posts SB, other player posts BB
+        // dealer_seat should be 0
+        assert_eq!(table.dealer_seat, 0, "Dealer should be at index 0");
+        
+        // Dealer (index 0) should post SB (50)
+        // Non-dealer (index 1) should post BB (100)
+        assert_eq!(table.players[0].current_bet, 50, "Dealer should post SB in heads-up");
+        assert_eq!(table.players[1].current_bet, 100, "Non-dealer should post BB in heads-up");
+    }
+
+    #[test]
+    fn test_heads_up_blind_positions() {
+        // In heads-up (2 players), dealer posts SB and acts first pre-flop
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+        
+        // Add 2 players
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        
+        // Dealer at position 0
+        assert_eq!(table.dealer_seat, 0);
+        
+        // In heads-up: dealer (pos 0) posts SB, other player (pos 1) posts BB
+        assert_eq!(table.players[0].current_bet, 50, "Dealer should post SB in heads-up");
+        assert_eq!(table.players[1].current_bet, 100, "Non-dealer should post BB in heads-up");
+        
+        // In heads-up, dealer acts first pre-flop (after posting SB)
+        assert_eq!(table.current_player, 0, "Dealer should act first in heads-up");
+    }
+
+    #[test]
+    fn test_nine_player_sng_blinds() {
+        // Test a 9-player SNG starting positions
+        use crate::game::format::SitAndGo;
+        
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+        
+        // Add 9 players
+        for i in 0..9 {
+            table.take_seat(
+                format!("p{}", i),
+                format!("Player {}", i + 1),
+                i,
+                1000
+            ).unwrap();
+        }
+        
+        // Force start
+        table.force_start_hand();
+        
+        // Dealer should be at position 0
+        assert_eq!(table.dealer_seat, 0);
+        
+        // SB at position 1, BB at position 2
+        assert_eq!(table.players[1].current_bet, 50, "Position 1 should post SB");
+        assert_eq!(table.players[2].current_bet, 100, "Position 2 should post BB");
+        
+        // Verify only SB and BB have posted
+        assert_eq!(table.players[0].current_bet, 0);
+        for i in 3..9 {
+            assert_eq!(table.players[i].current_bet, 0, "Position {} should not have posted", i);
+        }
+        
+        // First to act should be position 3
+        assert_eq!(table.current_player, 3);
+        
+        // All players should have cards
+        for i in 0..9 {
+            assert_eq!(table.players[i].hole_cards.len(), 2, "Player {} should have 2 cards", i);
+        }
+    }
+
+    #[test]
+    fn test_dealer_advances_between_hands() {
+        // Test that dealer button moves correctly between hands
+        use crate::game::format::SitAndGo;
+        
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+        
+        // Add 3 players
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
+        
+        // Force start first hand
+        table.force_start_hand();
+        
+        // First hand - dealer at position 0
+        assert_eq!(table.dealer_seat, 0);
+        assert_eq!(table.players[1].current_bet, 50, "First hand: Position 1 should post SB");
+        assert_eq!(table.players[2].current_bet, 100, "First hand: Position 2 should post BB");
+        
+        // Fast-forward to showdown and start new hand
+        table.phase = GamePhase::Showdown;
+        table.start_new_hand();
+        
+        // Second hand - dealer should move to position 1
+        assert_eq!(table.dealer_seat, 1);
+        assert_eq!(table.players[2].current_bet, 50, "Second hand: Position 2 should now post SB");
+        assert_eq!(table.players[0].current_bet, 100, "Second hand: Position 0 should now post BB");
+    }
+
+    #[test]
+    fn test_all_players_receive_hole_cards() {
+        // Test that all players receive the correct number of hole cards
+        use crate::game::format::SitAndGo;
+        
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+        
+        // Add 5 players
+        for i in 0..5 {
+            table.take_seat(
+                format!("p{}", i),
+                format!("Player {}", i + 1),
+                i,
+                1000
+            ).unwrap();
+        }
+        
+        // Force start
+        table.force_start_hand();
+        
+        // All 5 players should have 2 hole cards each
+        for i in 0..5 {
+            assert_eq!(
+                table.players[i].hole_cards.len(),
+                2,
+                "Player {} should have 2 hole cards",
+                i + 1
+            );
+        }
+        
+        // Verify no duplicate cards between players
+        let mut all_cards = Vec::new();
+        for player in &table.players {
+            for card in &player.hole_cards {
+                assert!(!all_cards.contains(card), "Duplicate card dealt: {:?}", card);
+                all_cards.push(card.clone());
+            }
+        }
+    }
 }
+

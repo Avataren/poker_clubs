@@ -1043,19 +1043,36 @@ impl TournamentManager {
         for (seat, registration) in registrations.iter().enumerate() {
             let username = self.get_username(&registration.user_id).await?;
 
+            // Check if this user is a bot
+            let is_bot: bool = sqlx::query_scalar(
+                "SELECT is_bot FROM users WHERE id = ?"
+            )
+            .bind(&registration.user_id)
+            .fetch_one(&*self.pool)
+            .await
+            .unwrap_or(false);
+
             // Add player to table via game server
             if let Err(e) = self
                 .game_server
                 .add_player_to_table(
                     &table_id,
                     registration.user_id.clone(),
-                    username,
+                    username.clone(),
                     seat,
                     tournament.starting_stack,
                 )
                 .await
             {
                 tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
+            }
+
+            // Register bots with the bot manager
+            if is_bot {
+                tracing::info!("Registering bot {} for tournament table {}", username, table_id);
+                self.game_server
+                    .register_bot(&table_id, registration.user_id.clone(), username, None)
+                    .await;
             }
 
             // Update registration with table assignment
@@ -1084,6 +1101,9 @@ impl TournamentManager {
             .set_table_tournament(&table_id, tournament.id.clone())
             .await;
 
+        // Force start the hand now that all players are seated
+        self.game_server.force_start_table_hand(&table_id).await;
+
         // Broadcast tournament started event
         use crate::ws::messages::ServerMessage;
         self.game_server
@@ -1098,7 +1118,7 @@ impl TournamentManager {
             .await;
 
         tracing::info!(
-            "Created SNG table {} for tournament {} with {} players",
+            "Created SNG table {} for tournament {} with {} players and started first hand",
             table_id,
             tournament.id,
             registrations.len()
@@ -1172,19 +1192,36 @@ impl TournamentManager {
                 let registration = &registrations[player_index];
                 let username = self.get_username(&registration.user_id).await?;
 
+                // Check if this user is a bot
+                let is_bot: bool = sqlx::query_scalar(
+                    "SELECT is_bot FROM users WHERE id = ?"
+                )
+                .bind(&registration.user_id)
+                .fetch_one(&*self.pool)
+                .await
+                .unwrap_or(false);
+
                 // Add player to table
                 if let Err(e) = self
                     .game_server
                     .add_player_to_table(
                         &table_id,
                         registration.user_id.clone(),
-                        username,
+                        username.clone(),
                         seat,
                         tournament.starting_stack,
                     )
                     .await
                 {
                     tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
+                }
+
+                // Register bots with the bot manager
+                if is_bot {
+                    tracing::info!("Registering bot {} for MTT table {}", username, table_id);
+                    self.game_server
+                        .register_bot(&table_id, registration.user_id.clone(), username, None)
+                        .await;
                 }
 
                 // Update registration with table assignment
@@ -1216,8 +1253,11 @@ impl TournamentManager {
                 .set_table_tournament(&table_id, tournament.id.clone())
                 .await;
 
+            // Force start the hand now that all players are seated at this table
+            self.game_server.force_start_table_hand(&table_id).await;
+
             tracing::info!(
-                "Created MTT table {} (#{}) for tournament {} with {} players",
+                "Created MTT table {} (#{}) for tournament {} with {} players and started first hand",
                 table_id,
                 table_num + 1,
                 tournament.id,

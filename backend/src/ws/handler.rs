@@ -209,6 +209,17 @@ impl GameServer {
         }
     }
 
+    /// Force start a hand on a table (for tournaments after all players are seated)
+    pub async fn force_start_table_hand(&self, table_id: &str) {
+        let mut tables = self.tables.write().await;
+        if let Some(table) = tables.get_mut(table_id) {
+            table.force_start_hand();
+            tracing::info!("Force-started first hand on table {}", table_id);
+        }
+        drop(tables);
+        self.notify_table_update(table_id).await;
+    }
+
     /// Check a table for eliminations and return (tournament_id, eliminated_users)
     pub async fn check_table_eliminations(&self, table_id: &str) -> Option<(String, Vec<String>)> {
         let mut tables = self.tables.write().await;
@@ -417,6 +428,27 @@ impl GameServer {
         );
 
         Ok((bot_user_id, bot_username))
+    }
+
+    /// Register an existing user as a bot with the bot manager (for tournament bots)
+    pub async fn register_bot(
+        &self,
+        table_id: &str,
+        user_id: String,
+        username: String,
+        strategy: Option<&str>,
+    ) {
+        let mut bot_mgr = self.bot_manager.write().await;
+        
+        // Register this user as a bot for this table
+        bot_mgr.register_existing_bot(table_id, user_id.clone(), username.clone(), strategy);
+        
+        tracing::info!(
+            "Registered existing user {} ({}) as bot on table {}",
+            username,
+            user_id,
+            table_id
+        );
     }
 
     /// Remove a bot from a table.
