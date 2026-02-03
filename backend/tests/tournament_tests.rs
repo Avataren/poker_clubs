@@ -2122,3 +2122,110 @@ async fn test_sitting_out_player_pays_blinds_and_loses_chips() {
     // Verify state is still SittingOut (not changed to Active or Eliminated)
     assert_eq!(table.players[1].state, PlayerState::SittingOut);
 }
+
+#[tokio::test]
+async fn test_prize_pool_integrity() {
+    use poker_server::tournament::prizes::PrizeStructure;
+
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Test various tournament sizes with odd buy-ins to stress test rounding
+    let test_cases = vec![
+        (2, 101),  // Heads-up with odd buy-in
+        (3, 333),  // 3-player
+        (6, 777),  // 6-max
+        (9, 1001), // 9-player with buy-in that doesn't divide evenly
+        (9, 997),  // 9-player with prime number buy-in
+    ];
+
+    for (max_players, buy_in) in test_cases {
+        let tournament_name = format!("Prize Test {} players", max_players);
+        let test_id = format!("{}_{}", max_players, buy_in);
+        
+        // Create SNG
+        let response = server
+            .post("/api/tournaments/sng")
+            .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+            .json(&json!({
+                "club_id": club_id,
+                "name": tournament_name,
+                "variant_id": "holdem",
+                "buy_in": buy_in,
+                "starting_stack": 1500,
+                "max_players": max_players,
+                "level_duration_mins": 5
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: Value = response.json();
+        let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+        // Register players
+        for i in 1..=max_players {
+            let username = format!("ppool_{}_{}", test_id, i);
+            let (token, user_id) = register_user(
+                &server,
+                &username,
+                &format!("{}@example.com", username),
+                "password123",
+            )
+            .await;
+
+            server
+                .post("/api/clubs/join")
+                .json(&json!({"club_id": club_id.clone()}))
+                .add_header(AUTHORIZATION, format!("Bearer {}", token))
+                .await
+                .assert_status_ok();
+
+            add_balance(&server, &owner_token, &club_id, &user_id, buy_in).await;
+
+            server
+                .post(&format!("/api/tournaments/{}/register", tournament_id))
+                .add_header(AUTHORIZATION, format!("Bearer {}", token))
+                .await
+                .assert_status_ok();
+        }
+
+        // Verify prize pool
+        let details = server
+            .get(&format!("/api/tournaments/{}", tournament_id))
+            .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+            .await;
+
+        details.assert_status_ok();
+        let tournament: Value = details.json();
+        let prize_pool = tournament["tournament"]["prize_pool"].as_i64().unwrap();
+        let expected_pool = (max_players as i64) * buy_in;
+        
+        assert_eq!(
+            prize_pool, expected_pool,
+            "Prize pool should equal buy-in * players for {} players with {} buy-in",
+            max_players, buy_in
+        );
+
+        // Verify that calculated prizes sum to the prize pool
+        let structure = PrizeStructure::for_player_count(max_players);
+        let prizes = structure.calculate_all_prizes(prize_pool);
+        let total_prizes: i64 = prizes.iter().sum();
+        
+        assert_eq!(
+            total_prizes, prize_pool,
+            "Sum of prizes ({}) should equal prize pool ({}) for {} players",
+            total_prizes, prize_pool, max_players
+        );
+
+        // Verify each position's prize
+        for (idx, &prize_amount) in prizes.iter().enumerate() {
+            let position = (idx + 1) as i32;
+            let calculated = structure.prize_for_position(position, prize_pool);
+            assert_eq!(
+                prize_amount, calculated,
+                "Prize for position {} should match calculated amount",
+                position
+            );
+        }
+    }
+}

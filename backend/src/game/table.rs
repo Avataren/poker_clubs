@@ -1409,17 +1409,30 @@ impl PokerTable {
 
         let mut eliminated = vec![];
         
-        // Find all players with 0 stack and mark them as eliminated
-        for player in &mut self.players {
+        // Find all players with 0 stack
+        let mut to_remove = vec![];
+        for (idx, player) in self.players.iter().enumerate() {
             if player.stack == 0 && player.state != PlayerState::Eliminated {
-                let user_id = player.user_id.clone();
-                let username = player.username.clone();
-                eliminated.push(user_id.clone());
-                // Mark as eliminated - they stay in array to preserve seat positions
-                // but will be filtered from display and cannot act
-                player.state = PlayerState::Eliminated;
-                player.hole_cards.clear(); // Clear their cards
-                tracing::info!("Player {} eliminated from tournament in seat {} (kept for seat preservation)", username, player.seat);
+                eliminated.push(player.user_id.clone());
+                to_remove.push(idx);
+                tracing::info!(
+                    "Player {} ({}) eliminated from tournament",
+                    player.username,
+                    player.user_id
+                );
+            }
+        }
+
+        // Remove eliminated players from the table (in reverse order to preserve indices)
+        for &idx in to_remove.iter().rev() {
+            self.players.remove(idx);
+        }
+
+        // Adjust current_player index if needed
+        if !to_remove.is_empty() && !self.players.is_empty() {
+            // Ensure current_player is still valid
+            if self.current_player >= self.players.len() {
+                self.current_player = 0;
             }
         }
 

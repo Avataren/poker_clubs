@@ -34,6 +34,10 @@ class TournamentStatusWidget extends StatelessWidget {
             _buildInfoRow('Type', tournament.tournamentType.toUpperCase()),
             _buildInfoRow('Buy-in', '\$${_formatChips(tournament.buyIn)}'),
             _buildInfoRow(
+              'Prize Pool',
+              '\$${_formatChips(tournament.prizePool)}',
+            ),
+            _buildInfoRow(
               'Players',
               '$registeredCount / ${tournament.maxPlayers}',
             ),
