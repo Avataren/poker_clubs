@@ -96,6 +96,19 @@ pub enum ServerMessage {
         tournament_name: String,
         reason: String,
     },
+    // Live tournament info broadcast (sent every second to tournament tables)
+    TournamentInfo {
+        tournament_id: String,
+        server_time: String, // RFC3339 timestamp from server
+        level: i64,
+        small_blind: i64,
+        big_blind: i64,
+        ante: i64,
+        level_start_time: String, // RFC3339
+        level_duration_secs: i64,
+        next_small_blind: Option<i64>,
+        next_big_blind: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

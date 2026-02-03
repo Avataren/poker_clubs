@@ -81,13 +81,14 @@ impl Player {
         self.last_action = None;
         self.pot_won = 0;
 
-        // Activate players who have chips and aren't voluntarily sitting out
-        if self.stack > 0 && self.state != PlayerState::SittingOut {
+        // Activate players who have chips and aren't voluntarily sitting out or eliminated
+        if self.stack > 0 && self.state != PlayerState::SittingOut && self.state != PlayerState::Eliminated {
             self.state = PlayerState::Active;
-        } else if self.stack == 0 {
-            self.state = PlayerState::SittingOut;
         }
-        // If SittingOut, stay SittingOut (voluntary sit-out)
+        // Players with 0 stack will be handled by check_eliminations in tournament mode
+        // or set to SittingOut in cash games
+        // If already Eliminated, stay Eliminated
+        // If SittingOut voluntarily, stay SittingOut
     }
 
     pub fn add_chips(&mut self, amount: i64) {

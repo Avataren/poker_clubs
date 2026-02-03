@@ -17,7 +17,7 @@ pub mod variant;
 // for future use and to document the public API
 
 // Table and game state
-pub use table::{GamePhase, PokerTable, PublicPlayerState, PublicTableState};
+pub use table::{GamePhase, PokerTable, PublicPlayerState, PublicTableState, TournamentInfo};
 
 // Player types
 pub use player::{Player, PlayerAction, PlayerState};

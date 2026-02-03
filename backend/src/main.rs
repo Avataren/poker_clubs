@@ -109,6 +109,18 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Spawn background task for broadcasting tournament info (every 1 second)
+    let tournament_mgr_info = tournament_manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            if let Err(e) = tournament_mgr_info.broadcast_tournament_info().await {
+                tracing::error!("Error broadcasting tournament info: {:?}", e);
+            }
+        }
+    });
+
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.server_addr()).await?;
     tracing::info!("Server listening on {}", config.server_addr());

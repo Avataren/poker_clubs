@@ -1027,7 +1027,26 @@ impl TournamentManager {
             tournament.level_duration_secs as u64,
         );
 
-        // Create the table
+        // Insert table into database first
+        sqlx::query(
+            "INSERT INTO tables (id, club_id, name, small_blind, big_blind, min_buyin, max_buyin, max_players, variant_id, format_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&table_id)
+        .bind(&tournament.club_id)
+        .bind(&table_name)
+        .bind(current_level.small_blind)
+        .bind(current_level.big_blind)
+        .bind(tournament.starting_stack)
+        .bind(tournament.starting_stack)
+        .bind(tournament.max_players)
+        .bind(&tournament.variant_id)
+        .bind(&tournament.format_id)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(&*self.pool)
+        .await?;
+
+        // Create the table in-memory
         self.game_server
             .create_table_with_options(
                 table_id.clone(),
@@ -1172,7 +1191,26 @@ impl TournamentManager {
                 tournament.level_duration_secs as u64,
             );
 
-            // Create the table
+            // Insert table into database first
+            sqlx::query(
+                "INSERT INTO tables (id, club_id, name, small_blind, big_blind, min_buyin, max_buyin, max_players, variant_id, format_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&table_id)
+            .bind(&tournament.club_id)
+            .bind(&table_name)
+            .bind(current_level.small_blind)
+            .bind(current_level.big_blind)
+            .bind(tournament.starting_stack)
+            .bind(tournament.starting_stack)
+            .bind(DEFAULT_MAX_SEATS as i32)
+            .bind(&variant_id)
+            .bind(&tournament.format_id)
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(&*self.pool)
+            .await?;
+
+            // Create the table in-memory
             let variant = variant_from_id(&variant_id)
                 .ok_or_else(|| AppError::BadRequest(format!("Invalid variant: {}", variant_id)))?;
             self.game_server
@@ -1378,6 +1416,77 @@ impl TournamentManager {
                     }
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    /// Broadcast tournament info to all players at tournament tables
+    /// Called every second by background task
+    pub async fn broadcast_tournament_info(&self) -> Result<()> {
+        use crate::ws::messages::ServerMessage;
+
+        // Get all running tournaments
+        let running: Vec<Tournament> =
+            sqlx::query_as("SELECT * FROM tournaments WHERE status = 'running'")
+                .fetch_all(self.pool.as_ref())
+                .await?;
+
+        for tournament in running {
+            // Skip if no level start time (shouldn't happen in running state)
+            let level_start_time = match &tournament.level_start_time {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+
+            // Get current blind level
+            let current_level: Option<crate::db::models::TournamentBlindLevel> = sqlx::query_as(
+                "SELECT * FROM tournament_blind_levels WHERE tournament_id = ? AND level_number = ?",
+            )
+            .bind(&tournament.id)
+            .bind(tournament.current_blind_level)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
+
+            let current_level = match current_level {
+                Some(l) => l,
+                None => {
+                    tracing::warn!(
+                        "No blind level found for tournament {} level {}",
+                        tournament.id,
+                        tournament.current_blind_level
+                    );
+                    continue;
+                }
+            };
+
+            // Get next blind level
+            let next_level: Option<crate::db::models::TournamentBlindLevel> = sqlx::query_as(
+                "SELECT * FROM tournament_blind_levels WHERE tournament_id = ? AND level_number = ?",
+            )
+            .bind(&tournament.id)
+            .bind(tournament.current_blind_level + 1)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
+
+            // Create tournament info message with current server time
+            let message = ServerMessage::TournamentInfo {
+                tournament_id: tournament.id.clone(),
+                server_time: Utc::now().to_rfc3339(),
+                level: tournament.current_blind_level as i64,
+                small_blind: current_level.small_blind,
+                big_blind: current_level.big_blind,
+                ante: current_level.ante,
+                level_start_time,
+                level_duration_secs: tournament.level_duration_secs,
+                next_small_blind: next_level.as_ref().map(|l| l.small_blind),
+                next_big_blind: next_level.as_ref().map(|l| l.big_blind),
+            };
+
+            // Broadcast to all tables in this tournament
+            self.game_server
+                .broadcast_tournament_event(&tournament.id, message)
+                .await;
         }
 
         Ok(())

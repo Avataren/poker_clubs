@@ -262,10 +262,43 @@ impl PokerTable {
     }
 
     pub fn remove_player(&mut self, user_id: &str) {
+        // Find the index of the player being removed
+        let removed_idx = self.players.iter().position(|p| p.user_id == user_id);
+        
         self.players.retain(|p| p.user_id != user_id);
+        
         // Recalculate seat numbers
         for (idx, player) in self.players.iter_mut().enumerate() {
             player.seat = idx;
+        }
+        
+        // Adjust dealer_seat and current_player if needed
+        if let Some(removed_idx) = removed_idx {
+            if !self.players.is_empty() {
+                // If dealer was removed or is now out of bounds, move it to a valid position
+                if self.dealer_seat >= self.players.len() || self.dealer_seat == removed_idx {
+                    self.dealer_seat = if self.dealer_seat > 0 {
+                        (self.dealer_seat - 1).min(self.players.len() - 1)
+                    } else {
+                        0
+                    };
+                } else if removed_idx < self.dealer_seat {
+                    // Player before dealer was removed, adjust dealer index
+                    self.dealer_seat -= 1;
+                }
+                
+                // Same for current_player
+                if self.current_player >= self.players.len() || self.current_player == removed_idx {
+                    self.current_player = if self.current_player > 0 {
+                        (self.current_player - 1).min(self.players.len() - 1)
+                    } else {
+                        0
+                    };
+                } else if removed_idx < self.current_player {
+                    // Player before current was removed, adjust current index
+                    self.current_player -= 1;
+                }
+            }
         }
     }
     pub fn take_seat(
@@ -406,13 +439,12 @@ impl PokerTable {
         self.last_winner_message = None;
         self.winning_hand = None;
 
-        // Reset all players and check for broke players
+        // Reset all players for new hand
         for player in &mut self.players {
             player.reset_for_new_hand();
-            // reset_for_new_hand already sets broke players (stack=0) to SittingOut
         }
 
-        // Count players who can actually play (have chips)
+        // Count players who can actually play (have chips and not eliminated)
         let playable_count = self.players.iter().filter(|p| p.stack > 0).count();
 
         if playable_count < MIN_PLAYERS_TO_START {
@@ -483,15 +515,15 @@ impl PokerTable {
             );
         } else {
             // 3+ players: normal blind posting
-            // Small blind is the next eligible player after dealer
-            let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
+            // Small blind is the next player after dealer (includes sitting out in tournaments)
+            let sb_seat = self.next_player_for_blind(self.dealer_seat);
             tracing::info!("post_blinds: dealer_seat={}, sb_seat={}", self.dealer_seat, sb_seat);
             let sb_amount = self.players[sb_seat].place_bet(self.small_blind);
             self.pot.add_bet(sb_seat, sb_amount);
             // Posting blind does NOT count as acting - player can still raise
 
-            // Big blind is the next eligible player after small blind
-            let bb_seat = self.next_eligible_player_for_button(sb_seat);
+            // Big blind is the next player after small blind
+            let bb_seat = self.next_player_for_blind(sb_seat);
             tracing::info!("post_blinds: bb_seat={}", bb_seat);
             let bb_amount = self.players[bb_seat].place_bet(self.big_blind);
             self.pot.add_bet(bb_seat, bb_amount);
@@ -676,6 +708,19 @@ impl PokerTable {
             // Don't auto-advance anymore - delays are handled by check_auto_advance
         } else {
             self.current_player = self.next_active_player(self.current_player);
+            
+            // Auto-fold sitting out players in tournaments
+            if self.format.eliminates_players() {
+                let current = &self.players[self.current_player];
+                if current.state == PlayerState::SittingOut {
+                    tracing::info!("Auto-folding sitting out player: {}", current.username);
+                    self.players[self.current_player].fold();
+                    self.players[self.current_player].has_acted_this_round = true;
+                    self.players[self.current_player].last_action = Some("Auto-Fold (Sitting Out)".to_string());
+                    // Recursively advance to next player
+                    self.advance_action();
+                }
+            }
         }
     }
 
@@ -937,18 +982,28 @@ impl PokerTable {
         );
 
         loop {
+            let player = &self.players[idx];
             tracing::debug!(
                 "  Checking idx={}: username={}, can_act={}, state={:?}",
                 idx,
-                self.players[idx].username,
-                self.players[idx].can_act(),
-                self.players[idx].state
+                player.username,
+                player.can_act(),
+                player.state
             );
-            if self.players[idx].can_act() {
+            
+            // In tournaments, include sitting out players so they can be auto-folded
+            // In cash games, only include active players
+            let is_eligible = if self.format.eliminates_players() {
+                player.can_act() || player.state == PlayerState::SittingOut
+            } else {
+                player.can_act()
+            };
+            
+            if is_eligible {
                 tracing::info!(
                     "next_active_player: returning idx={} ({})",
                     idx,
-                    self.players[idx].username
+                    player.username
                 );
                 return idx;
             }
@@ -965,12 +1020,15 @@ impl PokerTable {
         after // Fallback
     }
 
-    /// Find the first player eligible for dealer/blind positions starting from seat 0
-    /// (must have chips and not be sitting out voluntarily)
+    /// Find the first player eligible for dealer button starting from seat 0
+    /// Dealer button: must have chips and not be sitting out or eliminated
     fn first_eligible_player_for_button(&self) -> usize {
         for (idx, player) in self.players.iter().enumerate() {
-            // Player is eligible if they have chips and aren't voluntarily sitting out
-            if player.stack > 0 && player.state != PlayerState::SittingOut {
+            // Player is eligible for dealer if they have chips and aren't sitting out or eliminated
+            if player.stack > 0 
+                && player.state != PlayerState::SittingOut 
+                && player.state != PlayerState::Eliminated 
+            {
                 tracing::info!(
                     "first_eligible_player_for_button: returning idx={} (seat {}, {})",
                     idx,
@@ -984,8 +1042,8 @@ impl PokerTable {
         0 // Fallback
     }
 
-    /// Find the next player eligible for dealer/blind positions
-    /// (must have chips and not be sitting out voluntarily)
+    /// Find the next player eligible for dealer button
+    /// Dealer button: must have chips and not be sitting out or eliminated
     fn next_eligible_player_for_button(&self, after: usize) -> usize {
         let mut idx = (after + 1) % self.players.len();
         let start = idx;
@@ -998,8 +1056,11 @@ impl PokerTable {
 
         loop {
             let player = &self.players[idx];
-            // Player is eligible if they have chips and aren't voluntarily sitting out
-            if player.stack > 0 && player.state != PlayerState::SittingOut {
+            // Player is eligible for dealer if they have chips and aren't sitting out or eliminated
+            if player.stack > 0 
+                && player.state != PlayerState::SittingOut 
+                && player.state != PlayerState::Eliminated 
+            {
                 tracing::info!(
                     "next_eligible_player_for_button: returning idx={} (seat {}, {})",
                     idx,
@@ -1019,6 +1080,39 @@ impl PokerTable {
             if idx == start {
                 tracing::warn!("next_eligible_player_for_button: No eligible players found! Returning fallback {}", after);
                 break; // No eligible players found
+            }
+        }
+
+        after // Fallback
+    }
+
+    /// Find the next player for blind posting (includes sitting out players in tournaments)
+    /// In tournaments: sitting out players still pay blinds
+    /// In cash games: sitting out players don't pay blinds
+    fn next_player_for_blind(&self, after: usize) -> usize {
+        let mut idx = (after + 1) % self.players.len();
+        let start = idx;
+
+        loop {
+            let player = &self.players[idx];
+            // In tournaments, sitting out players still pay blinds
+            // Only skip eliminated players
+            let is_eligible = if self.format.eliminates_players() {
+                player.stack > 0 && player.state != PlayerState::Eliminated
+            } else {
+                // In cash games, skip sitting out and eliminated
+                player.stack > 0 
+                    && player.state != PlayerState::SittingOut 
+                    && player.state != PlayerState::Eliminated
+            };
+
+            if is_eligible {
+                return idx;
+            }
+            
+            idx = (idx + 1) % self.players.len();
+            if idx == start {
+                break;
             }
         }
 
@@ -1087,6 +1181,14 @@ impl PokerTable {
     }
 
     pub fn get_public_state(&self, for_user_id: Option<&str>) -> PublicTableState {
+        self.get_public_state_with_tournament(for_user_id, None)
+    }
+
+    pub fn get_public_state_with_tournament(
+        &self,
+        for_user_id: Option<&str>,
+        tournament_info: Option<TournamentInfo>,
+    ) -> PublicTableState {
         // Get the actual seat number of the current player (not array index)
         // During Waiting phase or invalid states, use the first player's seat if available
         let current_player_seat = if self.phase == GamePhase::Waiting {
@@ -1182,6 +1284,12 @@ impl PokerTable {
             } else {
                 None
             },
+            tournament_id: tournament_info.as_ref().map(|t| t.tournament_id.clone()),
+            tournament_blind_level: tournament_info.as_ref().map(|t| t.blind_level),
+            tournament_level_start_time: tournament_info.as_ref().and_then(|t| t.level_start_time.clone()),
+            tournament_level_duration_secs: tournament_info.as_ref().map(|t| t.level_duration_secs),
+            tournament_next_small_blind: tournament_info.as_ref().and_then(|t| t.next_small_blind),
+            tournament_next_big_blind: tournament_info.as_ref().and_then(|t| t.next_big_blind),
         }
     }
 }
@@ -1208,6 +1316,13 @@ pub struct PublicTableState {
     pub dealer_seat: Option<usize>,
     pub small_blind_seat: Option<usize>,
     pub big_blind_seat: Option<usize>,
+    // Tournament info (only present for tournament tables)
+    pub tournament_id: Option<String>,
+    pub tournament_blind_level: Option<i64>,
+    pub tournament_level_start_time: Option<String>,
+    pub tournament_level_duration_secs: Option<i64>,
+    pub tournament_next_small_blind: Option<i64>,
+    pub tournament_next_big_blind: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1222,6 +1337,17 @@ pub struct PublicPlayerState {
     pub is_winner: bool,
     pub last_action: Option<String>,
     pub pot_won: i64, // Amount won from pot (for animation)
+}
+
+/// Tournament info to include in table state
+#[derive(Debug, Clone)]
+pub struct TournamentInfo {
+    pub tournament_id: String,
+    pub blind_level: i64,
+    pub level_start_time: Option<String>,
+    pub level_duration_secs: i64,
+    pub next_small_blind: Option<i64>,
+    pub next_big_blind: Option<i64>,
 }
 
 impl PokerTable {
@@ -1264,24 +1390,29 @@ impl PokerTable {
 
     /// Check for eliminated players (stack = 0 in tournament mode)
     /// Returns list of user_ids who are eliminated
+    /// Eliminated players are removed from the table
     pub fn check_eliminations(&mut self) -> Vec<String> {
         if !self.format.eliminates_players() {
             return vec![];
         }
 
         let mut eliminated = vec![];
-        for player in &mut self.players {
-            if player.stack == 0
-                && player.state != PlayerState::Eliminated
-                && player.state != PlayerState::SittingOut
-            {
+        
+        // Find all players with 0 stack
+        for player in &self.players {
+            if player.stack == 0 {
                 let user_id = player.user_id.clone();
                 let username = player.username.clone();
-                player.state = PlayerState::Eliminated;
-                eliminated.push(user_id);
-                tracing::info!("Player {} eliminated from tournament", username);
+                eliminated.push(user_id.clone());
+                tracing::info!("Player {} eliminated from tournament - removing from table", username);
             }
         }
+
+        // Remove eliminated players from the table
+        for user_id in &eliminated {
+            self.remove_player(user_id);
+        }
+
         eliminated
     }
 
@@ -1291,20 +1422,18 @@ impl PokerTable {
             return false;
         }
 
-        let active_count = self
-            .players
-            .iter()
-            .filter(|p| p.state != PlayerState::Eliminated && p.stack > 0)
-            .count();
+        // Since eliminated players are removed, just count remaining players with chips
+        let active_count = self.players.iter().filter(|p| p.stack > 0).count();
 
         active_count <= 1
     }
 
     /// Get remaining tournament players (not eliminated)
+    /// Note: eliminated players are removed from the table, so this returns all players
     pub fn get_remaining_players(&self) -> Vec<String> {
         self.players
             .iter()
-            .filter(|p| p.state != PlayerState::Eliminated && p.stack > 0)
+            .filter(|p| p.stack > 0)
             .map(|p| p.user_id.clone())
             .collect()
     }

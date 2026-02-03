@@ -298,6 +298,45 @@ impl GameServer {
         }
     }
 
+    /// Fetch tournament info for a table to include in state
+    async fn get_tournament_info(
+        &self,
+        tournament_id: &str,
+    ) -> Option<crate::game::TournamentInfo> {
+        use crate::db::models::{Tournament, TournamentBlindLevel};
+
+        // Get tournament
+        let tournament: Option<Tournament> =
+            sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+                .bind(tournament_id)
+                .fetch_optional(self.pool.as_ref())
+                .await
+                .ok()
+                .flatten();
+
+        let tournament = tournament?;
+
+        // Get next blind level
+        let next_level: Option<TournamentBlindLevel> = sqlx::query_as(
+            "SELECT * FROM tournament_blind_levels WHERE tournament_id = ? AND level_number = ?",
+        )
+        .bind(tournament_id)
+        .bind(tournament.current_blind_level + 1)
+        .fetch_optional(self.pool.as_ref())
+        .await
+        .ok()
+        .flatten();
+
+        Some(crate::game::TournamentInfo {
+            tournament_id: tournament_id.to_string(),
+            blind_level: tournament.current_blind_level as i64,
+            level_start_time: tournament.level_start_time,
+            level_duration_secs: tournament.level_duration_secs,
+            next_small_blind: next_level.as_ref().map(|l| l.small_blind),
+            next_big_blind: next_level.as_ref().map(|l| l.big_blind),
+        })
+    }
+
     // Check all tables for auto-advance (when all players are all-in)
     pub async fn check_all_tables_auto_advance(&self) {
         let mut tables = self.tables.write().await;
@@ -490,23 +529,81 @@ impl GameServer {
         .await
         .map_err(|e| format!("Database error: {}", e))?;
 
-        if let Some((id, _club_id, name, small_blind, big_blind, variant_id, _format_id)) =
+        if let Some((id, _club_id, name, small_blind, big_blind, variant_id, format_id)) =
             table_data
         {
             // Get the variant from ID (default to holdem if not found)
             let variant = crate::game::variant_from_id(&variant_id)
                 .ok_or_else(|| format!("Unknown variant: {}", variant_id))?;
 
-            // Create in-memory table with the correct variant
-            let table = PokerTable::with_variant(
-                id.clone(),
-                name,
-                small_blind,
-                big_blind,
-                9, // DEFAULT_MAX_SEATS
-                variant,
-            );
-            self.tables.write().await.insert(id.clone(), table);
+            // Check if this is a tournament table
+            let is_tournament: Option<(String, i64, i64)> = sqlx::query_as(
+                "SELECT t.id, t.buy_in, t.starting_stack 
+                 FROM tournaments t 
+                 JOIN tournament_tables tt ON t.id = tt.tournament_id 
+                 WHERE tt.table_id = ?",
+            )
+            .bind(table_id)
+            .fetch_optional(self.pool.as_ref())
+            .await
+            .map_err(|e| format!("Database error: {}", e))?;
+
+            if let Some((tournament_id, buy_in, starting_stack)) = is_tournament {
+                // Load tournament to get level duration
+                let tournament: crate::db::models::Tournament = sqlx::query_as(
+                    "SELECT * FROM tournaments WHERE id = ?"
+                )
+                .bind(&tournament_id)
+                .fetch_one(self.pool.as_ref())
+                .await
+                .map_err(|e| format!("Failed to load tournament: {}", e))?;
+
+                // Create tournament format
+                let format: Box<dyn crate::game::GameFormat> = if format_id == "sng" {
+                    Box::new(crate::game::SitAndGo::new(
+                        buy_in,
+                        starting_stack,
+                        tournament.max_players as usize,
+                        tournament.level_duration_secs as u64,
+                    ))
+                } else {
+                    Box::new(crate::game::MultiTableTournament::new(
+                        name.clone(),
+                        buy_in,
+                        starting_stack,
+                        tournament.level_duration_secs as u64,
+                    ))
+                };
+
+                // Create in-memory table with tournament format
+                let table = crate::game::PokerTable::with_variant_and_format(
+                    id.clone(),
+                    name,
+                    small_blind,
+                    big_blind,
+                    9, // DEFAULT_MAX_SEATS
+                    variant,
+                    format,
+                );
+                
+                // Set tournament ID on the table
+                let mut tables = self.tables.write().await;
+                tables.insert(id.clone(), table);
+                drop(tables);
+                
+                self.set_table_tournament(&id, tournament_id).await;
+            } else {
+                // Create regular cash game table
+                let table = crate::game::PokerTable::with_variant(
+                    id.clone(),
+                    name,
+                    small_blind,
+                    big_blind,
+                    9, // DEFAULT_MAX_SEATS
+                    variant,
+                );
+                self.tables.write().await.insert(id.clone(), table);
+            }
 
             // Create broadcast channel for this table
             let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
@@ -514,7 +611,7 @@ impl GameServer {
 
             Ok(())
         } else {
-            Err("Table not found in database".to_string())
+            Err("Table not in the database.".to_string())
         }
     }
 }
@@ -613,10 +710,20 @@ async fn handle_socket(
                     if let Some(table_id) = &current_table_id {
                         let tables = game_server.tables.read().await;
                         if let Some(table) = tables.get(table_id) {
-                            let state = table.get_public_state(Some(&user_id));
-                            let msg = ServerMessage::TableState(state);
-                            if let Ok(msg_text) = serde_json::to_string(&msg) {
-                                let _ = sender.send(Message::Text(msg_text)).await;
+                            let tournament_info = if let Some(tid) = &table.tournament_id {
+                                game_server.get_tournament_info(tid).await
+                            } else {
+                                None
+                            };
+                            drop(tables);
+                            
+                            let tables = game_server.tables.read().await;
+                            if let Some(table) = tables.get(table_id) {
+                                let state = table.get_public_state_with_tournament(Some(&user_id), tournament_info);
+                                let msg = ServerMessage::TableState(state);
+                                if let Ok(msg_text) = serde_json::to_string(&msg) {
+                                    let _ = sender.send(Message::Text(msg_text)).await;
+                                }
                             }
                         }
                     }
@@ -687,6 +794,31 @@ async fn handle_client_message(
     global_broadcast_rx: &mut Option<broadcast::Receiver<GlobalBroadcast>>,
     tournament_broadcast_rx: &mut Option<broadcast::Receiver<ServerMessage>>,
 ) -> ServerMessage {
+    // Helper to get table state with tournament info
+    async fn get_table_state_with_tournament(
+        game_server: &GameServer,
+        table_id: &str,
+        user_id: &str,
+    ) -> Option<crate::game::PublicTableState> {
+        // First, get tournament ID if present
+        let tournament_id = {
+            let tables = game_server.tables.read().await;
+            tables.get(table_id)?.tournament_id.clone()
+        };
+        
+        // Fetch tournament info if needed
+        let tournament_info = if let Some(tid) = tournament_id {
+            game_server.get_tournament_info(&tid).await
+        } else {
+            None
+        };
+        
+        // Get table state with tournament info
+        let tables = game_server.tables.read().await;
+        let table = tables.get(table_id)?;
+        Some(table.get_public_state_with_tournament(Some(user_id), tournament_info))
+    }
+    
     match msg {
         ClientMessage::ViewingClubsList => {
             // User is viewing the global clubs list
@@ -742,9 +874,7 @@ async fn handle_client_message(
 
             // If buyin is 0, just observe without taking a seat
             if buyin == 0 {
-                let tables = game_server.tables.read().await;
-                if let Some(table) = tables.get(&table_id) {
-                    let state = table.get_public_state(Some(user_id));
+                if let Some(state) = get_table_state_with_tournament(game_server, &table_id, user_id).await {
                     ServerMessage::TableState(state)
                 } else {
                     ServerMessage::Error {
@@ -763,9 +893,7 @@ async fn handle_client_message(
                             game_server.notify_table_update(&table_id).await;
 
                             // Get and return current state
-                            let tables = game_server.tables.read().await;
-                            if let Some(table) = tables.get(&table_id) {
-                                let state = table.get_public_state(Some(user_id));
+                            if let Some(state) = get_table_state_with_tournament(game_server, &table_id, user_id).await {
                                 ServerMessage::TableState(state)
                             } else {
                                 ServerMessage::Error {
@@ -816,9 +944,7 @@ async fn handle_client_message(
                         game_server.notify_table_update(&table_id).await;
 
                         // Get and return current state
-                        let tables = game_server.tables.read().await;
-                        if let Some(table) = tables.get(&table_id) {
-                            let state = table.get_public_state(Some(user_id));
+                        if let Some(state) = get_table_state_with_tournament(game_server, &table_id, user_id).await {
                             ServerMessage::TableState(state)
                         } else {
                             ServerMessage::Error {
@@ -943,9 +1069,7 @@ async fn handle_client_message(
 
         ClientMessage::GetTableState => {
             if let Some(ref table_id) = current_table_id {
-                let tables = game_server.tables.read().await;
-                if let Some(table) = tables.get(table_id) {
-                    let state = table.get_public_state(Some(user_id));
+                if let Some(state) = get_table_state_with_tournament(game_server, table_id, user_id).await {
                     ServerMessage::TableState(state)
                 } else {
                     ServerMessage::Error {
@@ -988,9 +1112,7 @@ async fn handle_client_message(
                         table_id
                     );
                     // Return current table state
-                    let tables = game_server.tables.read().await;
-                    if let Some(table) = tables.get(&table_id) {
-                        let state = table.get_public_state(Some(user_id));
+                    if let Some(state) = get_table_state_with_tournament(game_server, &table_id, user_id).await {
                         ServerMessage::TableState(state)
                     } else {
                         ServerMessage::Connected
@@ -1009,9 +1131,7 @@ async fn handle_client_message(
                 .await
             {
                 Ok(()) => {
-                    let tables = game_server.tables.read().await;
-                    if let Some(table) = tables.get(&table_id) {
-                        let state = table.get_public_state(Some(user_id));
+                    if let Some(state) = get_table_state_with_tournament(game_server, &table_id, user_id).await {
                         ServerMessage::TableState(state)
                     } else {
                         ServerMessage::Connected
