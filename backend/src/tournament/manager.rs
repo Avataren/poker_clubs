@@ -824,12 +824,9 @@ impl TournamentManager {
             ));
         }
 
-        if tournament.status == "running" || tournament.status == "paused" {
-            return Err(AppError::BadRequest(
-                "Cannot cancel a tournament after it has started".to_string(),
-            ));
-        }
+        let is_running = tournament.status == "running" || tournament.status == "paused";
 
+        // Get all registrations
         let registrations = sqlx::query_as::<_, TournamentRegistration>(
             "SELECT * FROM tournament_registrations WHERE tournament_id = ?",
         )
@@ -837,6 +834,18 @@ impl TournamentManager {
         .fetch_all(&*self.pool)
         .await?;
 
+        // If tournament is running, deactivate all tables
+        if is_running {
+            tracing::info!("Deactivating all tables for running tournament {}", tournament.id);
+            
+            // Deactivate all tournament tables
+            sqlx::query("UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ?")
+                .bind(&tournament.id)
+                .execute(&*self.pool)
+                .await?;
+        }
+
+        // Refund all registered players
         for registration in registrations {
             self.refund_buy_in(
                 &tournament.club_id,
@@ -869,6 +878,19 @@ impl TournamentManager {
         }
 
         tracing::info!("Cancelled tournament {}: {}", tournament.id, reason);
+
+        // Broadcast tournament cancelled event
+        use crate::ws::messages::ServerMessage;
+        self.game_server
+            .broadcast_tournament_event(
+                &tournament.id,
+                ServerMessage::TournamentCancelled {
+                    tournament_id: tournament.id.clone(),
+                    tournament_name: tournament.name.clone(),
+                    reason: reason.to_string(),
+                },
+            )
+            .await;
 
         Ok(())
     }

@@ -91,6 +91,11 @@ pub enum ServerMessage {
         tournament_name: String,
         winners: Vec<TournamentWinner>,
     },
+    TournamentCancelled {
+        tournament_id: String,
+        tournament_name: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

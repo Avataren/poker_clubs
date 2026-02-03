@@ -1042,3 +1042,568 @@ async fn test_tournament_complete_flow() {
     assert_eq!(details["tournament"]["status"], "running");
     assert_eq!(details["tournament"]["current_blind_level"], 0);
 }
+
+// ============================================================================
+// Bankroll and Balance Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_registration_deducts_balance() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create tournament with 100 buy-in
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Balance Test SNG",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register player
+    let (token, user_id) = register_user(&server, "player1", "player1@example.com", "password123").await;
+
+    server
+        .post("/api/clubs/join")
+        .json(&json!({"club_id": club_id.clone()}))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+
+    // Add 500 balance
+    add_balance(&server, &owner_token, &club_id, &user_id, 500).await;
+
+    // Register for tournament
+    server
+        .post(&format!("/api/tournaments/{}/register", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+
+    // Verify tournament updated correctly (prize pool should be 100)
+    let details_response = server
+        .get(&format!("/api/tournaments/{}", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+    
+    details_response.assert_status_ok();
+    let details: Value = details_response.json();
+    assert_eq!(details["tournament"]["prize_pool"], 100, "Prize pool should equal buy-in");
+    assert_eq!(details["tournament"]["registered_players"], 1);
+    
+    // Test balance by trying to register for another tournament with same buy-in
+    // If balance was deducted, we should have 400 left, which is enough for another 100 buy-in
+    let response2 = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Second Test",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response2.assert_status_ok();
+    let body2: Value = response2.json();
+    let tournament2_id = body2["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Should succeed with remaining balance
+    server
+        .post(&format!("/api/tournaments/{}/register", tournament2_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
+async fn test_unregister_refunds_balance() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create tournament
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Refund Test SNG",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register player
+    let (token, user_id) = register_user(&server, "player1", "player1@example.com", "password123").await;
+
+    server
+        .post("/api/clubs/join")
+        .json(&json!({"club_id": club_id.clone()}))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+
+    // Add 500 balance
+    add_balance(&server, &owner_token, &club_id, &user_id, 500).await;
+
+    // Register for tournament
+    server
+        .post(&format!("/api/tournaments/{}/register", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+
+    // Verify registration successful
+    let details_response = server
+        .get(&format!("/api/tournaments/{}", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+    
+    details_response.assert_status_ok();
+    let details: Value = details_response.json();
+    assert_eq!(details["tournament"]["prize_pool"], 100);
+    assert_eq!(details["tournament"]["registered_players"], 1);
+
+    // Unregister
+    server
+        .delete(&format!("/api/tournaments/{}/unregister", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+
+    // Verify balance was refunded by registering for 5 more tournaments
+    // If refund worked, we should have 500 again and can register 5 times
+    for i in 1..=5 {
+        let response = server
+            .post("/api/tournaments/sng")
+            .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+            .json(&json!({
+                "club_id": club_id,
+                "name": format!("Test {}", i),
+                "variant_id": "holdem",
+                "buy_in": 100,
+                "starting_stack": 1500,
+                "max_players": 6,
+                "level_duration_mins": 5
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: Value = response.json();
+        let tid = body["tournament"]["id"].as_str().unwrap().to_string();
+
+        server
+            .post(&format!("/api/tournaments/{}/register", tid))
+            .add_header(AUTHORIZATION, format!("Bearer {}", token))
+            .await
+            .assert_status_ok();
+    }
+}
+
+#[tokio::test]
+async fn test_cannot_register_without_balance() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create tournament with 100 buy-in
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "No Balance Test",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register player with insufficient balance
+    let (token, user_id) = register_user(&server, "poorplayer", "poor@example.com", "password123").await;
+
+    server
+        .post("/api/clubs/join")
+        .json(&json!({"club_id": club_id.clone()}))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await
+        .assert_status_ok();
+
+    // Player starts with 10000 from joining club
+    // Subtract most of it to leave only 50
+    add_balance(&server, &owner_token, &club_id, &user_id, -9950).await;
+
+    // Try to register with insufficient balance (should fail)
+    let reg_response = server
+        .post(&format!("/api/tournaments/{}/register", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+
+    reg_response.assert_status_bad_request();
+
+    // Verify player was not added to tournament
+    let details_response = server
+        .get(&format!("/api/tournaments/{}", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+    
+    details_response.assert_status_ok();
+    let details: Value = details_response.json();
+    assert_eq!(details["tournament"]["registered_players"], 0, "No players should be registered");
+    assert_eq!(details["tournament"]["prize_pool"], 0, "Prize pool should be empty");
+}
+
+#[tokio::test]
+async fn test_cannot_register_without_club_membership() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create tournament
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Membership Test",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register player without joining club
+    let (token, _user_id) = register_user(&server, "outsider", "outsider@example.com", "password123").await;
+
+    // Try to register without being a club member (should fail)
+    let reg_response = server
+        .post(&format!("/api/tournaments/{}/register", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+
+    reg_response.assert_status_bad_request();
+}
+
+#[tokio::test]
+async fn test_bots_can_register_without_balance() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create tournament
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Bot Test SNG",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Fill with bots (bots don't have club membership or balance)
+    let fill_response = server
+        .post(&format!("/api/tournaments/{}/fill-bots", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+
+    fill_response.assert_status_ok();
+
+    // Verify tournament has registrations
+    let details_response = server
+        .get(&format!("/api/tournaments/{}", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+
+    details_response.assert_status_ok();
+    let details: Value = details_response.json();
+    assert_eq!(details["tournament"]["registered_players"], 6);
+    assert_eq!(details["tournament"]["status"], "running");
+}
+
+#[tokio::test]
+async fn test_cannot_unregister_after_start() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create tournament
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Start Test SNG",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 2,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register two players
+    let mut first_player_token = String::new();
+    for i in 1..=2 {
+        let (token, user_id) = register_user(&server, &format!("starttest{}", i), &format!("starttest{}@example.com", i), "password123").await;
+
+        if i == 1 {
+            first_player_token = token.clone();
+        }
+
+        server
+            .post("/api/clubs/join")
+            .json(&json!({"club_id": club_id.clone()}))
+            .add_header(AUTHORIZATION, format!("Bearer {}", token))
+            .await
+            .assert_status_ok();
+
+        add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
+
+        server
+            .post(&format!("/api/tournaments/{}/register", tournament_id))
+            .add_header(AUTHORIZATION, format!("Bearer {}", token))
+            .await
+            .assert_status_ok();
+    }
+
+    // Tournament should auto-start (max_players reached)
+    let details_response = server
+        .get(&format!("/api/tournaments/{}", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+
+    details_response.assert_status_ok();
+    let details: Value = details_response.json();
+    assert_eq!(details["tournament"]["status"], "running");
+
+    // Try to unregister after start (should fail)
+    let unreg_response = server
+        .delete(&format!("/api/tournaments/{}/unregister", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", first_player_token))
+        .await;
+
+    unreg_response.assert_status_bad_request();
+}
+
+#[tokio::test]
+async fn test_multiple_clubs_separate_bankrolls() {
+    let server = setup().await;
+    
+    // Create two clubs
+    let (club1_id, owner1_token, _owner1_id) = create_club(&server, "owner1").await;
+    let (club2_id, owner2_token, _owner2_id) = create_club(&server, "owner2").await;
+
+    // Create tournaments in both clubs
+    let t1_response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner1_token))
+        .json(&json!({
+            "club_id": club1_id,
+            "name": "Club 1 Tournament",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    t1_response.assert_status_ok();
+    let t1_body: Value = t1_response.json();
+    let t1_id = t1_body["tournament"]["id"].as_str().unwrap().to_string();
+
+    let t2_response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner2_token))
+        .json(&json!({
+            "club_id": club2_id,
+            "name": "Club 2 Tournament",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    t2_response.assert_status_ok();
+    let t2_body: Value = t2_response.json();
+    let t2_id = t2_body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register a player in both clubs
+    let (player_token, player_id) = register_user(&server, "multclub", "multi@example.com", "password123").await;
+
+    // Join both clubs
+    server
+        .post("/api/clubs/join")
+        .json(&json!({"club_id": club1_id.clone()}))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .assert_status_ok();
+
+    server
+        .post("/api/clubs/join")
+        .json(&json!({"club_id": club2_id.clone()}))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .assert_status_ok();
+
+    // Players start with 10000 from joining each club
+    // Set club1 to 500 total and club2 to 200 total
+    add_balance(&server, &owner1_token, &club1_id, &player_id, -9500).await;
+    add_balance(&server, &owner2_token, &club2_id, &player_id, -9800).await;
+
+    // Register for tournament 1 (should succeed with 500 balance)
+    server
+        .post(&format!("/api/tournaments/{}/register", t1_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .assert_status_ok();
+
+    // Try to register for tournament 2 (should succeed with 200 balance)
+    server
+        .post(&format!("/api/tournaments/{}/register", t2_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .assert_status_ok();
+
+    // Verify both tournaments have the player registered
+    let t1_details = server
+        .get(&format!("/api/tournaments/{}", t1_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .json::<Value>();
+    
+    let t2_details = server
+        .get(&format!("/api/tournaments/{}", t2_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .json::<Value>();
+
+    assert_eq!(t1_details["tournament"]["registered_players"], 1);
+    assert_eq!(t2_details["tournament"]["registered_players"], 1);
+    assert_eq!(t1_details["tournament"]["prize_pool"], 100);
+    assert_eq!(t2_details["tournament"]["prize_pool"], 100);
+
+    // Test that player can register 4 more times in club1 (400 remaining) but only 1 more in club2 (100 remaining)
+    // Create additional tournament in club1
+    let t3_response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner1_token))
+        .json(&json!({
+            "club_id": club1_id,
+            "name": "Club 1 Tournament 2",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    t3_response.assert_status_ok();
+    let t3_body: Value = t3_response.json();
+    let t3_id = t3_body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Should succeed (400 remaining)
+    server
+        .post(&format!("/api/tournaments/{}/register", t3_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .assert_status_ok();
+
+    // Create another tournament in club2
+    let t4_response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner2_token))
+        .json(&json!({
+            "club_id": club2_id,
+            "name": "Club 2 Tournament 2",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    t4_response.assert_status_ok();
+    let t4_body: Value = t4_response.json();
+    let t4_id = t4_body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Should succeed (100 remaining)
+    server
+        .post(&format!("/api/tournaments/{}/register", t4_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await
+        .assert_status_ok();
+
+    // Create third tournament in club2
+    let t5_response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner2_token))
+        .json(&json!({
+            "club_id": club2_id,
+            "name": "Club 2 Tournament 3",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 6,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    t5_response.assert_status_ok();
+    let t5_body: Value = t5_response.json();
+    let t5_id = t5_body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Should fail (0 remaining in club2)
+    let reg_response = server
+        .post(&format!("/api/tournaments/{}/register", t5_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", player_token))
+        .await;
+
+    reg_response.assert_status_bad_request();
+}
