@@ -50,5 +50,6 @@ class Player {
   bool get isActive => state == 'Active';
   bool get isFolded => state == 'Folded';
   bool get isAllIn => state == 'AllIn';
+  bool get isEliminated => state == 'Eliminated';
   bool get isBot => userId.startsWith('bot_');
 }

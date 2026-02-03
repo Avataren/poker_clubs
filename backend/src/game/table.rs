@@ -45,6 +45,8 @@ pub struct PokerTable {
     pub street_delay_ms: u64,          // Delay between flop/turn/river
     pub showdown_delay_ms: u64,        // Delay to show results
     pub tournament_id: Option<String>, // If this is a tournament table
+    pub pending_small_blind: Option<i64>, // Tournament blinds to apply at start of next hand
+    pub pending_big_blind: Option<i64>,   // Tournament blinds to apply at start of next hand
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
     #[serde(skip, default = "default_format")]
@@ -82,6 +84,8 @@ impl Clone for PokerTable {
             street_delay_ms: self.street_delay_ms,
             showdown_delay_ms: self.showdown_delay_ms,
             tournament_id: self.tournament_id.clone(),
+            pending_small_blind: self.pending_small_blind,
+            pending_big_blind: self.pending_big_blind,
             variant: self.variant.clone_box(),
             format: self.format.clone_box(),
         }
@@ -162,6 +166,8 @@ impl PokerTable {
             street_delay_ms: DEFAULT_STREET_DELAY_MS,
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
             tournament_id: None,
+            pending_small_blind: None,
+            pending_big_blind: None,
             variant,
             format,
         }
@@ -436,6 +442,9 @@ impl PokerTable {
     }
 
     pub fn start_new_hand(&mut self) {
+        // Apply any pending blind changes from tournament level advances
+        self.apply_pending_blinds();
+        
         self.last_winner_message = None;
         self.winning_hand = None;
 
@@ -1286,6 +1295,8 @@ impl PokerTable {
             },
             tournament_id: tournament_info.as_ref().map(|t| t.tournament_id.clone()),
             tournament_blind_level: tournament_info.as_ref().map(|t| t.blind_level),
+            tournament_small_blind: tournament_info.as_ref().map(|_| self.small_blind),
+            tournament_big_blind: tournament_info.as_ref().map(|_| self.big_blind),
             tournament_level_start_time: tournament_info.as_ref().and_then(|t| t.level_start_time.clone()),
             tournament_level_duration_secs: tournament_info.as_ref().map(|t| t.level_duration_secs),
             tournament_next_small_blind: tournament_info.as_ref().and_then(|t| t.next_small_blind),
@@ -1319,6 +1330,8 @@ pub struct PublicTableState {
     // Tournament info (only present for tournament tables)
     pub tournament_id: Option<String>,
     pub tournament_blind_level: Option<i64>,
+    pub tournament_small_blind: Option<i64>,
+    pub tournament_big_blind: Option<i64>,
     pub tournament_level_start_time: Option<String>,
     pub tournament_level_duration_secs: Option<i64>,
     pub tournament_next_small_blind: Option<i64>,
@@ -1354,16 +1367,47 @@ impl PokerTable {
     // ==================== Tournament-Specific Methods ====================
 
     /// Update blinds and minimum raise (called when tournament blind level advances)
+    /// If a hand is in progress, blinds are queued and applied at the start of next hand
     pub fn update_blinds(&mut self, small_blind: i64, big_blind: i64) {
-        self.small_blind = small_blind;
-        self.big_blind = big_blind;
-        self.min_raise = big_blind;
-        tracing::info!(
-            "Table {} blinds updated to {}/{}",
-            self.table_id,
-            small_blind,
-            big_blind
-        );
+        // If a hand is currently in progress (not Waiting), queue the new blinds
+        if self.phase != GamePhase::Waiting {
+            self.pending_small_blind = Some(small_blind);
+            self.pending_big_blind = Some(big_blind);
+            tracing::info!(
+                "Table {} blinds queued (hand in progress): {}/{} -> will apply at next hand",
+                self.table_id,
+                small_blind,
+                big_blind
+            );
+        } else {
+            // No hand in progress, apply immediately
+            self.small_blind = small_blind;
+            self.big_blind = big_blind;
+            self.min_raise = big_blind;
+            tracing::info!(
+                "Table {} blinds updated immediately to {}/{}",
+                self.table_id,
+                small_blind,
+                big_blind
+            );
+        }
+    }
+
+    /// Apply pending blinds if any (called at start of new hand)
+    fn apply_pending_blinds(&mut self) {
+        if let (Some(sb), Some(bb)) = (self.pending_small_blind, self.pending_big_blind) {
+            self.small_blind = sb;
+            self.big_blind = bb;
+            self.min_raise = bb;
+            self.pending_small_blind = None;
+            self.pending_big_blind = None;
+            tracing::info!(
+                "Table {} applied pending blinds: {}/{}",
+                self.table_id,
+                sb,
+                bb
+            );
+        }
     }
 
     /// Apply antes from all active players (called at start of hand in tournament mode)
@@ -1398,19 +1442,18 @@ impl PokerTable {
 
         let mut eliminated = vec![];
         
-        // Find all players with 0 stack
-        for player in &self.players {
-            if player.stack == 0 {
+        // Find all players with 0 stack and mark them as eliminated
+        for player in &mut self.players {
+            if player.stack == 0 && player.state != PlayerState::Eliminated {
                 let user_id = player.user_id.clone();
                 let username = player.username.clone();
                 eliminated.push(user_id.clone());
-                tracing::info!("Player {} eliminated from tournament - removing from table", username);
+                // Mark as eliminated - they stay in array to preserve seat positions
+                // but will be filtered from display and cannot act
+                player.state = PlayerState::Eliminated;
+                player.hole_cards.clear(); // Clear their cards
+                tracing::info!("Player {} eliminated from tournament in seat {} (kept for seat preservation)", username, player.seat);
             }
-        }
-
-        // Remove eliminated players from the table
-        for user_id in &eliminated {
-            self.remove_player(user_id);
         }
 
         eliminated

@@ -22,6 +22,15 @@ class GameState {
   final int? dealerSeat;
   final int? smallBlindSeat;
   final int? bigBlindSeat;
+  // Tournament info (only present for tournament tables)
+  final String? tournamentId;
+  final int? tournamentBlindLevel;
+  final int? tournamentSmallBlind;
+  final int? tournamentBigBlind;
+  final String? tournamentLevelStartTime;
+  final int? tournamentLevelDurationSecs;
+  final int? tournamentNextSmallBlind;
+  final int? tournamentNextBigBlind;
 
   GameState({
     required this.tableId,
@@ -44,6 +53,14 @@ class GameState {
     this.dealerSeat,
     this.smallBlindSeat,
     this.bigBlindSeat,
+    this.tournamentId,
+    this.tournamentBlindLevel,
+    this.tournamentSmallBlind,
+    this.tournamentBigBlind,
+    this.tournamentLevelStartTime,
+    this.tournamentLevelDurationSecs,
+    this.tournamentNextSmallBlind,
+    this.tournamentNextBigBlind,
   });
 
   factory GameState.fromJson(Map<String, dynamic> json) {
@@ -72,6 +89,15 @@ class GameState {
       dealerSeat: json['dealer_seat'] as int?,
       smallBlindSeat: json['small_blind_seat'] as int?,
       bigBlindSeat: json['big_blind_seat'] as int?,
+      tournamentId: json['tournament_id'] as String?,
+      tournamentBlindLevel: json['tournament_blind_level'] as int?,
+      tournamentSmallBlind: json['tournament_small_blind'] as int?,
+      tournamentBigBlind: json['tournament_big_blind'] as int?,
+      tournamentLevelStartTime: json['tournament_level_start_time'] as String?,
+      tournamentLevelDurationSecs:
+          json['tournament_level_duration_secs'] as int?,
+      tournamentNextSmallBlind: json['tournament_next_small_blind'] as int?,
+      tournamentNextBigBlind: json['tournament_next_big_blind'] as int?,
     );
   }
 

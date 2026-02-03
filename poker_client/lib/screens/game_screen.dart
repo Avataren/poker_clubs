@@ -28,12 +28,25 @@ class _GameScreenState extends State<GameScreen> {
   final _topUpController = TextEditingController(text: '5000');
   bool _isSeated = false;
 
+  // Tournament info from live broadcast
+  String? _tournamentId;
+  String? _serverTime;
+  int? _tournamentLevel;
+  int? _tournamentSmallBlind;
+  int? _tournamentBigBlind;
+  int? _tournamentAnte;
+  String? _levelStartTime;
+  int? _levelDurationSecs;
+  int? _nextSmallBlind;
+  int? _nextBigBlind;
+
   @override
   void initState() {
     super.initState();
     _wsService = WebSocketService();
     _wsService.onGameStateUpdate = (gameState) {
       _playActionSounds(gameState);
+      print('DEBUG: GameState tournamentId = ${gameState.tournamentId}');
       setState(() {
         _previousGameState = _gameState;
         _gameState = gameState;
@@ -41,6 +54,35 @@ class _GameScreenState extends State<GameScreen> {
         _checkIfSeated();
       });
     };
+    _wsService.onTournamentInfo =
+        (
+          tournamentId,
+          serverTime,
+          level,
+          smallBlind,
+          bigBlind,
+          ante,
+          levelStartTime,
+          levelDurationSecs,
+          nextSmallBlind,
+          nextBigBlind,
+        ) {
+          print(
+            'DEBUG: TournamentInfo received - Level $level, Blinds $smallBlind/$bigBlind',
+          );
+          setState(() {
+            _tournamentId = tournamentId;
+            _serverTime = serverTime;
+            _tournamentLevel = level;
+            _tournamentSmallBlind = smallBlind;
+            _tournamentBigBlind = bigBlind;
+            _tournamentAnte = ante;
+            _levelStartTime = levelStartTime;
+            _levelDurationSecs = levelDurationSecs;
+            _nextSmallBlind = nextSmallBlind;
+            _nextBigBlind = nextBigBlind;
+          });
+        };
     _wsService.onError = (error) {
       setState(() => _statusMessage = 'Error: $error');
     };
@@ -413,67 +455,108 @@ class _GameScreenState extends State<GameScreen> {
             Expanded(
               child: Center(
                 child: _gameState != null
-                    ? Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // The table layout with seats around it
-                          PokerTableWidget(
-                            maxSeats: _gameState!.maxSeats,
-                            players: _gameState!.players,
-                            currentPlayerSeat: _gameState!.currentPlayerSeat,
-                            myUserId: myUserId,
-                            onTakeSeat: !_isSeated ? _takeSeat : null,
-                            onRemoveBot: _removeBot,
-                            showingDown: isShowdown,
-                            gamePhase: _gameState!.phase,
-                            winningHand: _gameState!.winningHand,
-                            dealerSeat: _gameState!.dealerSeat,
-                            smallBlindSeat: _gameState!.smallBlindSeat,
-                            bigBlindSeat: _gameState!.bigBlindSeat,
-                            smallBlind: widget.table.smallBlind,
-                            potTotal: _gameState!.potTotal,
-                          ),
+                    ? LayoutBuilder(
+                        builder: (context, constraints) {
+                          // Calculate responsive table dimensions - match table widget sizing
+                          final maxWidth = constraints.maxWidth * 0.75;
+                          final maxHeight = constraints.maxHeight * 0.75;
 
-                          // Table center overlay (community cards)
-                          IgnorePointer(
-                            child: Container(
-                              constraints: const BoxConstraints(
-                                maxWidth: 400,
-                                maxHeight: 200,
+                          double tableWidth, tableHeight;
+                          if (maxWidth / maxHeight > 1.6) {
+                            tableHeight = maxHeight;
+                            tableWidth = tableHeight * 1.6;
+                          } else {
+                            tableWidth = maxWidth;
+                            tableHeight = tableWidth / 1.6;
+                          }
+
+                          // Calculate responsive positioning for overlay elements
+                          // Position community cards higher in the center area
+                          final cardTop = (constraints.maxHeight - tableHeight) / 2 + tableHeight * 0.25;
+                          
+                          // Calculate card dimensions with proper aspect ratio (1.4:1)
+                          final cardWidth = (tableWidth * 0.08).clamp(40.0, 60.0);
+                          final cardHeight = cardWidth * 1.4;
+                          
+                          return Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              // The table layout with seats around it
+                              PokerTableWidget(
+                                maxSeats: _gameState!.maxSeats,
+                                players: _gameState!.players,
+                                currentPlayerSeat: _gameState!.currentPlayerSeat,
+                                myUserId: myUserId,
+                                onTakeSeat: !_isSeated ? _takeSeat : null,
+                                onRemoveBot: _removeBot,
+                                showingDown: isShowdown,
+                                gamePhase: _gameState!.phase,
+                                winningHand: _gameState!.winningHand,
+                                dealerSeat: _gameState!.dealerSeat,
+                                smallBlindSeat: _gameState!.smallBlindSeat,
+                                bigBlindSeat: _gameState!.bigBlindSeat,
+                                smallBlind: widget.table.smallBlind,
+                                potTotal: _gameState!.potTotal,
                               ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  // Community cards
-                                  if (_gameState!.communityCards.isNotEmpty)
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black26,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: _gameState!.communityCards
-                                            .map(
-                                              (card) => CardWidget(
-                                                card: card,
-                                                width: 50,
-                                                height: 70,
-                                                isShowdown: isShowdown,
-                                              ),
-                                            )
-                                            .toList(),
-                                      ),
+
+                              // Table center overlay (community cards) - responsive positioning
+                              Positioned(
+                                top: cardTop,
+                                left: 0,
+                                right: 0,
+                                child: IgnorePointer(
+                                  child: Container(
+                                    constraints: BoxConstraints(
+                                      maxWidth: tableWidth * 0.8,
+                                      maxHeight: tableHeight * 0.5,
                                     ),
-                                ],
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        // Community cards - responsive sizing with proper aspect ratio
+                                        // Always reserve space to prevent layout shifts
+                                        SizedBox(
+                                          height: cardHeight + 16, // Card height + padding
+                                          child: _gameState!.communityCards.isNotEmpty
+                                              ? Container(
+                                                  padding: const EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.black26,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: _gameState!.communityCards
+                                                        .map(
+                                                          (card) => CardWidget(
+                                                            card: card,
+                                                            width: cardWidth,
+                                                            height: cardHeight,
+                                                            isShowdown: isShowdown,
+                                                          ),
+                                                        )
+                                                        .toList(),
+                                                  ),
+                                                )
+                                              : const SizedBox.shrink(),
+                                        ),
+                                        // Tournament info (if tournament table)
+                                        if (_tournamentId != null ||
+                                            _gameState!.tournamentId != null)
+                                          SizedBox(height: tableHeight * 0.02),
+                                        if (_tournamentId != null ||
+                                            _gameState!.tournamentId != null)
+                                          _buildTournamentInfo(),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
+                            ],
+                          );
+                        },
                       )
                     : const Center(
                         child: CircularProgressIndicator(color: Colors.white),
@@ -583,6 +666,139 @@ class _GameScreenState extends State<GameScreen> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTournamentInfo() {
+    // Use live tournament info from broadcast if available, otherwise use gameState data
+    final tournamentId = _tournamentId ?? _gameState?.tournamentId;
+    if (tournamentId == null) {
+      return const SizedBox.shrink();
+    }
+
+    final level =
+        (_tournamentLevel ?? _gameState?.tournamentBlindLevel ?? 0) + 1;
+    // Prioritize tournament blinds from either source, fallback to table blinds only if neither available
+    final smallBlind = _tournamentSmallBlind ?? 
+                      _gameState?.tournamentSmallBlind ?? 
+                      widget.table.smallBlind;
+    final bigBlind = _tournamentBigBlind ?? 
+                    _gameState?.tournamentBigBlind ?? 
+                    widget.table.bigBlind;
+    final nextSmall = _nextSmallBlind ?? _gameState?.tournamentNextSmallBlind;
+    final nextBig = _nextBigBlind ?? _gameState?.tournamentNextBigBlind;
+
+    // Calculate countdown using server time (prevents clock drift)
+    String countdown = '--:--';
+    final levelStart = _levelStartTime ?? _gameState?.tournamentLevelStartTime;
+    final levelDuration =
+        _levelDurationSecs ?? _gameState?.tournamentLevelDurationSecs;
+
+    if (_serverTime != null && levelStart != null && levelDuration != null) {
+      try {
+        final serverNow = DateTime.parse(_serverTime!);
+        final startTime = DateTime.parse(levelStart);
+        final duration = Duration(seconds: levelDuration);
+        final endTime = startTime.add(duration);
+        final remaining = endTime.difference(serverNow);
+
+        if (remaining.isNegative) {
+          countdown = '00:00';
+        } else {
+          final mins = remaining.inMinutes;
+          final secs = remaining.inSeconds % 60;
+          countdown =
+              '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    } else if (levelStart != null && levelDuration != null) {
+      // Fallback to client time if server time not available yet
+      try {
+        final startTime = DateTime.parse(levelStart);
+        final duration = Duration(seconds: levelDuration);
+        final endTime = startTime.add(duration);
+        final remaining = endTime.difference(DateTime.now());
+
+        if (remaining.isNegative) {
+          countdown = '00:00';
+        } else {
+          final mins = remaining.inMinutes;
+          final secs = remaining.inSeconds % 60;
+          countdown =
+              '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.amber.withOpacity(0.3)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Current level and countdown
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.timer, color: Colors.amber, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                'Level $level',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                countdown,
+                style: TextStyle(
+                  color:
+                      countdown.startsWith('00:') ||
+                          countdown.startsWith('0:') && countdown.length <= 4
+                      ? Colors.red
+                      : Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // Current and next blinds
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Blinds: \$$smallBlind/\$$bigBlind',
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+              if (nextSmall != null && nextBig != null) ...[
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.arrow_forward,
+                  color: Colors.white54,
+                  size: 14,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '\$$nextSmall/\$$nextBig',
+                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+        ],
       ),
     );
   }

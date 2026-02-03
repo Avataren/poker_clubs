@@ -45,6 +45,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         _onBlindLevelIncreased;
     widget.websocketService.onTournamentPlayerEliminated = _onPlayerEliminated;
     widget.websocketService.onTournamentFinished = _onTournamentFinished;
+    widget.websocketService.onTournamentCancelled = _onTournamentCancelled;
 
     // Load tables when switching to tables tab
     _tabController.addListener(() {
@@ -60,6 +61,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     widget.websocketService.onTournamentBlindLevelIncreased = null;
     widget.websocketService.onTournamentPlayerEliminated = null;
     widget.websocketService.onTournamentFinished = null;
+    widget.websocketService.onTournamentCancelled = null;
     _tabController.dispose();
     super.dispose();
   }
@@ -110,6 +112,17 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   ) {
     if (tournamentId == widget.tournamentId) {
       _showSnackBar('Tournament has finished!');
+      _loadDetail();
+    }
+  }
+
+  void _onTournamentCancelled(
+    String tournamentId,
+    String tournamentName,
+    String reason,
+  ) {
+    if (tournamentId == widget.tournamentId) {
+      _showSnackBar('Tournament cancelled: $reason');
       _loadDetail();
     }
   }
@@ -563,19 +576,19 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ],
       ),
       child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        child: Row(
+          spacing: 8,
           children: [
             // Show Fill with Bots button if tournament is in registration and not full
             if (tournament.status == 'registering' &&
-                _detail!.registrations.length < tournament.maxPlayers) ...[
-              SizedBox(
-                width: double.infinity,
+                _detail!.registrations.length < tournament.maxPlayers)
+              Expanded(
                 child: ElevatedButton.icon(
                   onPressed: _isProcessing ? null : _fillWithBots,
-                  icon: const Icon(Icons.smart_toy),
+                  icon: const Icon(Icons.smart_toy, size: 18),
                   label: Text(
-                    'Fill ${tournament.maxPlayers - _detail!.registrations.length} Remaining Seats with Bots',
+                    'Fill ${tournament.maxPlayers - _detail!.registrations.length} with Bots',
+                    style: const TextStyle(fontSize: 13),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.purple,
@@ -584,17 +597,17 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
-            ],
             // Show Cancel button if tournament hasn't finished
             if (tournament.status != 'finished' &&
-                tournament.status != 'cancelled') ...[
-              SizedBox(
-                width: double.infinity,
+                tournament.status != 'cancelled')
+              Expanded(
                 child: ElevatedButton.icon(
                   onPressed: _isProcessing ? null : _cancelTournament,
-                  icon: const Icon(Icons.cancel),
-                  label: const Text('Cancel Tournament'),
+                  icon: const Icon(Icons.cancel, size: 18),
+                  label: const Text(
+                    'Cancel',
+                    style: TextStyle(fontSize: 13),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red.shade700,
                     foregroundColor: Colors.white,
@@ -602,18 +615,12 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
-            ],
-            Row(
-              children: [
-                Expanded(
-                  child: _buildActionButton(
-                    tournament,
-                    isRegistered,
-                    canRegister,
-                  ),
-                ),
-              ],
+            Expanded(
+              child: _buildActionButton(
+                tournament,
+                isRegistered,
+                canRegister,
+              ),
             ),
           ],
         ),
@@ -630,44 +637,56 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
       if (isRegistered) {
         return ElevatedButton.icon(
           onPressed: _isProcessing ? null : _unregister,
-          icon: const Icon(Icons.exit_to_app),
-          label: const Text('Unregister'),
+          icon: const Icon(Icons.exit_to_app, size: 18),
+          label: const Text(
+            'Unregister',
+            style: TextStyle(fontSize: 13),
+          ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red,
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         );
       } else if (canRegister) {
         return ElevatedButton.icon(
           onPressed: _isProcessing ? null : _register,
-          icon: const Icon(Icons.how_to_reg),
-          label: Text('Register - \$${_formatChips(tournament.buyIn)}'),
+          icon: const Icon(Icons.how_to_reg, size: 18),
+          label: Text(
+            'Register - \$${_formatChips(tournament.buyIn)}',
+            style: const TextStyle(fontSize: 13),
+          ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.green,
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         );
       } else {
         return ElevatedButton.icon(
           onPressed: null,
-          icon: const Icon(Icons.block),
-          label: const Text('Registration Full'),
+          icon: const Icon(Icons.block, size: 18),
+          label: const Text(
+            'Full',
+            style: TextStyle(fontSize: 13),
+          ),
           style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         );
       }
     } else if (tournament.status == 'running') {
       return ElevatedButton.icon(
         onPressed: null,
-        icon: const Icon(Icons.play_arrow),
-        label: const Text('In Progress'),
+        icon: const Icon(Icons.play_arrow, size: 18),
+        label: const Text(
+          'In Progress',
+          style: TextStyle(fontSize: 13),
+        ),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.orange,
           foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.symmetric(vertical: 12),
         ),
       );
     }

@@ -18,6 +18,9 @@ class TableSeatWidget extends StatelessWidget {
   final bool isBigBlind;
   final int smallBlind;
   final bool isDealingCards;
+  final double seatSize;
+  final double cardWidth;
+  final double cardHeight;
 
   const TableSeatWidget({
     super.key,
@@ -34,6 +37,9 @@ class TableSeatWidget extends StatelessWidget {
     this.isBigBlind = false,
     this.smallBlind = 10,
     this.isDealingCards = false,
+    this.seatSize = 80.0,
+    this.cardWidth = 35.0,
+    this.cardHeight = 50.0,
   });
 
   bool get _hasCards {
@@ -45,6 +51,12 @@ class TableSeatWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isEmpty = player == null;
+    
+    // Calculate responsive font sizes
+    final usernameFontSize = (seatSize * 0.14).clamp(9.0, 13.0);
+    final stackFontSize = (seatSize * 0.15).clamp(10.0, 14.0);
+    final betFontSize = (seatSize * 0.11).clamp(8.0, 11.0);
+    final badgeFontSize = (seatSize * 0.11).clamp(8.0, 11.0);
 
     return Stack(
       clipBehavior: Clip.none,
@@ -57,7 +69,7 @@ class TableSeatWidget extends StatelessWidget {
             // Hide cards during dealing animation to avoid showing both animated and static cards
             // Use Opacity instead of conditionally rendering to prevent layout shifts
             SizedBox(
-              height: 50,
+              height: cardHeight,
               child: _hasCards
                   ? Opacity(
                       opacity: isDealingCards ? 0.0 : 1.0,
@@ -67,8 +79,8 @@ class TableSeatWidget extends StatelessWidget {
                             .map(
                               (card) => CardWidget(
                                 card: card,
-                                width: 35,
-                                height: 50,
+                                width: cardWidth,
+                                height: cardHeight,
                                 isShowdown: showingDown,
                               ),
                             )
@@ -78,7 +90,7 @@ class TableSeatWidget extends StatelessWidget {
                   : null,
             ),
 
-            const SizedBox(height: 4),
+            SizedBox(height: seatSize * 0.05),
 
             // Seat circle with winner badge overlay
             Stack(
@@ -93,8 +105,8 @@ class TableSeatWidget extends StatelessWidget {
                       ? onRemoveBot
                       : null,
                   child: Container(
-                    width: 80,
-                    height: 80,
+                    width: seatSize,
+                    height: seatSize,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: isEmpty
@@ -123,9 +135,9 @@ class TableSeatWidget extends StatelessWidget {
                           ? Text(
                               'Seat\n${seatNumber + 1}',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: Colors.white54,
-                                fontSize: 12,
+                                fontSize: usernameFontSize,
                               ),
                             )
                           : Column(
@@ -139,12 +151,12 @@ class TableSeatWidget extends StatelessWidget {
                                         ? Colors.black
                                         : Colors.white,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 11,
+                                    fontSize: usernameFontSize,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                const SizedBox(height: 2),
+                                SizedBox(height: seatSize * 0.025),
                                 Text(
                                   '\$${player!.stack}',
                                   style: TextStyle(
@@ -152,7 +164,7 @@ class TableSeatWidget extends StatelessWidget {
                                         ? Colors.black87
                                         : Colors.green[300],
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 12,
+                                    fontSize: stackFontSize,
                                   ),
                                 ),
                                 if (player!.currentBet > 0)
@@ -162,7 +174,7 @@ class TableSeatWidget extends StatelessWidget {
                                       color: isCurrentTurn
                                           ? Colors.black54
                                           : Colors.white70,
-                                      fontSize: 9,
+                                      fontSize: betFontSize,
                                     ),
                                   ),
                               ],
@@ -174,12 +186,12 @@ class TableSeatWidget extends StatelessWidget {
                 // Dealer / Blind badge
                 if (!isEmpty && (isDealer || isSmallBlind || isBigBlind))
                   Positioned(
-                    bottom: -4,
-                    left: -4,
+                    bottom: -(seatSize * 0.05),
+                    left: -(seatSize * 0.05),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 2,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: seatSize * 0.06,
+                        vertical: seatSize * 0.025,
                       ),
                       decoration: BoxDecoration(
                         color: isDealer
@@ -187,7 +199,7 @@ class TableSeatWidget extends StatelessWidget {
                             : isSmallBlind
                             ? Colors.blue[700]
                             : Colors.orange[700],
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(seatSize * 0.1),
                         border: Border.all(
                           color: isDealer
                               ? Colors.black54
@@ -205,7 +217,7 @@ class TableSeatWidget extends StatelessWidget {
                             : 'BB',
                         style: TextStyle(
                           color: isDealer ? Colors.black : Colors.white,
-                          fontSize: 9,
+                          fontSize: badgeFontSize,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -215,18 +227,18 @@ class TableSeatWidget extends StatelessWidget {
                 // Bot indicator
                 if (player != null && player!.isBot)
                   Positioned(
-                    top: -4,
-                    right: -4,
+                    top: -(seatSize * 0.05),
+                    right: -(seatSize * 0.05),
                     child: Container(
-                      padding: const EdgeInsets.all(2),
+                      padding: EdgeInsets.all(seatSize * 0.025),
                       decoration: BoxDecoration(
                         color: Colors.grey[800],
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white54, width: 1),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.smart_toy,
-                        size: 12,
+                        size: seatSize * 0.15,
                         color: Colors.white70,
                       ),
                     ),
@@ -236,14 +248,14 @@ class TableSeatWidget extends StatelessWidget {
                 if (player != null && player!.isWinner && showingDown)
                   Positioned(
                     child: Container(
-                      constraints: const BoxConstraints(maxWidth: 70),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
+                      constraints: BoxConstraints(maxWidth: seatSize * 0.875),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: seatSize * 0.075,
+                        vertical: seatSize * 0.025,
                       ),
                       decoration: BoxDecoration(
                         color: Colors.amber[600],
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(seatSize * 0.1),
                         border: Border.all(
                           color: Colors.amber[900]!,
                           width: 1.5,
@@ -259,13 +271,13 @@ class TableSeatWidget extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('🏆', style: TextStyle(fontSize: 16)),
+                          Text('🏆', style: TextStyle(fontSize: seatSize * 0.2)),
                           if (winningHand != null)
                             Text(
                               winningHand!,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: Colors.black,
-                                fontSize: 9,
+                                fontSize: badgeFontSize,
                                 fontWeight: FontWeight.bold,
                               ),
                               textAlign: TextAlign.center,
@@ -282,12 +294,12 @@ class TableSeatWidget extends StatelessWidget {
             // Player state indicator
             if (!isEmpty && (player!.isFolded || !player!.isActive))
               Padding(
-                padding: const EdgeInsets.only(top: 4),
+                padding: EdgeInsets.only(top: seatSize * 0.05),
                 child: Text(
                   player!.state,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white54,
-                    fontSize: 10,
+                    fontSize: betFontSize,
                     fontStyle: FontStyle.italic,
                   ),
                 ),
@@ -296,21 +308,21 @@ class TableSeatWidget extends StatelessWidget {
             // Last action indicator
             if (!isEmpty && player!.lastAction != null)
               Padding(
-                padding: const EdgeInsets.only(top: 2),
+                padding: EdgeInsets.only(top: seatSize * 0.025),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: seatSize * 0.075,
+                    vertical: seatSize * 0.025,
                   ),
                   decoration: BoxDecoration(
                     color: Colors.black54,
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(seatSize * 0.1),
                   ),
                   child: Text(
                     player!.lastAction!,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.amber,
-                      fontSize: 10,
+                      fontSize: betFontSize,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -364,9 +376,9 @@ class PokerTableWidget extends StatefulWidget {
 class _PokerTableWidgetState extends State<PokerTableWidget> {
   bool _animatingPot = false;
   bool _lastShowingDown = false;
-  Map<String, int> _winnerPots = {}; // Map of userId to pot amount won
-  double _lastTableWidth = 0;
-  double _lastTableHeight = 0;
+  final Map<String, int> _winnerPots = {}; // Map of userId to pot amount won
+  final double _lastTableWidth = 0;
+  final double _lastTableHeight = 0;
 
   // Card dealing animation
   final Map<String, int> _dealingCardsTo =
@@ -555,9 +567,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Calculate table size with fixed aspect ratio - use 85% of available space
-        final maxWidth = constraints.maxWidth * 0.85;
-        final maxHeight = constraints.maxHeight * 0.85;
+        // Calculate table size with fixed aspect ratio - use 75% of available space
+        // to leave room for seats positioned around the edges
+        final maxWidth = constraints.maxWidth * 0.75;
+        final maxHeight = constraints.maxHeight * 0.75;
 
         // Oval table aspect ratio (width:height = 1.6:1)
         double tableWidth, tableHeight;
@@ -569,12 +582,17 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           tableHeight = tableWidth / 1.6;
         }
 
-        // Calculate pot center position
-        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - 125);
+        // Calculate pot center position - responsive to table size
+        // Position pot above the center to avoid overlapping with community cards
+        final potTopOffset = tableHeight * 0.25; // 25% from center
+        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - potTopOffset);
 
         // Track dimension changes to force animation update on significant resize
         final dimensionKey =
             '${(tableWidth / 10).round()}_${(tableHeight / 10).round()}';
+        
+        // Calculate responsive border width
+        final borderWidth = (tableWidth * 0.012).clamp(4.0, 10.0);
 
         return SizedBox(
           width: tableWidth,
@@ -592,7 +610,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                     borderRadius: BorderRadius.circular(
                       (tableHeight * 0.7) / 2,
                     ),
-                    border: Border.all(color: Colors.brown, width: 8),
+                    border: Border.all(color: Colors.brown, width: borderWidth),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.3),
@@ -630,9 +648,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                   final radiusY = tableHeight * 0.35;
                   final targetX = radiusX * cos(angle);
                   final targetY = radiusY * sin(angle);
+                  final seatOffset = tableHeight * 0.08; // Responsive offset
                   final targetOffset = Offset(
                     (tableWidth / 2) + targetX,
-                    (tableHeight / 2) + targetY - 40,
+                    (tableHeight / 2) + targetY - seatOffset,
                   );
 
                   return AnimatedPositioned(
@@ -649,14 +668,14 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                         child: ChipStackWidget(
                           amount: potAmount,
                           smallBlind: widget.smallBlind,
-                          scale: 1.0,
+                          scale: (tableWidth / 600).clamp(0.7, 1.2),
                           showAmount: true,
                           textColor: Colors.lightGreenAccent,
                         ),
                       ),
                     ),
                   );
-                }).toList()
+                })
               // Show centered pot when not animating
               else if (widget.potTotal > 0)
                 AnimatedPositioned(
@@ -668,7 +687,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                     child: ChipStackWidget(
                       amount: widget.potTotal,
                       smallBlind: widget.smallBlind,
-                      scale: 1.1,
+                      scale: (tableWidth / 500).clamp(0.8, 1.3),
                       showAmount: true,
                       textColor: Colors.lightGreenAccent,
                     ),
@@ -691,48 +710,58 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         (2 * pi * seatIndex / widget.maxSeats) - pi / 2; // Start from top
 
     // Oval dimensions - seats positioned outside the table surface
-    // Table surface is 70% of container, so we position seats around the full container
-    final radiusX = (tableWidth / 2) - 30;
-    final radiusY =
-        (tableHeight / 2) +
-        10; // Even larger Y radius to move seats away from center
+    // Reduce radius slightly to prevent overflow at edges
+    final radiusX = (tableWidth / 2) * 0.92;
+    final radiusY = (tableHeight / 2) * 0.95;
 
     final x = radiusX * cos(angle);
     final y = radiusY * sin(angle);
 
-    // Find player at this seat
-    final player = widget.players.where((p) => p.seat == seatIndex).firstOrNull;
+    // Find player at this seat - exclude eliminated players (they're invisible)
+    final player = widget.players
+        .where((p) => p.seat == seatIndex && !p.isEliminated)
+        .firstOrNull;
     final isMe = player?.userId == widget.myUserId;
     final isCurrentTurn =
         widget.gamePhase.toLowerCase() != 'waiting' &&
         widget.currentPlayerSeat == seatIndex;
 
+    // Calculate responsive seat size
+    final seatSize = (tableWidth * 0.13).clamp(60.0, 90.0);
+    final cardWidth = (tableWidth * 0.058).clamp(28.0, 42.0);
+    final cardHeight = (tableHeight * 0.095).clamp(40.0, 60.0);
+
     return Positioned(
-      left:
-          (tableWidth / 2) + x - 40, // Center - offset for widget width (80/2)
-      top:
-          (tableHeight / 2) +
-          y -
-          95, // Center - offset for widget height, adjusted downward
-      child: TableSeatWidget(
-        seatNumber: seatIndex,
-        player: player,
-        isCurrentTurn: isCurrentTurn,
-        isMe: isMe,
-        onTakeSeat: player == null && widget.onTakeSeat != null
-            ? () => widget.onTakeSeat!(seatIndex)
-            : null,
-        onRemoveBot:
-            player != null && player.isBot && widget.onRemoveBot != null
-            ? () => widget.onRemoveBot!(player.userId)
-            : null,
-        showingDown: widget.showingDown,
-        winningHand: widget.winningHand,
-        isDealer: widget.dealerSeat == seatIndex,
-        isSmallBlind: widget.smallBlindSeat == seatIndex,
-        isBigBlind: widget.bigBlindSeat == seatIndex,
-        smallBlind: widget.smallBlind,
-        isDealingCards: player != null && _dealingCardsTo.containsKey(player.userId),
+      left: (tableWidth / 2) + x - (seatSize / 2),
+      top: (tableHeight / 2) + y - (seatSize + cardHeight + 8) / 2 - (tableHeight * 0.03),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: seatSize * 1.2,
+          maxHeight: seatSize + cardHeight + 50, // Extra space for badges and text
+        ),
+        child: TableSeatWidget(
+          seatNumber: seatIndex,
+          player: player,
+          isCurrentTurn: isCurrentTurn,
+          isMe: isMe,
+          onTakeSeat: player == null && widget.onTakeSeat != null
+              ? () => widget.onTakeSeat!(seatIndex)
+              : null,
+          onRemoveBot:
+              player != null && player.isBot && widget.onRemoveBot != null
+              ? () => widget.onRemoveBot!(player.userId)
+              : null,
+          showingDown: widget.showingDown,
+          winningHand: widget.winningHand,
+          isDealer: widget.dealerSeat == seatIndex,
+          isSmallBlind: widget.smallBlindSeat == seatIndex,
+          isBigBlind: widget.bigBlindSeat == seatIndex,
+          smallBlind: widget.smallBlind,
+          isDealingCards: player != null && _dealingCardsTo.containsKey(player.userId),
+          seatSize: seatSize,
+          cardWidth: cardWidth,
+          cardHeight: cardHeight,
+        ),
       ),
     );
   }
@@ -742,8 +771,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     double tableWidth,
     double tableHeight,
   ) {
-    // Find player at this seat
-    final player = widget.players.where((p) => p.seat == seatIndex).firstOrNull;
+    // Find player at this seat - exclude eliminated players
+    final player = widget.players
+        .where((p) => p.seat == seatIndex && !p.isEliminated)
+        .firstOrNull;
 
     // No chips if no player or no bet
     if (player == null || player.currentBet <= 0) {
@@ -754,19 +785,22 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     final angle = (2 * pi * seatIndex / widget.maxSeats) - pi / 2;
 
     // Position chips at 60% of the seat radius (on the table, between player and center)
-    final chipRadiusX = ((tableWidth / 2) - 30) * 0.6;
-    final chipRadiusY = ((tableHeight / 2) + 10) * 0.6;
+    final chipRadiusX = ((tableWidth / 2) * 0.92) * 0.6;
+    final chipRadiusY = ((tableHeight / 2) * 0.95) * 0.6;
 
     final x = chipRadiusX * cos(angle);
     final y = chipRadiusY * sin(angle);
 
+    // Responsive chip stack sizing
+    final chipStackSize = (tableWidth * 0.067).clamp(30.0, 50.0);
+
     return Positioned(
-      left: (tableWidth / 2) + x - 20, // Center chip stack
-      top: (tableHeight / 2) + y - 30,
+      left: (tableWidth / 2) + x - (chipStackSize / 2),
+      top: (tableHeight / 2) + y - (chipStackSize * 0.75),
       child: ChipStackWidget(
         amount: player.currentBet,
         smallBlind: widget.smallBlind,
-        scale: 1.0,
+        scale: (tableWidth / 600).clamp(0.7, 1.2),
         showAmount: true,
       ),
     );
@@ -777,8 +811,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     double tableWidth,
     double tableHeight,
   ) {
-    // Find player at this seat
-    final player = widget.players.where((p) => p.seat == seatIndex).firstOrNull;
+    // Find player at this seat - exclude eliminated players
+    final player = widget.players
+        .where((p) => p.seat == seatIndex && !p.isEliminated)
+        .firstOrNull;
 
     // Only show animation if this player is being dealt cards
     if (player == null || !_dealingCardsTo.containsKey(player.userId)) {
@@ -797,14 +833,19 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
     // Calculate target position (same as seat position but offset for cards)
     final angle = (2 * pi * seatIndex / widget.maxSeats) - pi / 2;
-    final radiusX = (tableWidth / 2) - 30;
-    final radiusY = (tableHeight / 2) + 10;
+    final radiusX = (tableWidth / 2) * 0.92;
+    final radiusY = (tableHeight / 2) * 0.95;
 
     final targetX = radiusX * cos(angle);
     final targetY = radiusY * sin(angle);
 
+    // Calculate responsive card dimensions
+    final cardWidth = (tableWidth * 0.058).clamp(28.0, 42.0);
+    final cardHeight = (tableHeight * 0.095).clamp(40.0, 60.0);
+    final seatSize = (tableWidth * 0.13).clamp(60.0, 90.0);
+
     // Offset second card slightly to the right
-    final cardOffset = (cardNumber - 1) * 20.0;
+    final cardOffset = (cardNumber - 1) * (cardWidth * 0.57);
 
     // Check if animation has started (determines position)
     final bool animationStarted = _cardAnimationStarted[player.userId] ?? false;
@@ -814,15 +855,20 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       curve: Curves.easeOut,
       // Start from center, move to player position after animation starts
       left: animationStarted 
-          ? (tableWidth / 2) + targetX - 40 + cardOffset
-          : (tableWidth / 2) - 17.5, // Center of table (card width is 35, so -17.5)
+          ? (tableWidth / 2) + targetX - (seatSize / 2) + cardOffset
+          : (tableWidth / 2) - (cardWidth / 2),
       top: animationStarted
-          ? (tableHeight / 2) + targetY - 120 // Above seat (where cards appear)
-          : (tableHeight / 2) - 25, // Center of table (card height is 50, so -25)
+          ? (tableHeight / 2) + targetY - (seatSize + cardHeight + 8) / 2
+          : (tableHeight / 2) - (cardHeight / 2),
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 100),
         opacity: 1.0,
-        child: CardWidget(card: card, width: 35, height: 50, isShowdown: false),
+        child: CardWidget(
+          card: card,
+          width: cardWidth,
+          height: cardHeight,
+          isShowdown: false,
+        ),
       ),
     );
   }

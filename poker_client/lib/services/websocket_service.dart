@@ -30,6 +30,22 @@ class WebSocketService {
     List<TournamentWinner> winners,
   )?
   onTournamentFinished;
+  Function(String tournamentId, String tournamentName, String reason)?
+  onTournamentCancelled;
+  // Live tournament info broadcast (every second)
+  Function(
+    String tournamentId,
+    String serverTime,
+    int level,
+    int smallBlind,
+    int bigBlind,
+    int ante,
+    String levelStartTime,
+    int levelDurationSecs,
+    int? nextSmallBlind,
+    int? nextBigBlind,
+  )?
+  onTournamentInfo;
 
   bool get isConnected => _channel != null;
 
@@ -132,6 +148,33 @@ class WebSocketService {
             winners,
           );
           onGlobalUpdate?.call(); // Refresh tournament lists
+          break;
+
+        case 'TournamentCancelled':
+          final payload = data['payload'];
+          print('Tournament cancelled: ${payload['tournament_name']}');
+          onTournamentCancelled?.call(
+            payload['tournament_id'],
+            payload['tournament_name'],
+            payload['reason'],
+          );
+          onGlobalUpdate?.call(); // Refresh tournament lists
+          break;
+
+        case 'TournamentInfo':
+          final payload = data['payload'];
+          onTournamentInfo?.call(
+            payload['tournament_id'],
+            payload['server_time'],
+            payload['level'],
+            payload['small_blind'],
+            payload['big_blind'],
+            payload['ante'],
+            payload['level_start_time'],
+            payload['level_duration_secs'],
+            payload['next_small_blind'],
+            payload['next_big_blind'],
+          );
           break;
 
         default:
