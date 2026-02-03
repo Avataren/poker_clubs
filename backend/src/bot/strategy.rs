@@ -127,12 +127,12 @@ impl BotStrategy for SimpleStrategy {
                     PlayerAction::AllIn
                 } else {
                     let raise_size = self.calculate_raise(view, adjusted_strength, &mut rng);
-                    PlayerAction::Raise(raise_size)
+                    self.raise_action(view, raise_size)
                 }
             } else if is_bluffing && view.phase != GamePhase::PreFlop {
                 // Occasional bluff bet
                 let raise_size = self.calculate_raise(view, 0.5, &mut rng);
-                PlayerAction::Raise(raise_size)
+                self.raise_action(view, raise_size)
             } else {
                 PlayerAction::Check
             }
@@ -149,7 +149,7 @@ impl BotStrategy for SimpleStrategy {
                     PlayerAction::AllIn
                 } else {
                     let raise_size = self.calculate_raise(view, adjusted_strength, &mut rng);
-                    PlayerAction::Raise(raise_size)
+                    self.raise_action(view, raise_size)
                 }
             } else if is_bluffing {
                 // Bluff raise
@@ -157,7 +157,7 @@ impl BotStrategy for SimpleStrategy {
                     PlayerAction::AllIn
                 } else {
                     let raise_size = self.calculate_raise(view, 0.5, &mut rng);
-                    PlayerAction::Raise(raise_size)
+                    self.raise_action(view, raise_size)
                 }
             } else if adjusted_strength >= min_call_strength {
                 // Decent hand: call
@@ -175,8 +175,10 @@ impl BotStrategy for SimpleStrategy {
 impl SimpleStrategy {
     fn calculate_raise(&self, view: &BotGameView, strength: f64, rng: &mut impl Rng) -> i64 {
         let bb = view.big_blind.max(1);
-        let pot = view.pot_total.max(bb);
+        let to_call = (view.current_bet - view.my_current_bet).max(0);
+        let pot = (view.pot_total + to_call).max(bb);
         let min_raise = view.min_raise.max(bb);
+        let stack_after_call = (view.my_stack - to_call).max(0);
 
         // Preflop: use BB-based sizing (2.5-4x BB)
         if view.community_cards.is_empty() {
@@ -187,7 +189,7 @@ impl SimpleStrategy {
             };
             let multiplier = 2.5 + strength * 1.5 + self.aggression * 0.5 + opponent_modifier;
             let raise = (bb as f64 * multiplier) as i64;
-            return raise.max(min_raise).min(view.my_stack);
+            return raise.max(min_raise).min(stack_after_call);
         }
 
         // Postflop: use pot-based sizing like real players
@@ -228,9 +230,19 @@ impl SimpleStrategy {
         let variance: f64 = rng.gen_range(0.9..1.15);
         let raise = (pot as f64 * base_percentage * variance) as i64;
 
-        // Ensure minimum bet is at least 1 BB, and don't exceed stack
+        // Ensure minimum bet is at least 1 BB, and don't exceed stack-after-call
         let min_bet = min_raise.max(bb);
-        raise.max(min_bet).min(view.my_stack)
+        raise.max(min_bet).min(stack_after_call)
+    }
+
+    fn raise_action(&self, view: &BotGameView, raise_size: i64) -> PlayerAction {
+        let to_call = (view.current_bet - view.my_current_bet).max(0);
+        let stack_after_call = (view.my_stack - to_call).max(0);
+        if raise_size < view.min_raise || raise_size >= stack_after_call {
+            PlayerAction::AllIn
+        } else {
+            PlayerAction::Raise(raise_size)
+        }
     }
 }
 
@@ -286,10 +298,13 @@ fn detect_draws(hole_cards: &[Card], community_cards: &[Card]) -> DrawInfo {
         ranks.push(card.rank);
     }
 
-    let flush_draw = community_cards.len() < 5 && suit_counts.iter().any(|&count| count == 4);
+    let has_flush_suit = hole_cards.iter().any(|card| {
+        suit_counts.get(card.suit as usize).copied().unwrap_or(0) == 4
+    });
+    let flush_draw = community_cards.len() < 5 && has_flush_suit;
 
     let straight_draw = if community_cards.len() >= 3 && community_cards.len() < 5 {
-        straight_draw_from_ranks(&ranks)
+        straight_draw_from_cards(hole_cards, &ranks)
     } else {
         StraightDraw::None
     };
@@ -300,13 +315,18 @@ fn detect_draws(hole_cards: &[Card], community_cards: &[Card]) -> DrawInfo {
     }
 }
 
-fn straight_draw_from_ranks(ranks: &[u8]) -> StraightDraw {
+fn straight_draw_from_cards(hole_cards: &[Card], ranks: &[u8]) -> StraightDraw {
     let mut unique: Vec<u8> = ranks.iter().copied().collect();
     if unique.contains(&14) {
         unique.push(1);
     }
     unique.sort_unstable();
     unique.dedup();
+
+    let mut hole_ranks: Vec<u8> = hole_cards.iter().map(|card| card.rank).collect();
+    if hole_ranks.contains(&14) {
+        hole_ranks.push(1);
+    }
 
     let rank_set: std::collections::HashSet<u8> = unique.iter().copied().collect();
     let mut best = StraightDraw::None;
@@ -317,7 +337,7 @@ fn straight_draw_from_ranks(ranks: &[u8]) -> StraightDraw {
         if count == 5 {
             return StraightDraw::None;
         }
-        if count == 4 {
+        if count == 4 && hole_ranks.iter().any(|r| window.contains(r)) {
             let missing_low = !rank_set.contains(&start);
             let missing_high = !rank_set.contains(&(start + 4));
             if missing_low || missing_high {

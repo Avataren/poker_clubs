@@ -1416,9 +1416,49 @@ async fn test_ws_unequal_allin_side_pots_conserve_chips() {
     let total_chips: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
     assert_eq!(total_chips, 1500, "Total chips should be 500 + 1000");
 
-    // Both players go all-in
-    game.send_action_current_player(PlayerAction::AllIn).await;
-    game.send_action_current_player(PlayerAction::AllIn).await;
+    // Both players go all-in, waiting for turn to advance to the next player
+    let state = game.get_state_p1().await.unwrap();
+    let first_seat = state.current_player_seat;
+    if first_seat == 0 {
+        game.send_p1(&ClientMessage::PlayerAction {
+            action: PlayerAction::AllIn,
+        })
+        .await;
+    } else {
+        game.send_p2(&ClientMessage::PlayerAction {
+            action: PlayerAction::AllIn,
+        })
+        .await;
+    }
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    game.drain_messages().await;
+
+    let mut next_state = game.get_state_p1().await.unwrap();
+    for _ in 0..10 {
+        if next_state.current_player_seat != first_seat
+            || matches!(next_state.phase, GamePhase::Showdown)
+        {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        next_state = game.get_state_p1().await.unwrap();
+    }
+
+    if !matches!(next_state.phase, GamePhase::Showdown) {
+        if next_state.current_player_seat == 0 {
+            game.send_p1(&ClientMessage::PlayerAction {
+                action: PlayerAction::AllIn,
+            })
+            .await;
+        } else {
+            game.send_p2(&ClientMessage::PlayerAction {
+                action: PlayerAction::AllIn,
+            })
+            .await;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        game.drain_messages().await;
+    }
 
     // Wait for all streets to auto-advance and showdown to complete
     tokio::time::sleep(tokio::time::Duration::from_millis(9000)).await;
@@ -1427,7 +1467,16 @@ async fn test_ws_unequal_allin_side_pots_conserve_chips() {
     let state = game.get_state_p1().await.unwrap();
 
     // Chips must be conserved regardless of who won
-    let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;
+    let stack_total: i64 = state.players.iter().map(|p| p.stack).sum();
+    let final_total: i64 = if matches!(state.phase, GamePhase::Showdown)
+        || state.pot_total >= total_chips
+    {
+        // During showdown, payouts have already been applied to stacks while the pot
+        // remains visible for animation. Avoid double-counting the pot.
+        stack_total
+    } else {
+        stack_total + state.pot_total
+    };
     assert_eq!(
         final_total, total_chips,
         "Chips must be conserved with unequal all-ins: initial={}, final={}",
