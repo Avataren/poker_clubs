@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../services/websocket_service.dart';
 import 'clubs_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -29,6 +30,10 @@ class _LoginScreenState extends State<LoginScreen> {
         _usernameController.text,
         _passwordController.text,
       );
+      final wsService = context.read<WebSocketService>();
+      if (!wsService.isConnected && apiService.token != null) {
+        wsService.connect(apiService.token!);
+      }
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -56,6 +61,10 @@ class _LoginScreenState extends State<LoginScreen> {
         _emailController.text,
         _passwordController.text,
       );
+      final wsService = context.read<WebSocketService>();
+      if (!wsService.isConnected && apiService.token != null) {
+        wsService.connect(apiService.token!);
+      }
 
       if (mounted) {
         Navigator.of(context).pushReplacement(

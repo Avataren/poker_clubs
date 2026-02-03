@@ -53,6 +53,8 @@ pub struct GameServer {
     club_broadcasts: Arc<RwLock<HashMap<String, broadcast::Sender<ClubBroadcast>>>>,
     // Global broadcast - for new clubs, global events
     global_broadcast: broadcast::Sender<GlobalBroadcast>,
+    // Tournament broadcast - for tournament lifecycle events
+    tournament_broadcast: broadcast::Sender<ServerMessage>,
     // Bot manager - tracks server-side bot players
     bot_manager: Arc<RwLock<BotManager>>,
 }
@@ -60,6 +62,7 @@ pub struct GameServer {
 impl GameServer {
     pub fn new(jwt_manager: Arc<JwtManager>, pool: Arc<sqlx::SqlitePool>) -> Self {
         let (global_tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+        let (tournament_tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         Self {
             tables: Arc::new(RwLock::new(HashMap::new())),
             jwt_manager,
@@ -67,6 +70,7 @@ impl GameServer {
             table_broadcasts: Arc::new(RwLock::new(HashMap::new())),
             club_broadcasts: Arc::new(RwLock::new(HashMap::new())),
             global_broadcast: global_tx,
+            tournament_broadcast: tournament_tx,
             bot_manager: Arc::new(RwLock::new(BotManager::new())),
         }
     }
@@ -74,6 +78,10 @@ impl GameServer {
     #[allow(dead_code)] // Prepared for global event subscriptions
     pub fn subscribe_global(&self) -> broadcast::Receiver<GlobalBroadcast> {
         self.global_broadcast.subscribe()
+    }
+
+    pub fn subscribe_tournament_events(&self) -> broadcast::Receiver<ServerMessage> {
+        self.tournament_broadcast.subscribe()
     }
 
     #[allow(dead_code)] // Prepared for club-level event subscriptions
@@ -209,7 +217,7 @@ impl GameServer {
     }
 
     /// Broadcast a tournament event to all tables in a tournament
-    pub async fn broadcast_tournament_event(&self, tournament_id: &str, _message: ServerMessage) {
+    pub async fn broadcast_tournament_event(&self, tournament_id: &str, message: ServerMessage) {
         let tables = self.tables.read().await;
         let mut table_ids = Vec::new();
 
@@ -233,6 +241,9 @@ impl GameServer {
                 });
             }
         }
+
+        let _ = self.tournament_broadcast.send(message);
+        tracing::debug!("Broadcasted tournament event for {}", tournament_id);
     }
 
     async fn get_or_create_broadcast(&self, table_id: &str) -> broadcast::Receiver<TableBroadcast> {
@@ -489,6 +500,8 @@ async fn handle_socket(
     let mut current_club_id: Option<String> = None;
     let mut club_broadcast_rx: Option<broadcast::Receiver<ClubBroadcast>> = None;
     let mut global_broadcast_rx: Option<broadcast::Receiver<GlobalBroadcast>> = None;
+    let mut tournament_broadcast_rx: Option<broadcast::Receiver<ServerMessage>> =
+        Some(game_server.subscribe_tournament_events());
 
     //Check if user was already at a table (reconnection after server restart)
     // For now, we don't persist this, but we could add it later
@@ -583,6 +596,20 @@ async fn handle_socket(
                     // Notify client of global events (new clubs, etc.)
                     tracing::debug!("Global broadcast received");
                     let msg = ServerMessage::GlobalUpdate;
+                    if let Ok(msg_text) = serde_json::to_string(&msg) {
+                        let _ = sender.send(Message::Text(msg_text)).await;
+                    }
+                }
+            }
+
+            // Handle tournament broadcast notifications
+            tournament_msg = async {
+                match &mut tournament_broadcast_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Ok(msg) = tournament_msg {
                     if let Ok(msg_text) = serde_json::to_string(&msg) {
                         let _ = sender.send(Message::Text(msg_text)).await;
                     }
@@ -932,6 +959,43 @@ async fn handle_client_message(
                 }
                 Err(e) => ServerMessage::Error { message: e },
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GameServer;
+    use crate::auth::JwtManager;
+    use crate::ws::messages::ServerMessage;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn tournament_broadcast_reaches_subscribers() {
+        let pool = sqlx::SqlitePool::connect(":memory:")
+            .await
+            .expect("failed to create sqlite pool");
+        let jwt_manager = Arc::new(JwtManager::new("test-secret".to_string()));
+        let server = GameServer::new(jwt_manager, Arc::new(pool));
+        let mut rx = server.subscribe_tournament_events();
+
+        server
+            .broadcast_tournament_event(
+                "tourney-1",
+                ServerMessage::TournamentStarted {
+                    tournament_id: "tourney-1".to_string(),
+                    tournament_name: "Test Tourney".to_string(),
+                    table_id: None,
+                },
+            )
+            .await;
+
+        let message = rx.recv().await.expect("broadcast message");
+        match message {
+            ServerMessage::TournamentStarted { tournament_id, .. } => {
+                assert_eq!(tournament_id, "tourney-1");
+            }
+            other => panic!("unexpected message: {:?}", other),
         }
     }
 }

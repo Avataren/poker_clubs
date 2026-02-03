@@ -48,7 +48,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
 
     // Load tables when switching to tables tab
     _tabController.addListener(() {
-      if (_tabController.index == 3 && _tables.isEmpty) {
+      if (_tabController.index == 2 && _tables.isEmpty) {
         _loadTables();
       }
     });
@@ -56,6 +56,10 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
 
   @override
   void dispose() {
+    widget.websocketService.onTournamentStarted = null;
+    widget.websocketService.onTournamentBlindLevelIncreased = null;
+    widget.websocketService.onTournamentPlayerEliminated = null;
+    widget.websocketService.onTournamentFinished = null;
     _tabController.dispose();
     super.dispose();
   }
