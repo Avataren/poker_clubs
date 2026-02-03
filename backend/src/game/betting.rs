@@ -64,6 +64,10 @@ impl BettingValidator {
         action: &PlayerAction,
         round: &BettingRound,
     ) -> GameResult<()> {
+        if !player.can_act() {
+            return Err(GameError::CannotAct);
+        }
+
         match action {
             PlayerAction::Fold => {
                 // Can always fold
@@ -90,6 +94,13 @@ impl BettingValidator {
     }
 
     fn validate_raise(player: &Player, amount: i64, round: &BettingRound) -> GameResult<()> {
+        if amount <= 0 {
+            return Err(GameError::RaiseTooSmall {
+                min_raise: round.min_raise,
+                attempted: amount,
+            });
+        }
+
         // Check minimum raise
         if amount < round.min_raise {
             return Err(GameError::RaiseTooSmall {
@@ -126,6 +137,32 @@ impl BettingValidator {
 pub struct BettingExecutor;
 
 impl BettingExecutor {
+    fn execute_bet(
+        player: &mut Player,
+        pot: &mut PotManager,
+        round: &mut BettingRound,
+        target_total: i64,
+        requested_raise: i64,
+    ) -> (i64, bool) {
+        let current_player_bet = player.current_bet;
+        let total_to_bet = target_total.saturating_sub(current_player_bet);
+        let actual = player.place_bet(total_to_bet);
+        pot.add_bet(player.seat, actual);
+
+        let new_total = current_player_bet + actual;
+        let is_raise = new_total > round.current_bet;
+
+        if is_raise {
+            let effective_raise = new_total - round.current_bet;
+            if effective_raise >= round.min_raise && requested_raise > 0 {
+                round.min_raise = requested_raise;
+            }
+            round.current_bet = new_total;
+        }
+
+        (actual, is_raise)
+    }
+
     /// Execute a validated action
     ///
     /// Returns (chips_added_to_pot, is_raise)
@@ -151,33 +188,13 @@ impl BettingExecutor {
                 (actual, false)
             }
             PlayerAction::Raise(amount) => {
-                let current_player_bet = player.current_bet;
                 let raise_to = round.current_bet + amount;
-                let total_to_bet = raise_to - current_player_bet;
-
-                let actual = player.place_bet(total_to_bet);
-                pot.add_bet(player.seat, actual);
-
-                // Update round state
-                round.current_bet = current_player_bet + actual;
-                round.min_raise = amount;
-
-                (actual, true)
+                Self::execute_bet(player, pot, round, raise_to, amount)
             }
             PlayerAction::AllIn => {
-                let stack = player.stack;
-                let actual = player.place_bet(stack);
-                pot.add_bet(player.seat, actual);
-
-                let new_total = player.current_bet;
-                let is_raise = new_total > round.current_bet;
-
-                if is_raise {
-                    round.min_raise = new_total - round.current_bet;
-                    round.current_bet = new_total;
-                }
-
-                (actual, is_raise)
+                let target_total = player.current_bet + player.stack;
+                let requested_raise = target_total.saturating_sub(round.current_bet);
+                Self::execute_bet(player, pot, round, target_total, requested_raise)
             }
         }
     }
@@ -194,14 +211,25 @@ impl BettingExecutor {
         big_blind: i64,
     ) -> (i64, i64) {
         let num_players = players.len();
+        if num_players == 0 {
+            return (0, 0);
+        }
 
-        // Small blind (next player after dealer)
-        let sb_seat = (dealer_seat + 1) % num_players;
+        // Small blind (next player after dealer), heads-up: dealer posts small blind
+        let sb_seat = if num_players == 2 {
+            dealer_seat
+        } else {
+            (dealer_seat + 1) % num_players
+        };
         let sb_amount = players[sb_seat].place_bet(small_blind);
         pot.add_bet(sb_seat, sb_amount);
 
         // Big blind
-        let bb_seat = (dealer_seat + 2) % num_players;
+        let bb_seat = if num_players == 2 {
+            (dealer_seat + 1) % num_players
+        } else {
+            (dealer_seat + 2) % num_players
+        };
         let bb_amount = players[bb_seat].place_bet(big_blind);
         pot.add_bet(bb_seat, bb_amount);
 
@@ -319,6 +347,16 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_action_fails_for_inactive_player() {
+        let mut player = create_test_player(0, 1000);
+        player.state = PlayerState::Folded;
+        let round = BettingRound::new(100, BettingStructure::NoLimit);
+
+        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round);
+        assert!(matches!(result, Err(GameError::CannotAct)));
+    }
+
+    #[test]
     fn test_execute_fold() {
         let mut player = create_test_player(0, 1000);
         let mut pot = PotManager::new();
@@ -370,6 +408,27 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_raise_short_all_in_does_not_update_min_raise() {
+        let mut player = create_test_player(0, 150);
+        let mut pot = PotManager::new();
+        let mut round = BettingRound::new(100, BettingStructure::NoLimit);
+        round.current_bet = 100;
+        round.min_raise = 100;
+
+        let (chips, is_raise) = BettingExecutor::execute_action(
+            &mut player,
+            PlayerAction::Raise(200),
+            &mut pot,
+            &mut round,
+        );
+
+        assert_eq!(chips, 150);
+        assert!(is_raise);
+        assert_eq!(round.current_bet, 150);
+        assert_eq!(round.min_raise, 100);
+    }
+
+    #[test]
     fn test_betting_engine_process_action() {
         let mut engine = BettingEngine::new(100, BettingStructure::NoLimit);
         let mut player = create_test_player(0, 1000);
@@ -379,5 +438,20 @@ mod tests {
         let result = engine.process_action(&mut player, PlayerAction::Check, &mut pot);
         assert!(result.is_ok());
         assert!(!result.unwrap()); // Not a raise
+    }
+
+    #[test]
+    fn test_post_blinds_heads_up() {
+        let mut players = vec![create_test_player(0, 1000), create_test_player(1, 1000)];
+        let mut pot = PotManager::new();
+        let mut round = BettingRound::new(100, BettingStructure::NoLimit);
+
+        let (sb_amount, bb_amount) =
+            BettingExecutor::post_blinds(&mut players, &mut pot, &mut round, 0, 50, 100);
+
+        assert_eq!(sb_amount, 50);
+        assert_eq!(bb_amount, 100);
+        assert_eq!(players[0].current_bet, 50);
+        assert_eq!(players[1].current_bet, 100);
     }
 }
