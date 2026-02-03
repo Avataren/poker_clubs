@@ -183,6 +183,7 @@ fn build_bot_view(table: &PokerTable, player_idx: usize) -> BotGameView {
         my_stack: player.stack,
         phase: table.phase.clone(),
         big_blind: table.big_blind,
+        min_raise: table.min_raise,
         num_active_opponents,
     }
 }
