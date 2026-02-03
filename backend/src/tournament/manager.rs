@@ -543,6 +543,16 @@ impl TournamentManager {
             .execute(&*self.pool)
             .await?;
 
+        // Mark the winner (last remaining player) as position 1
+        sqlx::query(
+            "UPDATE tournament_registrations 
+             SET finish_position = 1 
+             WHERE tournament_id = ? AND finish_position IS NULL",
+        )
+        .bind(tournament_id)
+        .execute(&*self.pool)
+        .await?;
+
         // Distribute prizes
         let winners = self.distribute_prizes(tournament_id).await?;
 
