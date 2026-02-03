@@ -286,7 +286,7 @@ fn detect_draws(hole_cards: &[Card], community_cards: &[Card]) -> DrawInfo {
         ranks.push(card.rank);
     }
 
-    let flush_draw = suit_counts.iter().any(|&count| count == 4);
+    let flush_draw = community_cards.len() < 5 && suit_counts.iter().any(|&count| count == 4);
 
     let straight_draw = if community_cards.len() >= 3 && community_cards.len() < 5 {
         straight_draw_from_ranks(&ranks)
