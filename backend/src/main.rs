@@ -82,10 +82,11 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Spawn background task for tournament blind level advancement (check every 10 seconds)
+    // Spawn background task for tournament blind level advancement (check every 1 second)
     let tournament_mgr_blinds = tournament_manager.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        tracing::info!("Tournament blind level check task started (runs every 1s)");
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
             interval.tick().await;
             if let Err(e) = tournament_mgr_blinds.check_all_blind_levels().await {
@@ -112,12 +113,17 @@ async fn main() -> anyhow::Result<()> {
     // Spawn background task for broadcasting tournament info (every 1 second)
     let tournament_mgr_info = tournament_manager.clone();
     tokio::spawn(async move {
+        tracing::info!("Tournament info broadcast task started (runs every 1s)");
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
             interval.tick().await;
-            if let Err(e) = tournament_mgr_info.broadcast_tournament_info().await {
-                tracing::error!("Error broadcasting tournament info: {:?}", e);
-            }
+            // Spawn each broadcast in its own task so it never blocks the timer
+            let mgr = tournament_mgr_info.clone();
+            tokio::spawn(async move {
+                if let Err(e) = mgr.broadcast_tournament_info().await {
+                    tracing::error!("Error broadcasting tournament info: {:?}", e);
+                }
+            });
         }
     });
 

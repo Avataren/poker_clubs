@@ -236,10 +236,27 @@ impl GameServer {
 
     /// Broadcast a tournament event to all tables in a tournament
     pub async fn broadcast_tournament_event(&self, tournament_id: &str, message: ServerMessage) {
+        // Get tournament to find its club_id
+        let tournament_result: Result<(String,), sqlx::Error> = sqlx::query_as(
+            "SELECT club_id FROM tournaments WHERE id = ?"
+        )
+        .bind(tournament_id)
+        .fetch_one(self.pool.as_ref())
+        .await;
+
+        if let Ok((club_id,)) = tournament_result {
+            // Send via tournament broadcast channel (scoped by club)
+            let broadcasts = self.tournament_broadcasts.read().await;
+            if let Some(tx) = broadcasts.get(&club_id) {
+                let _ = tx.send(message.clone());
+            }
+            drop(broadcasts);
+        }
+
+        // Also find and trigger table updates for certain tournament events
         let tables = self.tables.read().await;
         let mut table_ids = Vec::new();
 
-        // Find all tables for this tournament
         for (table_id, table) in tables.iter() {
             if let Some(tid) = &table.tournament_id {
                 if tid == tournament_id {
@@ -250,10 +267,10 @@ impl GameServer {
 
         drop(tables);
 
-        // Broadcast to all tournament tables
-        let broadcasts = self.table_broadcasts.read().await;
+        // Trigger table state updates
+        let table_broadcasts = self.table_broadcasts.read().await;
         for table_id in table_ids {
-            if let Some(tx) = broadcasts.get(&table_id) {
+            if let Some(tx) = table_broadcasts.get(&table_id) {
                 let _ = tx.send(TableBroadcast {
                     table_id: table_id.clone(),
                 });
@@ -871,6 +888,27 @@ async fn handle_client_message(
             // Subscribe to table as observer or join with seat
             *current_table_id = Some(table_id.clone());
             *broadcast_rx = Some(game_server.get_or_create_broadcast(&table_id).await);
+
+            // If this is a tournament table, subscribe to tournament broadcasts
+            let is_tournament = {
+                let tables = game_server.tables.read().await;
+                tables.get(&table_id).and_then(|t| t.tournament_id.as_ref()).is_some()
+            };
+            
+            if is_tournament {
+                // Get club_id for the table/tournament
+                let club_result: Result<(String,), sqlx::Error> = sqlx::query_as(
+                    "SELECT club_id FROM tables WHERE id = ?"
+                )
+                .bind(&table_id)
+                .fetch_one(game_server.pool.as_ref())
+                .await;
+                
+                if let Ok((club_id,)) = club_result {
+                    *tournament_broadcast_rx = Some(game_server.subscribe_tournament_club(&club_id).await);
+                    tracing::info!("User {} subscribed to tournament broadcasts for club {}", username, club_id);
+                }
+            }
 
             // If buyin is 0, just observe without taking a seat
             if buyin == 0 {

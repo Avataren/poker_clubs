@@ -37,6 +37,7 @@ class _GameScreenState extends State<GameScreen> {
   int? _tournamentAnte;
   String? _levelStartTime;
   int? _levelDurationSecs;
+  int? _levelTimeRemainingSecs; // Server-calculated remaining time
   int? _nextSmallBlind;
   int? _nextBigBlind;
 
@@ -64,11 +65,12 @@ class _GameScreenState extends State<GameScreen> {
           ante,
           levelStartTime,
           levelDurationSecs,
+          levelTimeRemainingSecs,
           nextSmallBlind,
           nextBigBlind,
         ) {
           print(
-            'DEBUG: TournamentInfo received - Level $level, Blinds $smallBlind/$bigBlind',
+            'DEBUG: TournamentInfo received - Level $level, Blinds $smallBlind/$bigBlind, Remaining: ${levelTimeRemainingSecs}s',
           );
           setState(() {
             _tournamentId = tournamentId;
@@ -79,6 +81,7 @@ class _GameScreenState extends State<GameScreen> {
             _tournamentAnte = ante;
             _levelStartTime = levelStartTime;
             _levelDurationSecs = levelDurationSecs;
+            _levelTimeRemainingSecs = levelTimeRemainingSecs;
             _nextSmallBlind = nextSmallBlind;
             _nextBigBlind = nextBigBlind;
           });
@@ -689,49 +692,17 @@ class _GameScreenState extends State<GameScreen> {
     final nextSmall = _nextSmallBlind ?? _gameState?.tournamentNextSmallBlind;
     final nextBig = _nextBigBlind ?? _gameState?.tournamentNextBigBlind;
 
-    // Calculate countdown using server time (prevents clock drift)
+    // Use server-calculated remaining time (no client-side calculation)
     String countdown = '--:--';
-    final levelStart = _levelStartTime ?? _gameState?.tournamentLevelStartTime;
-    final levelDuration =
-        _levelDurationSecs ?? _gameState?.tournamentLevelDurationSecs;
-
-    if (_serverTime != null && levelStart != null && levelDuration != null) {
-      try {
-        final serverNow = DateTime.parse(_serverTime!);
-        final startTime = DateTime.parse(levelStart);
-        final duration = Duration(seconds: levelDuration);
-        final endTime = startTime.add(duration);
-        final remaining = endTime.difference(serverNow);
-
-        if (remaining.isNegative) {
-          countdown = '00:00';
-        } else {
-          final mins = remaining.inMinutes;
-          final secs = remaining.inSeconds % 60;
-          countdown =
-              '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-        }
-      } catch (e) {
-        // Ignore parsing errors
-      }
-    } else if (levelStart != null && levelDuration != null) {
-      // Fallback to client time if server time not available yet
-      try {
-        final startTime = DateTime.parse(levelStart);
-        final duration = Duration(seconds: levelDuration);
-        final endTime = startTime.add(duration);
-        final remaining = endTime.difference(DateTime.now());
-
-        if (remaining.isNegative) {
-          countdown = '00:00';
-        } else {
-          final mins = remaining.inMinutes;
-          final secs = remaining.inSeconds % 60;
-          countdown =
-              '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-        }
-      } catch (e) {
-        // Ignore parsing errors
+    if (_levelTimeRemainingSecs != null) {
+      final remaining = _levelTimeRemainingSecs!;
+      if (remaining <= 0) {
+        countdown = '00:00';
+      } else {
+        final mins = remaining ~/ 60;
+        final secs = remaining % 60;
+        countdown =
+            '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
       }
     }
 

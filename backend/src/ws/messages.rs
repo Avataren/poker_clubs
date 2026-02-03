@@ -106,6 +106,7 @@ pub enum ServerMessage {
         ante: i64,
         level_start_time: String, // RFC3339
         level_duration_secs: i64,
+        level_time_remaining_secs: i64, // Server-calculated remaining time
         next_small_blind: Option<i64>,
         next_big_blind: Option<i64>,
     },

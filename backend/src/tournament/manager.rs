@@ -386,9 +386,11 @@ impl TournamentManager {
 
     /// Advance to the next blind level
     pub async fn advance_blind_level(&self, tournament_id: &str) -> Result<bool> {
+        tracing::info!("advance_blind_level called for tournament {}", tournament_id);
         let mut tournament = self.load_tournament(tournament_id).await?;
 
         if tournament.status != "running" {
+            tracing::warn!("Tournament {} not running (status: {}), skipping blind advance", tournament_id, tournament.status);
             return Ok(false);
         }
 
@@ -398,12 +400,20 @@ impl TournamentManager {
 
         if next_level >= blind_levels.len() {
             // No more levels, keep current
+            tracing::warn!("Tournament {} at max blind level {}, no more levels", tournament_id, tournament.current_blind_level);
             return Ok(false);
         }
 
         // Update tournament
         tournament.current_blind_level += 1;
         tournament.level_start_time = Some(Utc::now().to_rfc3339());
+
+        tracing::info!(
+            "Tournament {} advancing from level {} to level {}",
+            tournament_id,
+            tournament.current_blind_level - 1,
+            tournament.current_blind_level
+        );
 
         sqlx::query(
             "UPDATE tournaments SET current_blind_level = ?, level_start_time = ? WHERE id = ?",
@@ -413,6 +423,14 @@ impl TournamentManager {
         .bind(tournament_id)
         .execute(&*self.pool)
         .await?;
+
+        tracing::info!("Tournament {} database updated with new level", tournament_id);
+
+        // Update in-memory cache if it exists
+        if let Some(state) = self.tournaments.write().await.get_mut(tournament_id) {
+            state.tournament = tournament.clone();
+            tracing::info!("Tournament {} in-memory cache updated", tournament_id);
+        }
 
         let new_level = &blind_levels[next_level];
         tracing::info!(
@@ -1354,10 +1372,18 @@ impl TournamentManager {
                     let level_start_utc = level_start.with_timezone(&Utc);
                     let elapsed_secs = (now - level_start_utc).num_seconds();
 
+                    tracing::info!(
+                        "CHECK BLINDS - Tournament {} level {} - elapsed: {}s / duration: {}s",
+                        tournament.id,
+                        tournament.current_blind_level,
+                        elapsed_secs,
+                        tournament.level_duration_secs
+                    );
+
                     // Check if it's time to advance
                     if elapsed_secs >= tournament.level_duration_secs {
-                        tracing::info!(
-                            "Tournament {} level {} expired after {}s (duration: {}s)",
+                        tracing::warn!(
+                            "ADVANCING NOW - Tournament {} level {} expired after {}s (duration: {}s)",
                             tournament.id,
                             tournament.current_blind_level,
                             elapsed_secs,
@@ -1442,6 +1468,10 @@ impl TournamentManager {
                 .fetch_all(self.pool.as_ref())
                 .await?;
 
+        if running.is_empty() {
+            return Ok(()); // No running tournaments, skip silently
+        }
+
         for tournament in running {
             // Skip if no level start time (shouldn't happen in running state)
             let level_start_time = match &tournament.level_start_time {
@@ -1479,6 +1509,14 @@ impl TournamentManager {
             .fetch_optional(self.pool.as_ref())
             .await?;
 
+            // Calculate remaining time for this level (server-side)
+            let now = Utc::now();
+            let level_start = DateTime::parse_from_rfc3339(&level_start_time)
+                .unwrap()
+                .with_timezone(&Utc);
+            let elapsed_secs = (now - level_start).num_seconds();
+            let remaining_secs = (tournament.level_duration_secs - elapsed_secs).max(0);
+
             // Create tournament info message with current server time
             let message = ServerMessage::TournamentInfo {
                 tournament_id: tournament.id.clone(),
@@ -1489,6 +1527,7 @@ impl TournamentManager {
                 ante: current_level.ante,
                 level_start_time,
                 level_duration_secs: tournament.level_duration_secs,
+                level_time_remaining_secs: remaining_secs,
                 next_small_blind: next_level.as_ref().map(|l| l.small_blind),
                 next_big_blind: next_level.as_ref().map(|l| l.big_blind),
             };

@@ -42,6 +42,7 @@ class WebSocketService {
     int ante,
     String levelStartTime,
     int levelDurationSecs,
+    int levelTimeRemainingSecs,
     int? nextSmallBlind,
     int? nextBigBlind,
   )?
@@ -172,6 +173,7 @@ class WebSocketService {
             payload['ante'],
             payload['level_start_time'],
             payload['level_duration_secs'],
+            payload['level_time_remaining_secs'],
             payload['next_small_blind'],
             payload['next_big_blind'],
           );
