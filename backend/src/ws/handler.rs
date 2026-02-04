@@ -270,6 +270,23 @@ impl GameServer {
         Ok(())
     }
 
+    /// Validate that a tournament table has an open seat for a new player.
+    pub async fn can_seat_tournament_player(
+        &self,
+        table_id: &str,
+    ) -> Result<(), crate::game::error::GameError> {
+        let tables = self.tables.read().await;
+        let table = tables
+            .get(table_id)
+            .ok_or(crate::game::error::GameError::InvalidTableId)?;
+
+        if table.players.len() >= table.max_seats {
+            return Err(crate::game::error::GameError::TableFull);
+        }
+
+        Ok(())
+    }
+
     /// Update blinds on a table (for tournaments)
     pub async fn update_table_blinds(&self, table_id: &str, small_blind: i64, big_blind: i64) {
         let mut tables = self.tables.write().await;

@@ -470,6 +470,8 @@ impl TournamentManager {
             ));
         }
 
+        self.ensure_rebuy_seat_available(&tournament).await?;
+
         let rebuy_amount = if tournament.rebuy_amount > 0 {
             tournament.rebuy_amount
         } else {
@@ -498,6 +500,10 @@ impl TournamentManager {
             state.tournament = tournament.clone();
         }
 
+        let previous_eliminated_at = registration.eliminated_at.clone();
+        let previous_finish_position = registration.finish_position;
+        let previous_rebuys = registration.rebuys;
+
         registration.rebuys += 1;
         registration.eliminated_at = None;
         registration.finish_position = None;
@@ -513,8 +519,21 @@ impl TournamentManager {
         .execute(&*self.pool)
         .await?;
 
-        self.seat_tournament_player(&tournament, user_id, username, rebuy_stack)
+        if let Err(err) = self
+            .seat_tournament_player(&tournament, user_id, username, rebuy_stack)
+            .await
+        {
+            self.rollback_rebuy(
+                &tournament,
+                user_id,
+                rebuy_amount,
+                previous_rebuys,
+                previous_eliminated_at,
+                previous_finish_position,
+            )
             .await?;
+            return Err(err);
+        }
 
         tracing::info!(
             "Player {} rebought into tournament {} (rebuys: {})",
@@ -1063,6 +1082,30 @@ impl TournamentManager {
         Ok(())
     }
 
+    async fn ensure_rebuy_seat_available(&self, tournament: &Tournament) -> Result<()> {
+        let table_ids: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1 ORDER BY table_number",
+        )
+        .bind(&tournament.id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for (table_id,) in table_ids {
+            if self
+                .game_server
+                .can_seat_tournament_player(&table_id)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+
+        Err(AppError::BadRequest(
+            "No available tournament seats for rebuy".to_string(),
+        ))
+    }
+
     async fn ensure_addon_seated(&self, registration: &TournamentRegistration) -> Result<()> {
         let table_id = registration.starting_table_id.as_ref().ok_or_else(|| {
             AppError::BadRequest("Player is not seated at a tournament table".to_string())
@@ -1072,6 +1115,49 @@ impl TournamentManager {
             .can_tournament_top_up(table_id, &registration.user_id)
             .await
             .map_err(|e| AppError::BadRequest(format!("Add-on unavailable: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    async fn rollback_rebuy(
+        &self,
+        tournament: &Tournament,
+        user_id: &str,
+        rebuy_amount: i64,
+        previous_rebuys: i32,
+        previous_eliminated_at: Option<String>,
+        previous_finish_position: Option<i32>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE tournaments SET prize_pool = prize_pool - ?, remaining_players = remaining_players - 1 WHERE id = ?",
+        )
+        .bind(rebuy_amount)
+        .bind(&tournament.id)
+        .execute(&*self.pool)
+        .await?;
+
+        sqlx::query(
+            "UPDATE tournament_registrations 
+             SET rebuys = ?, eliminated_at = ?, finish_position = ?
+             WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(previous_rebuys)
+        .bind(previous_eliminated_at)
+        .bind(previous_finish_position)
+        .bind(&tournament.id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
+
+        if let Some(state) = self.tournaments.write().await.get_mut(&tournament.id) {
+            let mut updated = tournament.clone();
+            updated.prize_pool = (updated.prize_pool - rebuy_amount).max(0);
+            updated.remaining_players = (updated.remaining_players - 1).max(0);
+            state.tournament = updated;
+        }
+
+        self.refund_buy_in(&tournament.club_id, user_id, rebuy_amount)
+            .await?;
 
         Ok(())
     }
