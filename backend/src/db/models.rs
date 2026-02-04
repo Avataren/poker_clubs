@@ -273,6 +273,15 @@ pub struct Tournament {
     pub actual_start: Option<String>,
     pub finished_at: Option<String>,
     pub cancel_reason: Option<String>,
+    pub allow_rebuys: bool,
+    pub max_rebuys: i32,
+    pub rebuy_amount: i64,
+    pub rebuy_stack: i64,
+    pub allow_addons: bool,
+    pub max_addons: i32,
+    pub addon_amount: i64,
+    pub addon_stack: i64,
+    pub late_registration_secs: i64,
     pub created_at: String,
 }
 
@@ -288,6 +297,15 @@ impl Tournament {
         min_players: i32,
         level_duration_secs: i64,
         pre_seat_secs: i64,
+        allow_rebuys: bool,
+        max_rebuys: i32,
+        rebuy_amount: i64,
+        rebuy_stack: i64,
+        allow_addons: bool,
+        max_addons: i32,
+        addon_amount: i64,
+        addon_stack: i64,
+        late_registration_secs: i64,
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -311,6 +329,15 @@ impl Tournament {
             actual_start: None,
             finished_at: None,
             cancel_reason: None,
+            allow_rebuys,
+            max_rebuys,
+            rebuy_amount,
+            rebuy_stack,
+            allow_addons,
+            max_addons,
+            addon_amount,
+            addon_stack,
+            late_registration_secs,
             created_at: Utc::now().to_rfc3339(),
         }
     }
@@ -325,6 +352,8 @@ pub struct TournamentRegistration {
     pub eliminated_at: Option<String>,
     pub finish_position: Option<i32>,
     pub prize_amount: i64,
+    pub rebuys: i32,
+    pub addons: i32,
 }
 
 impl TournamentRegistration {
@@ -337,6 +366,8 @@ impl TournamentRegistration {
             eliminated_at: None,
             finish_position: None,
             prize_amount: 0,
+            rebuys: 0,
+            addons: 0,
         }
     }
 }

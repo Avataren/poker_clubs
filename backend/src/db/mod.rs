@@ -61,6 +61,16 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             "add_is_bot_field",
             include_str!("migrations/004_add_is_bot_field.sql"),
         ),
+        (
+            5,
+            "fix_tournament_tables_fk",
+            include_str!("migrations/005_fix_tournament_tables_fk.sql"),
+        ),
+        (
+            6,
+            "add_tournament_rebuys_addons_late_registration",
+            include_str!("migrations/006_add_tournament_rebuys_addons_late_registration.sql"),
+        ),
     ];
 
     for (version, name, sql) in migrations {

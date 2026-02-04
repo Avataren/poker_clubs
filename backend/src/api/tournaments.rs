@@ -11,6 +11,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -26,6 +27,15 @@ pub struct CreateSngRequest {
     pub starting_stack: i64,
     pub level_duration_mins: i32,
     pub variant_id: Option<String>,
+    pub allow_rebuys: Option<bool>,
+    pub max_rebuys: Option<i32>,
+    pub rebuy_amount: Option<i64>,
+    pub rebuy_stack: Option<i64>,
+    pub allow_addons: Option<bool>,
+    pub max_addons: Option<i32>,
+    pub addon_amount: Option<i64>,
+    pub addon_stack: Option<i64>,
+    pub late_registration_mins: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +49,15 @@ pub struct CreateMttRequest {
     pub level_duration_mins: i32,
     pub scheduled_start: Option<String>, // ISO 8601 timestamp
     pub variant_id: Option<String>,
+    pub allow_rebuys: Option<bool>,
+    pub max_rebuys: Option<i32>,
+    pub rebuy_amount: Option<i64>,
+    pub rebuy_stack: Option<i64>,
+    pub allow_addons: Option<bool>,
+    pub max_addons: Option<i32>,
+    pub addon_amount: Option<i64>,
+    pub addon_stack: Option<i64>,
+    pub late_registration_mins: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +158,8 @@ pub fn router() -> Router<Arc<TournamentAppState>> {
         // Registration
         .route("/:id/register", post(register_for_tournament))
         .route("/:id/unregister", delete(unregister_from_tournament))
+        .route("/:id/rebuy", post(rebuy_tournament_entry))
+        .route("/:id/addon", post(addon_tournament_entry))
         .route("/:id/players", get(get_tournament_players))
         .route("/:id/tables", get(get_tournament_tables))
         // Administration
@@ -173,6 +194,15 @@ async fn create_sng(
         max_players: req.max_players,
         min_players: req.min_players.unwrap_or(2),
         level_duration_secs: (req.level_duration_mins * 60) as i64,
+        allow_rebuys: req.allow_rebuys.unwrap_or(false),
+        max_rebuys: req.max_rebuys.unwrap_or(0),
+        rebuy_amount: req.rebuy_amount.unwrap_or(0),
+        rebuy_stack: req.rebuy_stack.unwrap_or(0),
+        allow_addons: req.allow_addons.unwrap_or(false),
+        max_addons: req.max_addons.unwrap_or(0),
+        addon_amount: req.addon_amount.unwrap_or(0),
+        addon_stack: req.addon_stack.unwrap_or(0),
+        late_registration_secs: req.late_registration_mins.unwrap_or(0).saturating_mul(60) as i64,
     };
 
     let tournament = state
@@ -215,6 +245,15 @@ async fn create_mtt(
         level_duration_secs: (req.level_duration_mins * 60) as i64,
         scheduled_start: req.scheduled_start,
         pre_seat_secs: 60, // 1 minute to find seat
+        allow_rebuys: req.allow_rebuys.unwrap_or(false),
+        max_rebuys: req.max_rebuys.unwrap_or(0),
+        rebuy_amount: req.rebuy_amount.unwrap_or(0),
+        rebuy_stack: req.rebuy_stack.unwrap_or(0),
+        allow_addons: req.allow_addons.unwrap_or(false),
+        max_addons: req.max_addons.unwrap_or(0),
+        addon_amount: req.addon_amount.unwrap_or(0),
+        addon_stack: req.addon_stack.unwrap_or(0),
+        late_registration_secs: req.late_registration_mins.unwrap_or(0).saturating_mul(60) as i64,
     };
 
     let tournament = state
@@ -326,7 +365,7 @@ async fn get_tournament_tables(
     for table in tables.iter_mut() {
         let count: Option<(i32,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM tournament_registrations 
-             WHERE tournament_id = ? AND starting_table_id = ? AND eliminated_at IS NULL"
+             WHERE tournament_id = ? AND starting_table_id = ? AND eliminated_at IS NULL",
         )
         .bind(&id)
         .bind(&table.table_id)
@@ -391,7 +430,7 @@ async fn get_tournament_details(
     // Check if current user is registered
     let is_registered = registrations.iter().any(|r| r.user_id == auth_user.user_id);
 
-    let can_register = tournament.status == "registering"
+    let can_register = can_register_for_tournament(&tournament)
         && tournament.registered_players < tournament.max_players
         && !is_registered;
 
@@ -456,6 +495,64 @@ async fn unregister_from_tournament(
         .await?;
 
     // Notify club members
+    state.game_server.notify_club(&tournament.club_id).await;
+
+    Ok(Json(RegistrationResponse {
+        success: true,
+        tournament,
+    }))
+}
+
+async fn rebuy_tournament_entry(
+    State(state): State<Arc<TournamentAppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<RegistrationResponse>> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    state
+        .tournament_manager
+        .rebuy_player(&id, &auth_user.user_id, &auth_user.username)
+        .await?;
+
+    let tournament: Tournament = sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await?;
+
+    state.game_server.notify_club(&tournament.club_id).await;
+
+    Ok(Json(RegistrationResponse {
+        success: true,
+        tournament,
+    }))
+}
+
+async fn addon_tournament_entry(
+    State(state): State<Arc<TournamentAppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<RegistrationResponse>> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    state
+        .tournament_manager
+        .addon_player(&id, &auth_user.user_id)
+        .await?;
+
+    let tournament: Tournament = sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await?;
+
     state.game_server.notify_club(&tournament.club_id).await;
 
     Ok(Json(RegistrationResponse {
@@ -638,6 +735,29 @@ async fn get_tournament_prizes(
     Ok(Json(PrizesResponse { tournament, prizes }))
 }
 
+fn can_register_for_tournament(tournament: &Tournament) -> bool {
+    if tournament.status == "registering" || tournament.status == "seating" {
+        return true;
+    }
+
+    if tournament.status != "running" || tournament.late_registration_secs <= 0 {
+        return false;
+    }
+
+    let actual_start = match tournament.actual_start.as_ref() {
+        Some(start) => start,
+        None => return false,
+    };
+
+    let start_time = match DateTime::parse_from_rfc3339(actual_start) {
+        Ok(value) => value.with_timezone(&Utc),
+        Err(_) => return false,
+    };
+
+    let deadline = start_time + Duration::seconds(tournament.late_registration_secs);
+    Utc::now() <= deadline
+}
+
 async fn fill_with_bots(
     State(state): State<Arc<TournamentAppState>>,
     Path(id): Path<String>,
@@ -706,20 +826,21 @@ async fn fill_with_bots(
         }
 
         // Get the bot's actual ID (in case it already existed)
-        let actual_bot_id = match sqlx::query_as::<_, (String,)>("SELECT id FROM users WHERE username = ?")
-            .bind(&bot_username)
-            .fetch_one(&state.pool)
-            .await
-        {
-            Ok((id,)) => {
-                tracing::info!("Bot {} has ID: {}", bot_username, id);
-                id
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch bot ID for {}: {:?}", bot_username, e);
-                return Err(e.into());
-            }
-        };
+        let actual_bot_id =
+            match sqlx::query_as::<_, (String,)>("SELECT id FROM users WHERE username = ?")
+                .bind(&bot_username)
+                .fetch_one(&state.pool)
+                .await
+            {
+                Ok((id,)) => {
+                    tracing::info!("Bot {} has ID: {}", bot_username, id);
+                    id
+                }
+                Err(e) => {
+                    tracing::error!("Failed to fetch bot ID for {}: {:?}", bot_username, e);
+                    return Err(e.into());
+                }
+            };
 
         // Register bot for tournament (bots don't need club membership or balance)
         tracing::info!("Registering bot {} for tournament", bot_username);
@@ -759,7 +880,7 @@ async fn fill_with_bots(
 
     let is_registered = registrations.iter().any(|r| r.user_id == auth_user.user_id);
 
-    let can_register = tournament.status == "registration"
+    let can_register = can_register_for_tournament(&tournament)
         && registrations.len() < tournament.max_players as usize;
 
     Ok(Json(TournamentDetailResponse {

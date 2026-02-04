@@ -50,7 +50,9 @@ pub fn create_app(
 
 /// Test helper to create an in-memory database and run migrations
 pub async fn create_test_db() -> db::DbPool {
-    let pool = sqlx::sqlite::SqlitePool::connect(":memory:")
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(":memory:")
         .await
         .expect("Failed to create in-memory database");
 
