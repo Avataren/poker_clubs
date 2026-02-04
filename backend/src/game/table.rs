@@ -1223,6 +1223,11 @@ impl PokerTable {
                 .players
                 .iter()
                 .map(|p| {
+                    // Check if this is an all-in runout situation (fewer than 2 players can act)
+                    // In this case, all active players' cards should be revealed like in real poker
+                    let is_allin_runout = self.players.iter().filter(|pl| pl.can_act()).count() < 2
+                        && self.players.iter().filter(|pl| pl.is_active_in_hand()).count() >= 2;
+                    
                     PublicPlayerState {
                         user_id: p.user_id.clone(),
                         username: p.username.clone(),
@@ -1233,8 +1238,8 @@ impl PokerTable {
                         hole_cards: if Some(p.user_id.as_str()) == for_user_id {
                             // Show own cards face-up
                             Some(p.hole_cards.clone())
-                        } else if self.phase == GamePhase::Showdown && p.is_active_in_hand() {
-                            // During showdown, show all active players' cards face-up
+                        } else if (self.phase == GamePhase::Showdown || is_allin_runout) && p.is_active_in_hand() {
+                            // During showdown OR all-in runout, show all active players' cards face-up
                             Some(p.hole_cards.clone())
                         } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
                             // For other players still in the hand, send placeholder face-down cards
@@ -1406,6 +1411,19 @@ impl PokerTable {
         if !self.format.eliminates_players() {
             return vec![];
         }
+
+        // Only eliminate players when no hand is in progress (Waiting phase)
+        // This ensures players see the complete hand result (showdown, pot animation)
+        // before being removed from the table
+        if self.phase != GamePhase::Waiting {
+            tracing::debug!(
+                "check_eliminations: Skipping - phase is {:?}, not Waiting",
+                self.phase
+            );
+            return vec![];
+        }
+
+        tracing::info!("check_eliminations: Processing in Waiting phase");
 
         let mut eliminated = vec![];
         

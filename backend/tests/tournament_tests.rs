@@ -2070,6 +2070,10 @@ async fn test_eliminated_players_dont_stay_sitting_out() {
         player.reset_for_new_hand();
     }
 
+    // Set phase to Waiting (simulating end of hand transition)
+    // Eliminations only happen in Waiting phase to let players see the showdown
+    table.phase = poker_server::game::table::GamePhase::Waiting;
+
     // In tournament mode, check eliminations should be called
     let eliminated = table.check_eliminations();
 
@@ -2420,5 +2424,282 @@ async fn test_prize_pool_integrity() {
                 position
             );
         }
+    }
+}
+
+// =============================================================================
+// Phase-gated elimination tests - ensures players see showdown before elimination
+// =============================================================================
+
+#[tokio::test]
+async fn test_elimination_only_happens_in_waiting_phase() {
+    use poker_server::game::format::SitAndGo;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    // Add players
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p3".to_string(), "Player3".to_string(), 1000)
+        .unwrap();
+
+    // Start a hand to get out of Waiting phase
+    table.start_new_hand();
+    assert_eq!(table.phase, GamePhase::PreFlop);
+
+    // Simulate player losing all chips during the hand
+    table.players[1].stack = 0;
+
+    // Check eliminations should NOT remove the player during PreFlop
+    let eliminated = table.check_eliminations();
+    assert_eq!(eliminated.len(), 0, "Should not eliminate during PreFlop phase");
+    assert_eq!(table.players.len(), 3, "Player should still be at table during PreFlop");
+
+    // Verify player 2 is still there
+    assert!(table.players.iter().any(|p| p.user_id == "p2"));
+}
+
+#[tokio::test]
+async fn test_elimination_blocked_during_showdown() {
+    use poker_server::game::format::SitAndGo;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    // Add players
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+
+    // Manually set phase to Showdown (simulating end of hand)
+    table.phase = GamePhase::Showdown;
+
+    // Simulate player losing all chips
+    table.players[1].stack = 0;
+
+    // Check eliminations should NOT remove the player during Showdown
+    let eliminated = table.check_eliminations();
+    assert_eq!(eliminated.len(), 0, "Should not eliminate during Showdown phase");
+    assert_eq!(table.players.len(), 2, "Player should still be at table during Showdown");
+}
+
+#[tokio::test]
+async fn test_elimination_blocked_during_flop_turn_river() {
+    use poker_server::game::format::SitAndGo;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    // Add players
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+
+    // Test all non-waiting phases
+    for phase in [GamePhase::Flop, GamePhase::Turn, GamePhase::River] {
+        table.phase = phase.clone();
+        table.players[1].stack = 0;
+
+        let eliminated = table.check_eliminations();
+        assert_eq!(
+            eliminated.len(),
+            0,
+            "Should not eliminate during {:?} phase",
+            phase
+        );
+        assert_eq!(
+            table.players.len(),
+            2,
+            "Player should still be at table during {:?}",
+            phase
+        );
+
+        // Reset for next iteration
+        table.players[1].stack = 1000;
+    }
+}
+
+#[tokio::test]
+async fn test_elimination_happens_in_waiting_phase() {
+    use poker_server::game::format::SitAndGo;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    // Add players
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p3".to_string(), "Player3".to_string(), 1000)
+        .unwrap();
+
+    // Ensure we're in Waiting phase
+    table.phase = GamePhase::Waiting;
+
+    // Simulate player losing all chips
+    table.players[1].stack = 0;
+
+    // Check eliminations SHOULD remove the player during Waiting
+    let eliminated = table.check_eliminations();
+    assert_eq!(eliminated.len(), 1, "Should eliminate during Waiting phase");
+    assert_eq!(eliminated[0], "p2");
+    assert_eq!(table.players.len(), 2, "Player should be removed in Waiting phase");
+
+    // Verify player 2 is gone
+    assert!(!table.players.iter().any(|p| p.user_id == "p2"));
+}
+
+#[tokio::test]
+async fn test_all_in_showdown_players_see_results_before_elimination() {
+    use poker_server::game::format::SitAndGo;
+    use poker_server::game::player::PlayerAction;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    // Add 2 players for heads-up
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+
+    // Start the hand
+    table.start_new_hand();
+    assert_eq!(table.phase, GamePhase::PreFlop);
+
+    // Both players go all-in using handle_action
+    let p1_id = table.players[0].user_id.clone();
+    let p2_id = table.players[1].user_id.clone();
+    
+    // First player action
+    table.handle_action(&p1_id, PlayerAction::AllIn).unwrap();
+    
+    // Second player calls (or goes all-in)
+    table.handle_action(&p2_id, PlayerAction::Call).unwrap();
+
+    // After both all-in, game should auto-advance through streets
+    // Use check_auto_advance to simulate the passage of time
+    // The game might go to Flop, Turn, River, and Showdown automatically
+
+    // Simulate the auto-advance through all streets (normally done by background task)
+    while table.phase != GamePhase::Showdown && table.phase != GamePhase::Waiting {
+        // Force time to pass by manipulating last_phase_change_time
+        table.last_phase_change_time = Some(0); // Set to epoch to ensure delay has passed
+        table.check_auto_advance();
+    }
+
+    // At this point we should be in Showdown
+    // One player should have 0 chips (the loser)
+    let loser = table.players.iter().find(|p| p.stack == 0);
+    
+    if let Some(loser) = loser {
+        let loser_id = loser.user_id.clone();
+        
+        // During Showdown, elimination check should NOT remove the player
+        let eliminated = table.check_eliminations();
+        assert_eq!(
+            eliminated.len(),
+            0,
+            "Should not eliminate during Showdown - player should see the result first!"
+        );
+        
+        // The loser should still be visible at the table
+        assert!(
+            table.players.iter().any(|p| p.user_id == loser_id),
+            "Loser should still be visible at table during Showdown"
+        );
+        
+        // Now advance to Waiting phase
+        table.last_phase_change_time = Some(0);
+        table.check_auto_advance();
+        
+        // After showdown delay, should transition to Waiting (only 1 player with chips)
+        assert_eq!(
+            table.phase,
+            GamePhase::Waiting,
+            "Should be in Waiting phase after showdown"
+        );
+        
+        // NOW elimination should happen
+        let eliminated = table.check_eliminations();
+        assert_eq!(
+            eliminated.len(),
+            1,
+            "Should eliminate in Waiting phase after showdown"
+        );
+        assert_eq!(eliminated[0], loser_id);
     }
 }
