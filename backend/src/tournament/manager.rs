@@ -243,8 +243,12 @@ impl TournamentManager {
             return Err(AppError::BadRequest(reason));
         }
 
-        if tournament.status == "running" && self.late_registration_open(&tournament) {
-            // Allow late registration
+        let is_late_registration =
+            tournament.status == "running" && self.late_registration_open(&tournament);
+
+        if is_late_registration {
+            self.ensure_late_registration_seat_available(&tournament)
+                .await?;
         } else if tournament.status != "registering" && tournament.status != "seating" {
             return Err(AppError::BadRequest(
                 "Tournament is not accepting registrations".to_string(),
@@ -320,8 +324,16 @@ impl TournamentManager {
         );
 
         if tournament.status == "running" {
-            self.seat_tournament_player(&tournament, user_id, username, tournament.starting_stack)
-                .await?;
+            if let Err(err) = self
+                .seat_tournament_player(&tournament, user_id, username, tournament.starting_stack)
+                .await
+            {
+                if is_late_registration {
+                    self.rollback_late_registration(&tournament, user_id)
+                        .await?;
+                }
+                return Err(err);
+            }
         }
 
         // Check if SNG should auto-start
@@ -1082,6 +1094,30 @@ impl TournamentManager {
         Ok(())
     }
 
+    async fn ensure_late_registration_seat_available(&self, tournament: &Tournament) -> Result<()> {
+        let table_ids: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1 ORDER BY table_number",
+        )
+        .bind(&tournament.id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for (table_id,) in table_ids {
+            if self
+                .game_server
+                .can_seat_tournament_player(&table_id)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+
+        Err(AppError::BadRequest(
+            "No available tournament seats for late registration".to_string(),
+        ))
+    }
+
     async fn ensure_rebuy_seat_available(&self, tournament: &Tournament) -> Result<()> {
         let table_ids: Vec<(String,)> = sqlx::query_as(
             "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1 ORDER BY table_number",
@@ -1157,6 +1193,43 @@ impl TournamentManager {
         }
 
         self.refund_buy_in(&tournament.club_id, user_id, rebuy_amount)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn rollback_late_registration(
+        &self,
+        tournament: &Tournament,
+        user_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE tournaments 
+             SET registered_players = registered_players - 1,
+                 prize_pool = prize_pool - ?,
+                 remaining_players = remaining_players - 1
+             WHERE id = ?",
+        )
+        .bind(tournament.buy_in)
+        .bind(&tournament.id)
+        .execute(&*self.pool)
+        .await?;
+
+        sqlx::query("DELETE FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?")
+            .bind(&tournament.id)
+            .bind(user_id)
+            .execute(&*self.pool)
+            .await?;
+
+        if let Some(state) = self.tournaments.write().await.get_mut(&tournament.id) {
+            let mut updated = tournament.clone();
+            updated.registered_players = (updated.registered_players - 1).max(0);
+            updated.prize_pool = (updated.prize_pool - updated.buy_in).max(0);
+            updated.remaining_players = (updated.remaining_players - 1).max(0);
+            state.tournament = updated;
+        }
+
+        self.refund_buy_in(&tournament.club_id, user_id, tournament.buy_in)
             .await?;
 
         Ok(())
