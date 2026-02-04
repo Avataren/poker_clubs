@@ -244,6 +244,32 @@ impl GameServer {
         Ok(())
     }
 
+    /// Validate that a tournament player can be topped up right now.
+    pub async fn can_tournament_top_up(
+        &self,
+        table_id: &str,
+        user_id: &str,
+    ) -> Result<(), crate::game::error::GameError> {
+        let tables = self.tables.read().await;
+        let table = tables
+            .get(table_id)
+            .ok_or(crate::game::error::GameError::InvalidTableId)?;
+
+        let player = table
+            .players
+            .iter()
+            .find(|p| p.user_id == user_id)
+            .ok_or(crate::game::error::GameError::PlayerNotAtTable)?;
+
+        if table.phase != crate::game::GamePhase::Waiting
+            && player.state != crate::game::player::PlayerState::SittingOut
+        {
+            return Err(crate::game::error::GameError::GameInProgress);
+        }
+
+        Ok(())
+    }
+
     /// Update blinds on a table (for tournaments)
     pub async fn update_table_blinds(&self, table_id: &str, small_blind: i64, big_blind: i64) {
         let mut tables = self.tables.write().await;

@@ -550,6 +550,8 @@ impl TournamentManager {
             ));
         }
 
+        self.ensure_addon_seated(&registration).await?;
+
         if tournament.max_addons > 0 && registration.addons >= tournament.max_addons {
             return Err(AppError::BadRequest(
                 "Add-on limit reached for this tournament".to_string(),
@@ -592,7 +594,11 @@ impl TournamentManager {
         .execute(&*self.pool)
         .await?;
 
-        self.apply_addon_chips(&registration, addon_stack).await?;
+        if let Err(err) = self.apply_addon_chips(&registration, addon_stack).await {
+            self.rollback_addon(&tournament, user_id, addon_amount)
+                .await?;
+            return Err(err);
+        }
 
         tracing::info!(
             "Player {} took an add-on in tournament {}",
@@ -1053,6 +1059,53 @@ impl TournamentManager {
             .tournament_top_up(table_id, &registration.user_id, addon_stack)
             .await
             .map_err(|e| AppError::BadRequest(format!("Failed to apply add-on: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    async fn ensure_addon_seated(&self, registration: &TournamentRegistration) -> Result<()> {
+        let table_id = registration.starting_table_id.as_ref().ok_or_else(|| {
+            AppError::BadRequest("Player is not seated at a tournament table".to_string())
+        })?;
+
+        self.game_server
+            .can_tournament_top_up(table_id, &registration.user_id)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Add-on unavailable: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    async fn rollback_addon(
+        &self,
+        tournament: &Tournament,
+        user_id: &str,
+        addon_amount: i64,
+    ) -> Result<()> {
+        sqlx::query("UPDATE tournaments SET prize_pool = prize_pool - ? WHERE id = ?")
+            .bind(addon_amount)
+            .bind(&tournament.id)
+            .execute(&*self.pool)
+            .await?;
+
+        sqlx::query(
+            "UPDATE tournament_registrations 
+             SET addons = CASE WHEN addons > 0 THEN addons - 1 ELSE 0 END 
+             WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(&tournament.id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
+
+        if let Some(state) = self.tournaments.write().await.get_mut(&tournament.id) {
+            let mut updated = tournament.clone();
+            updated.prize_pool = (updated.prize_pool - addon_amount).max(0);
+            state.tournament = updated;
+        }
+
+        self.refund_buy_in(&tournament.club_id, user_id, addon_amount)
+            .await?;
 
         Ok(())
     }
