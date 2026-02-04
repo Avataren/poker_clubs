@@ -322,11 +322,13 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = MediaQuery.of(context).size.width < 600;
     return Scaffold(
       appBar: AppBar(
         title: Text(_detail?.tournament.name ?? 'Tournament'),
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: isCompact,
           tabs: const [
             Tab(text: 'Info', icon: Icon(Icons.info)),
             Tab(text: 'Players', icon: Icon(Icons.people)),
@@ -336,7 +338,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ),
       ),
       body: _buildBody(),
-      bottomNavigationBar: _buildBottomBar(),
+      bottomNavigationBar: _buildBottomBar(isCompact),
     );
   }
 
@@ -552,7 +554,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     );
   }
 
-  Widget? _buildBottomBar() {
+  Widget? _buildBottomBar(bool isCompact) {
     if (_detail == null || _isProcessing) return null;
 
     final tournament = _detail!.tournament;
@@ -562,6 +564,43 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     if (tournament.status == 'finished' || tournament.status == 'cancelled') {
       return null;
     }
+
+    final actionButtons = [
+      if (tournament.status == 'registering' &&
+          _detail!.registrations.length < tournament.maxPlayers)
+        ElevatedButton.icon(
+          onPressed: _isProcessing ? null : _fillWithBots,
+          icon: const Icon(Icons.smart_toy, size: 18),
+          label: Text(
+            'Fill ${tournament.maxPlayers - _detail!.registrations.length} with Bots',
+            style: const TextStyle(fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.purple,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+      if (tournament.status != 'finished' && tournament.status != 'cancelled')
+        ElevatedButton.icon(
+          onPressed: _isProcessing ? null : _cancelTournament,
+          icon: const Icon(Icons.cancel, size: 18),
+          label: const Text(
+            'Cancel',
+            style: TextStyle(fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red.shade700,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+      _buildActionButton(
+        tournament,
+        isRegistered,
+        canRegister,
+      ),
+    ];
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -576,54 +615,28 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ],
       ),
       child: SafeArea(
-        child: Row(
-          spacing: 8,
-          children: [
-            // Show Fill with Bots button if tournament is in registration and not full
-            if (tournament.status == 'registering' &&
-                _detail!.registrations.length < tournament.maxPlayers)
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isProcessing ? null : _fillWithBots,
-                  icon: const Icon(Icons.smart_toy, size: 18),
-                  label: Text(
-                    'Fill ${tournament.maxPlayers - _detail!.registrations.length} with Bots',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
+        child: isCompact
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(actionButtons.length, (index) {
+                  final button = actionButtons[index];
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == actionButtons.length - 1 ? 0 : 8,
+                    ),
+                    child: SizedBox(width: double.infinity, child: button),
+                  );
+                }),
+              )
+            : Row(
+                children: [
+                  for (final button in actionButtons) ...[
+                    Expanded(child: button),
+                    if (button != actionButtons.last)
+                      const SizedBox(width: 8),
+                  ],
+                ],
               ),
-            // Show Cancel button if tournament hasn't finished
-            if (tournament.status != 'finished' &&
-                tournament.status != 'cancelled')
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isProcessing ? null : _cancelTournament,
-                  icon: const Icon(Icons.cancel, size: 18),
-                  label: const Text(
-                    'Cancel',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red.shade700,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-            Expanded(
-              child: _buildActionButton(
-                tournament,
-                isRegistered,
-                canRegister,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

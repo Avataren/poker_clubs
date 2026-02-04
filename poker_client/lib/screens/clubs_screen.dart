@@ -124,6 +124,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = MediaQuery.of(context).size.width < 600;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Poker Clubs'),
@@ -152,24 +153,44 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _clubNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'New Club Name',
-                      border: OutlineInputBorder(),
-                    ),
+            child: isCompact
+                ? Column(
+                    children: [
+                      TextField(
+                        controller: _clubNameController,
+                        decoration: const InputDecoration(
+                          labelText: 'New Club Name',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _createClub,
+                          child: const Text('Create'),
+                        ),
+                      ),
+                    ],
+                  )
+                : Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _clubNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'New Club Name',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      ElevatedButton(
+                        onPressed: _createClub,
+                        child: const Text('Create'),
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 16),
-                ElevatedButton(
-                  onPressed: _createClub,
-                  child: const Text('Create'),
-                ),
-              ],
-            ),
           ),
           Expanded(
             child: _isLoading

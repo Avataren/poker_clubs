@@ -147,163 +147,250 @@ class _TablesScreenState extends State<TablesScreen>
   }
 
   Widget _buildTablesTab() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: _tableNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Table Name',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 700;
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _smallBlindController,
-                      decoration: const InputDecoration(
-                        labelText: 'Small Blind',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
+                  TextField(
+                    controller: _tableNameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Table Name',
+                      border: OutlineInputBorder(),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _bigBlindController,
-                      decoration: const InputDecoration(
-                        labelText: 'Big Blind',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
+                  const SizedBox(height: 8),
+                  isCompact
+                      ? Column(
+                          children: [
+                            TextField(
+                              controller: _smallBlindController,
+                              decoration: const InputDecoration(
+                                labelText: 'Small Blind',
+                                border: OutlineInputBorder(),
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _bigBlindController,
+                              decoration: const InputDecoration(
+                                labelText: 'Big Blind',
+                                border: OutlineInputBorder(),
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ],
+                        )
+                      : Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _smallBlindController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Small Blind',
+                                  border: OutlineInputBorder(),
+                                ),
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: _bigBlindController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Big Blind',
+                                  border: OutlineInputBorder(),
+                                ),
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                          ],
+                        ),
+                  const SizedBox(height: 8),
+                  // Variant and Format selection
+                  isCompact
+                      ? Column(
+                          children: [
+                            DropdownButtonFormField<String>(
+                              initialValue: _selectedVariantId,
+                              decoration: const InputDecoration(
+                                labelText: 'Game Variant',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: _variants.isEmpty
+                                  ? [
+                                      const DropdownMenuItem(
+                                        value: 'holdem',
+                                        child: Text('Texas Hold\'em'),
+                                      ),
+                                    ]
+                                  : _variants
+                                        .map(
+                                          (v) => DropdownMenuItem(
+                                            value: v.id,
+                                            child: Text(v.name),
+                                          ),
+                                        )
+                                        .toList(),
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() => _selectedVariantId = value);
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            DropdownButtonFormField<String>(
+                              initialValue: _selectedFormatId,
+                              decoration: const InputDecoration(
+                                labelText: 'Game Format',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: _formats.isEmpty
+                                  ? [
+                                      const DropdownMenuItem(
+                                        value: 'cash',
+                                        child: Text('Cash Game'),
+                                      ),
+                                    ]
+                                  : _formats
+                                        .map(
+                                          (f) => DropdownMenuItem(
+                                            value: f.id,
+                                            child: Text(f.name),
+                                          ),
+                                        )
+                                        .toList(),
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() => _selectedFormatId = value);
+                                }
+                              },
+                            ),
+                          ],
+                        )
+                      : Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _selectedVariantId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Game Variant',
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: _variants.isEmpty
+                                    ? [
+                                        const DropdownMenuItem(
+                                          value: 'holdem',
+                                          child: Text('Texas Hold\'em'),
+                                        ),
+                                      ]
+                                    : _variants
+                                          .map(
+                                            (v) => DropdownMenuItem(
+                                              value: v.id,
+                                              child: Text(v.name),
+                                            ),
+                                          )
+                                          .toList(),
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setState(() => _selectedVariantId = value);
+                                  }
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _selectedFormatId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Game Format',
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: _formats.isEmpty
+                                    ? [
+                                        const DropdownMenuItem(
+                                          value: 'cash',
+                                          child: Text('Cash Game'),
+                                        ),
+                                      ]
+                                    : _formats
+                                          .map(
+                                            (f) => DropdownMenuItem(
+                                              value: f.id,
+                                              child: Text(f.name),
+                                            ),
+                                          )
+                                          .toList(),
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setState(() => _selectedFormatId = value);
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _createTable,
+                      child: const Text('Create Table'),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              // Variant and Format selection
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _selectedVariantId,
-                      decoration: const InputDecoration(
-                        labelText: 'Game Variant',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _variants.isEmpty
-                          ? [
-                              const DropdownMenuItem(
-                                value: 'holdem',
-                                child: Text('Texas Hold\'em'),
+            ),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : ListView.builder(
+                      itemCount: _tables.length,
+                      itemBuilder: (context, index) {
+                        final table = _tables[index];
+                        return Card(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: ListTile(
+                            title: Text(
+                              table.name,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
                               ),
-                            ]
-                          : _variants
-                                .map(
-                                  (v) => DropdownMenuItem(
-                                    value: v.id,
-                                    child: Text(v.name),
+                            ),
+                            subtitle: Text('Blinds: ${table.blindsStr}'),
+                            trailing: ElevatedButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => GameScreen(table: table),
                                   ),
-                                )
-                                .toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() => _selectedVariantId = value);
-                        }
+                                );
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.orange,
+                              ),
+                              child: const Text('Join'),
+                            ),
+                          ),
+                        );
                       },
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _selectedFormatId,
-                      decoration: const InputDecoration(
-                        labelText: 'Game Format',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _formats.isEmpty
-                          ? [
-                              const DropdownMenuItem(
-                                value: 'cash',
-                                child: Text('Cash Game'),
-                              ),
-                            ]
-                          : _formats
-                                .map(
-                                  (f) => DropdownMenuItem(
-                                    value: f.id,
-                                    child: Text(f.name),
-                                  ),
-                                )
-                                .toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() => _selectedFormatId = value);
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _createTable,
-                  child: const Text('Create Table'),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : ListView.builder(
-                  itemCount: _tables.length,
-                  itemBuilder: (context, index) {
-                    final table = _tables[index];
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: ListTile(
-                        title: Text(
-                          table.name,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        subtitle: Text('Blinds: ${table.blindsStr}'),
-                        trailing: ElevatedButton(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => GameScreen(table: table),
-                              ),
-                            );
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                          ),
-                          child: const Text('Join'),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 
