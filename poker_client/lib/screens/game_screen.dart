@@ -372,7 +372,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildTableStack({
     required BoxConstraints constraints,
-    required int? myUserId,
+    required String? myUserId,
     required bool isShowdown,
   }) {
     // Calculate responsive table dimensions - match table widget sizing
