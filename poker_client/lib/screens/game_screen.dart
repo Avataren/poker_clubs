@@ -370,6 +370,111 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  Widget _buildTableStack({
+    required BoxConstraints constraints,
+    required int? myUserId,
+    required bool isShowdown,
+  }) {
+    // Calculate responsive table dimensions - match table widget sizing
+    final maxWidth = constraints.maxWidth * 0.75;
+    final maxHeight = constraints.maxHeight * 0.75;
+
+    double tableWidth, tableHeight;
+    if (maxWidth / maxHeight > 1.6) {
+      tableHeight = maxHeight;
+      tableWidth = tableHeight * 1.6;
+    } else {
+      tableWidth = maxWidth;
+      tableHeight = tableWidth / 1.6;
+    }
+
+    // Calculate responsive positioning for overlay elements
+    // Position community cards higher in the center area
+    final cardTop =
+        (constraints.maxHeight - tableHeight) / 2 + tableHeight * 0.25;
+
+    // Calculate card dimensions with proper aspect ratio (1.4:1)
+    final cardWidth = (tableWidth * 0.08).clamp(40.0, 60.0);
+    final cardHeight = cardWidth * 1.4;
+
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // The table layout with seats around it
+        PokerTableWidget(
+          maxSeats: _gameState!.maxSeats,
+          players: _gameState!.players,
+          currentPlayerSeat: _gameState!.currentPlayerSeat,
+          myUserId: myUserId,
+          onTakeSeat: !_isSeated ? _takeSeat : null,
+          onRemoveBot: _removeBot,
+          showingDown: isShowdown,
+          gamePhase: _gameState!.phase,
+          winningHand: _gameState!.winningHand,
+          dealerSeat: _gameState!.dealerSeat,
+          smallBlindSeat: _gameState!.smallBlindSeat,
+          bigBlindSeat: _gameState!.bigBlindSeat,
+          smallBlind: widget.table.smallBlind,
+          potTotal: _gameState!.potTotal,
+        ),
+
+        // Table center overlay (community cards) - responsive positioning
+        Positioned(
+          top: cardTop,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: tableWidth * 0.8,
+                maxHeight: tableHeight * 0.5,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Community cards - responsive sizing with proper aspect ratio
+                  // Always reserve space to prevent layout shifts
+                  SizedBox(
+                    height: cardHeight + 16, // Card height + padding
+                    child: _gameState!.communityCards.isNotEmpty
+                        ? Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black26,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: _gameState!.communityCards
+                                  .map(
+                                    (card) => CardWidget(
+                                      card: card,
+                                      width: cardWidth,
+                                      height: cardHeight,
+                                      isShowdown: isShowdown,
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  // Tournament info (if tournament table)
+                  if (_tournamentId != null || _gameState!.tournamentId != null)
+                    SizedBox(height: tableHeight * 0.02),
+                  if (_tournamentId != null || _gameState!.tournamentId != null)
+                    _buildTournamentInfo(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final myUserId = context.read<ApiService>().userId;
@@ -380,6 +485,7 @@ class _GameScreenState extends State<GameScreen> {
         myPlayer != null && _gameState?.currentPlayer?.userId == myUserId;
     final isShowdown = _gameState?.phase.toLowerCase() == 'showdown';
     final canTopUp = _gameState?.canTopUp ?? true;
+    final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
 
     return Scaffold(
       appBar: AppBar(
@@ -460,104 +566,32 @@ class _GameScreenState extends State<GameScreen> {
                 child: _gameState != null
                     ? LayoutBuilder(
                         builder: (context, constraints) {
-                          // Calculate responsive table dimensions - match table widget sizing
-                          final maxWidth = constraints.maxWidth * 0.75;
-                          final maxHeight = constraints.maxHeight * 0.75;
-
-                          double tableWidth, tableHeight;
-                          if (maxWidth / maxHeight > 1.6) {
-                            tableHeight = maxHeight;
-                            tableWidth = tableHeight * 1.6;
-                          } else {
-                            tableWidth = maxWidth;
-                            tableHeight = tableWidth / 1.6;
+                          if (!isPortrait) {
+                            return _buildTableStack(
+                              constraints: constraints,
+                              myUserId: myUserId,
+                              isShowdown: isShowdown,
+                            );
                           }
 
-                          // Calculate responsive positioning for overlay elements
-                          // Position community cards higher in the center area
-                          final cardTop = (constraints.maxHeight - tableHeight) / 2 + tableHeight * 0.25;
-                          
-                          // Calculate card dimensions with proper aspect ratio (1.4:1)
-                          final cardWidth = (tableWidth * 0.08).clamp(40.0, 60.0);
-                          final cardHeight = cardWidth * 1.4;
-                          
-                          return Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              // The table layout with seats around it
-                              PokerTableWidget(
-                                maxSeats: _gameState!.maxSeats,
-                                players: _gameState!.players,
-                                currentPlayerSeat: _gameState!.currentPlayerSeat,
-                                myUserId: myUserId,
-                                onTakeSeat: !_isSeated ? _takeSeat : null,
-                                onRemoveBot: _removeBot,
-                                showingDown: isShowdown,
-                                gamePhase: _gameState!.phase,
-                                winningHand: _gameState!.winningHand,
-                                dealerSeat: _gameState!.dealerSeat,
-                                smallBlindSeat: _gameState!.smallBlindSeat,
-                                bigBlindSeat: _gameState!.bigBlindSeat,
-                                smallBlind: widget.table.smallBlind,
-                                potTotal: _gameState!.potTotal,
-                              ),
-
-                              // Table center overlay (community cards) - responsive positioning
-                              Positioned(
-                                top: cardTop,
-                                left: 0,
-                                right: 0,
-                                child: IgnorePointer(
-                                  child: Container(
-                                    constraints: BoxConstraints(
-                                      maxWidth: tableWidth * 0.8,
-                                      maxHeight: tableHeight * 0.5,
-                                    ),
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        // Community cards - responsive sizing with proper aspect ratio
-                                        // Always reserve space to prevent layout shifts
-                                        SizedBox(
-                                          height: cardHeight + 16, // Card height + padding
-                                          child: _gameState!.communityCards.isNotEmpty
-                                              ? Container(
-                                                  padding: const EdgeInsets.all(8),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.black26,
-                                                    borderRadius: BorderRadius.circular(8),
-                                                  ),
-                                                  child: Row(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                    children: _gameState!.communityCards
-                                                        .map(
-                                                          (card) => CardWidget(
-                                                            card: card,
-                                                            width: cardWidth,
-                                                            height: cardHeight,
-                                                            isShowdown: isShowdown,
-                                                          ),
-                                                        )
-                                                        .toList(),
-                                                  ),
-                                                )
-                                              : const SizedBox.shrink(),
-                                        ),
-                                        // Tournament info (if tournament table)
-                                        if (_tournamentId != null ||
-                                            _gameState!.tournamentId != null)
-                                          SizedBox(height: tableHeight * 0.02),
-                                        if (_tournamentId != null ||
-                                            _gameState!.tournamentId != null)
-                                          _buildTournamentInfo(),
-                                      ],
-                                    ),
-                                  ),
+                          return FittedBox(
+                            fit: BoxFit.contain,
+                            child: SizedBox(
+                              width: constraints.maxHeight,
+                              height: constraints.maxWidth,
+                              child: RotatedBox(
+                                quarterTurns: 1,
+                                child: LayoutBuilder(
+                                  builder: (context, rotatedConstraints) {
+                                    return _buildTableStack(
+                                      constraints: rotatedConstraints,
+                                      myUserId: myUserId,
+                                      isShowdown: isShowdown,
+                                    );
+                                  },
                                 ),
                               ),
-                            ],
+                            ),
                           );
                         },
                       )

@@ -168,14 +168,13 @@ class _TournamentsScreenState extends State<TournamentsScreen> {
   Widget _buildFilterBar() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
         children: [
           _buildFilterChip('All', 'all'),
-          const SizedBox(width: 8),
           _buildFilterChip('Open', 'registering'),
-          const SizedBox(width: 8),
           _buildFilterChip('Running', 'running'),
-          const SizedBox(width: 8),
           _buildFilterChip('Finished', 'finished'),
         ],
       ),
