@@ -31,6 +31,15 @@ pub struct SngConfig {
     pub max_players: i32,
     pub min_players: i32,
     pub level_duration_secs: i64,
+    pub allow_rebuys: bool,
+    pub max_rebuys: i32,
+    pub rebuy_amount: i64,
+    pub rebuy_stack: i64,
+    pub allow_addons: bool,
+    pub max_addons: i32,
+    pub addon_amount: i64,
+    pub addon_stack: i64,
+    pub late_registration_secs: i64,
 }
 
 /// Configuration for creating an MTT
@@ -45,6 +54,15 @@ pub struct MttConfig {
     pub level_duration_secs: i64,
     pub scheduled_start: Option<String>,
     pub pre_seat_secs: i64,
+    pub allow_rebuys: bool,
+    pub max_rebuys: i32,
+    pub rebuy_amount: i64,
+    pub rebuy_stack: i64,
+    pub allow_addons: bool,
+    pub max_addons: i32,
+    pub addon_amount: i64,
+    pub addon_stack: i64,
+    pub late_registration_secs: i64,
 }
 
 /// Manages all tournaments
@@ -97,6 +115,15 @@ impl TournamentManager {
             min_players,
             config.level_duration_secs,
             0,
+            config.allow_rebuys,
+            config.max_rebuys,
+            config.rebuy_amount,
+            config.rebuy_stack,
+            config.allow_addons,
+            config.max_addons,
+            config.addon_amount,
+            config.addon_stack,
+            config.late_registration_secs,
         );
 
         // Generate blind schedule
@@ -155,6 +182,15 @@ impl TournamentManager {
             min_players,
             config.level_duration_secs,
             config.pre_seat_secs,
+            config.allow_rebuys,
+            config.max_rebuys,
+            config.rebuy_amount,
+            config.rebuy_stack,
+            config.allow_addons,
+            config.max_addons,
+            config.addon_amount,
+            config.addon_stack,
+            config.late_registration_secs,
         );
 
         tournament.scheduled_start = config.scheduled_start;
@@ -207,7 +243,9 @@ impl TournamentManager {
             return Err(AppError::BadRequest(reason));
         }
 
-        if tournament.status != "registering" && tournament.status != "seating" {
+        if tournament.status == "running" && self.late_registration_open(&tournament) {
+            // Allow late registration
+        } else if tournament.status != "registering" && tournament.status != "seating" {
             return Err(AppError::BadRequest(
                 "Tournament is not accepting registrations".to_string(),
             ));
@@ -253,14 +291,18 @@ impl TournamentManager {
         // Update tournament counts and prize pool
         tournament.registered_players += 1;
         tournament.prize_pool += tournament.buy_in;
+        if tournament.status == "running" {
+            tournament.remaining_players += 1;
+        }
 
         sqlx::query(
             "UPDATE tournaments 
-             SET registered_players = ?, prize_pool = ? 
+             SET registered_players = ?, prize_pool = ?, remaining_players = ? 
              WHERE id = ?",
         )
         .bind(tournament.registered_players)
         .bind(tournament.prize_pool)
+        .bind(tournament.remaining_players)
         .bind(tournament_id)
         .execute(&*self.pool)
         .await?;
@@ -276,6 +318,11 @@ impl TournamentManager {
             user_id,
             tournament_id
         );
+
+        if tournament.status == "running" {
+            self.seat_tournament_player(&tournament, user_id, username, tournament.starting_stack)
+                .await?;
+        }
 
         // Check if SNG should auto-start
         if tournament.format_id == "sng" && tournament.registered_players >= tournament.max_players
@@ -384,13 +431,192 @@ impl TournamentManager {
             .await
     }
 
+    /// Rebuy into a running tournament (if enabled)
+    pub async fn rebuy_player(
+        &self,
+        tournament_id: &str,
+        user_id: &str,
+        username: &str,
+    ) -> Result<()> {
+        let mut tournament = self.load_tournament(tournament_id).await?;
+
+        if !tournament.allow_rebuys {
+            return Err(AppError::BadRequest(
+                "Rebuys are not enabled for this tournament".to_string(),
+            ));
+        }
+
+        if tournament.status != "running" {
+            return Err(AppError::BadRequest(
+                "Rebuys are only allowed while the tournament is running".to_string(),
+            ));
+        }
+
+        if !self.late_registration_open(&tournament) {
+            return Err(AppError::BadRequest("Rebuy period has ended".to_string()));
+        }
+
+        let mut registration = self.load_registration(tournament_id, user_id).await?;
+
+        if registration.eliminated_at.is_none() {
+            return Err(AppError::BadRequest(
+                "Player must be eliminated before rebuying".to_string(),
+            ));
+        }
+
+        if tournament.max_rebuys > 0 && registration.rebuys >= tournament.max_rebuys {
+            return Err(AppError::BadRequest(
+                "Rebuy limit reached for this tournament".to_string(),
+            ));
+        }
+
+        let rebuy_amount = if tournament.rebuy_amount > 0 {
+            tournament.rebuy_amount
+        } else {
+            tournament.buy_in
+        };
+        let rebuy_stack = if tournament.rebuy_stack > 0 {
+            tournament.rebuy_stack
+        } else {
+            tournament.starting_stack
+        };
+
+        self.deduct_buy_in(&tournament.club_id, user_id, rebuy_amount)
+            .await?;
+
+        tournament.prize_pool += rebuy_amount;
+        tournament.remaining_players += 1;
+
+        sqlx::query("UPDATE tournaments SET prize_pool = ?, remaining_players = ? WHERE id = ?")
+            .bind(tournament.prize_pool)
+            .bind(tournament.remaining_players)
+            .bind(tournament_id)
+            .execute(&*self.pool)
+            .await?;
+
+        if let Some(state) = self.tournaments.write().await.get_mut(tournament_id) {
+            state.tournament = tournament.clone();
+        }
+
+        registration.rebuys += 1;
+        registration.eliminated_at = None;
+        registration.finish_position = None;
+
+        sqlx::query(
+            "UPDATE tournament_registrations 
+             SET rebuys = ?, eliminated_at = NULL, finish_position = NULL 
+             WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(registration.rebuys)
+        .bind(tournament_id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
+
+        self.seat_tournament_player(&tournament, user_id, username, rebuy_stack)
+            .await?;
+
+        tracing::info!(
+            "Player {} rebought into tournament {} (rebuys: {})",
+            user_id,
+            tournament_id,
+            registration.rebuys
+        );
+
+        Ok(())
+    }
+
+    /// Add-on chips to a running tournament (if enabled)
+    pub async fn addon_player(&self, tournament_id: &str, user_id: &str) -> Result<()> {
+        let mut tournament = self.load_tournament(tournament_id).await?;
+
+        if !tournament.allow_addons {
+            return Err(AppError::BadRequest(
+                "Add-ons are not enabled for this tournament".to_string(),
+            ));
+        }
+
+        if tournament.status != "running" {
+            return Err(AppError::BadRequest(
+                "Add-ons are only allowed while the tournament is running".to_string(),
+            ));
+        }
+
+        let registration = self.load_registration(tournament_id, user_id).await?;
+
+        if registration.eliminated_at.is_some() {
+            return Err(AppError::BadRequest(
+                "Eliminated players cannot take add-ons".to_string(),
+            ));
+        }
+
+        if tournament.max_addons > 0 && registration.addons >= tournament.max_addons {
+            return Err(AppError::BadRequest(
+                "Add-on limit reached for this tournament".to_string(),
+            ));
+        }
+
+        let addon_amount = if tournament.addon_amount > 0 {
+            tournament.addon_amount
+        } else {
+            tournament.buy_in
+        };
+        let addon_stack = if tournament.addon_stack > 0 {
+            tournament.addon_stack
+        } else {
+            tournament.starting_stack
+        };
+
+        self.deduct_buy_in(&tournament.club_id, user_id, addon_amount)
+            .await?;
+
+        tournament.prize_pool += addon_amount;
+
+        sqlx::query("UPDATE tournaments SET prize_pool = ? WHERE id = ?")
+            .bind(tournament.prize_pool)
+            .bind(tournament_id)
+            .execute(&*self.pool)
+            .await?;
+
+        if let Some(state) = self.tournaments.write().await.get_mut(tournament_id) {
+            state.tournament = tournament.clone();
+        }
+
+        sqlx::query(
+            "UPDATE tournament_registrations 
+             SET addons = addons + 1 
+             WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(tournament_id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
+
+        self.apply_addon_chips(&registration, addon_stack).await?;
+
+        tracing::info!(
+            "Player {} took an add-on in tournament {}",
+            user_id,
+            tournament_id
+        );
+
+        Ok(())
+    }
+
     /// Advance to the next blind level
     pub async fn advance_blind_level(&self, tournament_id: &str) -> Result<bool> {
-        tracing::info!("advance_blind_level called for tournament {}", tournament_id);
+        tracing::info!(
+            "advance_blind_level called for tournament {}",
+            tournament_id
+        );
         let mut tournament = self.load_tournament(tournament_id).await?;
 
         if tournament.status != "running" {
-            tracing::warn!("Tournament {} not running (status: {}), skipping blind advance", tournament_id, tournament.status);
+            tracing::warn!(
+                "Tournament {} not running (status: {}), skipping blind advance",
+                tournament_id,
+                tournament.status
+            );
             return Ok(false);
         }
 
@@ -400,7 +626,11 @@ impl TournamentManager {
 
         if next_level >= blind_levels.len() {
             // No more levels, keep current
-            tracing::warn!("Tournament {} at max blind level {}, no more levels", tournament_id, tournament.current_blind_level);
+            tracing::warn!(
+                "Tournament {} at max blind level {}, no more levels",
+                tournament_id,
+                tournament.current_blind_level
+            );
             return Ok(false);
         }
 
@@ -424,7 +654,10 @@ impl TournamentManager {
         .execute(&*self.pool)
         .await?;
 
-        tracing::info!("Tournament {} database updated with new level", tournament_id);
+        tracing::info!(
+            "Tournament {} database updated with new level",
+            tournament_id
+        );
 
         // Update in-memory cache if it exists
         if let Some(state) = self.tournaments.write().await.get_mut(tournament_id) {
@@ -675,8 +908,11 @@ impl TournamentManager {
                 id, club_id, name, format_id, variant_id, buy_in, starting_stack,
                 prize_pool, max_players, min_players, registered_players, remaining_players,
                 current_blind_level, level_duration_secs, level_start_time,
-                status, scheduled_start, pre_seat_secs, actual_start, finished_at, cancel_reason, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                status, scheduled_start, pre_seat_secs, actual_start, finished_at, cancel_reason,
+                allow_rebuys, max_rebuys, rebuy_amount, rebuy_stack,
+                allow_addons, max_addons, addon_amount, addon_stack, late_registration_secs,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&tournament.id)
         .bind(&tournament.club_id)
@@ -699,9 +935,124 @@ impl TournamentManager {
         .bind(&tournament.actual_start)
         .bind(&tournament.finished_at)
         .bind(&tournament.cancel_reason)
+        .bind(tournament.allow_rebuys)
+        .bind(tournament.max_rebuys)
+        .bind(tournament.rebuy_amount)
+        .bind(tournament.rebuy_stack)
+        .bind(tournament.allow_addons)
+        .bind(tournament.max_addons)
+        .bind(tournament.addon_amount)
+        .bind(tournament.addon_stack)
+        .bind(tournament.late_registration_secs)
         .bind(&tournament.created_at)
         .execute(&*self.pool)
         .await?;
+
+        Ok(())
+    }
+
+    async fn load_registration(
+        &self,
+        tournament_id: &str,
+        user_id: &str,
+    ) -> Result<TournamentRegistration> {
+        sqlx::query_as::<_, TournamentRegistration>(
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(tournament_id)
+        .bind(user_id)
+        .fetch_optional(&*self.pool)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("Player is not registered".to_string()))
+    }
+
+    fn late_registration_open(&self, tournament: &Tournament) -> bool {
+        if tournament.late_registration_secs <= 0 {
+            return false;
+        }
+
+        let actual_start = match tournament.actual_start.as_ref() {
+            Some(start) => start,
+            None => return false,
+        };
+
+        let start_time = match DateTime::parse_from_rfc3339(actual_start) {
+            Ok(value) => value.with_timezone(&Utc),
+            Err(_) => return false,
+        };
+
+        let deadline = start_time + Duration::seconds(tournament.late_registration_secs);
+        Utc::now() <= deadline
+    }
+
+    async fn seat_tournament_player(
+        &self,
+        tournament: &Tournament,
+        user_id: &str,
+        username: &str,
+        stack: i64,
+    ) -> Result<()> {
+        let table_ids: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1 ORDER BY table_number",
+        )
+        .bind(&tournament.id)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        for (table_id,) in table_ids {
+            match self
+                .game_server
+                .add_player_to_table_next_seat(&table_id, user_id, username, stack)
+                .await
+            {
+                Ok(seat) => {
+                    sqlx::query(
+                        "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?",
+                    )
+                    .bind(&table_id)
+                    .bind(&tournament.id)
+                    .bind(user_id)
+                    .execute(&*self.pool)
+                    .await?;
+
+                    tracing::info!(
+                        "Seated late entrant {} at table {} seat {} for tournament {}",
+                        user_id,
+                        table_id,
+                        seat,
+                        tournament.id
+                    );
+
+                    return Ok(());
+                }
+                Err(crate::game::error::GameError::TableFull) => continue,
+                Err(err) => {
+                    return Err(AppError::BadRequest(format!(
+                        "Failed to seat player: {:?}",
+                        err
+                    )));
+                }
+            }
+        }
+
+        Err(AppError::BadRequest(
+            "No available tournament seats for late entry".to_string(),
+        ))
+    }
+
+    async fn apply_addon_chips(
+        &self,
+        registration: &TournamentRegistration,
+        addon_stack: i64,
+    ) -> Result<()> {
+        let table_id = registration.starting_table_id.as_ref().ok_or_else(|| {
+            AppError::BadRequest("Player is not seated at a tournament table".to_string())
+        })?;
+
+        self.game_server
+            .tournament_top_up(table_id, &registration.user_id, addon_stack)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Failed to apply add-on: {:?}", e)))?;
 
         Ok(())
     }
@@ -864,8 +1215,11 @@ impl TournamentManager {
 
         // If tournament is running, deactivate all tables
         if is_running {
-            tracing::info!("Deactivating all tables for running tournament {}", tournament.id);
-            
+            tracing::info!(
+                "Deactivating all tables for running tournament {}",
+                tournament.id
+            );
+
             // Deactivate all tournament tables
             sqlx::query("UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ?")
                 .bind(&tournament.id)
@@ -1091,13 +1445,11 @@ impl TournamentManager {
             let username = self.get_username(&registration.user_id).await?;
 
             // Check if this user is a bot
-            let is_bot: bool = sqlx::query_scalar(
-                "SELECT is_bot FROM users WHERE id = ?"
-            )
-            .bind(&registration.user_id)
-            .fetch_one(&*self.pool)
-            .await
-            .unwrap_or(false);
+            let is_bot: bool = sqlx::query_scalar("SELECT is_bot FROM users WHERE id = ?")
+                .bind(&registration.user_id)
+                .fetch_one(&*self.pool)
+                .await
+                .unwrap_or(false);
 
             // Add player to table via game server
             if let Err(e) = self
@@ -1116,7 +1468,11 @@ impl TournamentManager {
 
             // Register bots with the bot manager
             if is_bot {
-                tracing::info!("Registering bot {} for tournament table {}", username, table_id);
+                tracing::info!(
+                    "Registering bot {} for tournament table {}",
+                    username,
+                    table_id
+                );
                 self.game_server
                     .register_bot(&table_id, registration.user_id.clone(), username, None)
                     .await;
@@ -1259,13 +1615,11 @@ impl TournamentManager {
                 let username = self.get_username(&registration.user_id).await?;
 
                 // Check if this user is a bot
-                let is_bot: bool = sqlx::query_scalar(
-                    "SELECT is_bot FROM users WHERE id = ?"
-                )
-                .bind(&registration.user_id)
-                .fetch_one(&*self.pool)
-                .await
-                .unwrap_or(false);
+                let is_bot: bool = sqlx::query_scalar("SELECT is_bot FROM users WHERE id = ?")
+                    .bind(&registration.user_id)
+                    .fetch_one(&*self.pool)
+                    .await
+                    .unwrap_or(false);
 
                 // Add player to table
                 if let Err(e) = self
