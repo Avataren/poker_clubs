@@ -31,7 +31,7 @@ pub use pot::PotManager;
 // Variant types
 pub use variant::{
     available_variants, variant_from_id, BettingStructure, HandRequirements, OmahaHi, OmahaHiLo,
-    PokerVariant, ShortDeckHoldem, StreetConfig, TexasHoldem,
+    PokerVariant, PotLimitOmaha, ShortDeckHoldem, StreetConfig, TexasHoldem,
 };
 
 // Format types

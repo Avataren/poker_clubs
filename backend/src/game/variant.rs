@@ -7,6 +7,7 @@
 //! Supported/planned variants:
 //! - Texas Hold'em (implemented)
 //! - Omaha Hi (planned)
+//! - Pot Limit Omaha (PLO) (planned)
 //! - Omaha Hi-Lo (planned)
 //! - Short Deck Hold'em (planned)
 //! - 5-Card Draw (planned)
@@ -196,6 +197,65 @@ impl PokerVariant for OmahaHi {
     }
 }
 
+/// Pot Limit Omaha (PLO) - four hole cards, must use exactly 2
+#[derive(Debug, Clone, Default)]
+pub struct PotLimitOmaha;
+
+impl PokerVariant for PotLimitOmaha {
+    fn name(&self) -> &'static str {
+        "Pot Limit Omaha"
+    }
+
+    fn id(&self) -> &'static str {
+        "plo"
+    }
+
+    fn hole_cards_count(&self) -> usize {
+        4
+    }
+
+    fn streets(&self) -> Vec<StreetConfig> {
+        vec![
+            StreetConfig {
+                name: "Flop",
+                cards_to_deal: 3,
+            },
+            StreetConfig {
+                name: "Turn",
+                cards_to_deal: 1,
+            },
+            StreetConfig {
+                name: "River",
+                cards_to_deal: 1,
+            },
+        ]
+    }
+
+    fn betting_structure(&self) -> BettingStructure {
+        BettingStructure::PotLimit
+    }
+
+    fn hand_requirements(&self) -> HandRequirements {
+        HandRequirements {
+            must_use_hole_cards: Some(2),
+            must_use_community_cards: Some(3),
+        }
+    }
+
+    fn evaluate_hand(&self, hole_cards: &[Card], community_cards: &[Card]) -> HandRank {
+        super::hand::evaluate_omaha_hand(hole_cards, community_cards)
+            .unwrap_or_else(|| super::hand::evaluate_hand(hole_cards, community_cards))
+    }
+
+    fn max_players(&self) -> usize {
+        9
+    }
+
+    fn clone_box(&self) -> Box<dyn PokerVariant> {
+        Box::new(self.clone())
+    }
+}
+
 /// Omaha Hi-Lo - split pot variant
 #[derive(Debug, Clone, Default)]
 pub struct OmahaHiLo;
@@ -312,6 +372,7 @@ pub fn variant_from_id(id: &str) -> Option<Box<dyn PokerVariant>> {
     match id {
         "holdem" => Some(Box::new(TexasHoldem)),
         "omaha" => Some(Box::new(OmahaHi)),
+        "plo" => Some(Box::new(PotLimitOmaha)),
         "omaha_hilo" => Some(Box::new(OmahaHiLo)),
         "short_deck" => Some(Box::new(ShortDeckHoldem)),
         _ => None,
@@ -320,7 +381,7 @@ pub fn variant_from_id(id: &str) -> Option<Box<dyn PokerVariant>> {
 
 /// Get all available variant IDs
 pub fn available_variants() -> Vec<&'static str> {
-    vec!["holdem", "omaha", "omaha_hilo", "short_deck"]
+    vec!["holdem", "omaha", "plo", "omaha_hilo", "short_deck"]
 }
 
 #[cfg(test)]
@@ -359,6 +420,7 @@ mod tests {
     fn test_variant_factory() {
         assert!(variant_from_id("holdem").is_some());
         assert!(variant_from_id("omaha").is_some());
+        assert!(variant_from_id("plo").is_some());
         assert!(variant_from_id("invalid").is_none());
     }
 
@@ -367,7 +429,21 @@ mod tests {
         let variants = available_variants();
         assert!(variants.contains(&"holdem"));
         assert!(variants.contains(&"omaha"));
+        assert!(variants.contains(&"plo"));
         assert!(variants.contains(&"omaha_hilo"));
+    }
+
+    #[test]
+    fn test_plo_config() {
+        let variant = PotLimitOmaha;
+        assert_eq!(variant.name(), "Pot Limit Omaha");
+        assert_eq!(variant.id(), "plo");
+        assert_eq!(variant.hole_cards_count(), 4);
+        assert_eq!(variant.betting_structure(), BettingStructure::PotLimit);
+
+        let reqs = variant.hand_requirements();
+        assert_eq!(reqs.must_use_hole_cards, Some(2));
+        assert_eq!(reqs.must_use_community_cards, Some(3));
     }
 
     #[test]

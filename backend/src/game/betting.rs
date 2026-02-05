@@ -63,6 +63,7 @@ impl BettingValidator {
         player: &Player,
         action: &PlayerAction,
         round: &BettingRound,
+        pot: &PotManager,
     ) -> GameResult<()> {
         if !player.can_act() {
             return Err(GameError::CannotAct);
@@ -85,15 +86,33 @@ impl BettingValidator {
                 // Can always call (may result in all-in if insufficient chips)
                 Ok(())
             }
-            PlayerAction::Raise(amount) => Self::validate_raise(player, *amount, round),
+            PlayerAction::Raise(amount) => Self::validate_raise(player, *amount, round, pot),
             PlayerAction::AllIn => {
-                // Can always go all-in
+                if let BettingStructure::PotLimit = &round.structure {
+                    let to_call = round.current_bet - player.current_bet;
+                    let max_raise = pot.total() + to_call;
+                    let desired_total = player.current_bet + player.stack;
+                    let max_total = round.current_bet + max_raise;
+
+                    if desired_total > max_total {
+                        let attempted_raise = desired_total.saturating_sub(round.current_bet);
+                        return Err(GameError::RaiseTooLarge {
+                            max_raise,
+                            attempted: attempted_raise,
+                        });
+                    }
+                }
                 Ok(())
             }
         }
     }
 
-    fn validate_raise(player: &Player, amount: i64, round: &BettingRound) -> GameResult<()> {
+    fn validate_raise(
+        player: &Player,
+        amount: i64,
+        round: &BettingRound,
+        pot: &PotManager,
+    ) -> GameResult<()> {
         if amount <= 0 {
             return Err(GameError::RaiseTooSmall {
                 min_raise: round.min_raise,
@@ -111,8 +130,14 @@ impl BettingValidator {
 
         // For pot-limit, check maximum
         if let BettingStructure::PotLimit = &round.structure {
-            // TODO: Implement pot-limit max calculation
-            // For now, allow any raise in pot-limit
+            let to_call = round.current_bet - player.current_bet;
+            let max_raise = pot.total() + to_call;
+            if amount > max_raise {
+                return Err(GameError::RaiseTooLarge {
+                    max_raise,
+                    attempted: amount,
+                });
+            }
         }
 
         // For fixed-limit, raise must be exactly the bet size
@@ -259,7 +284,7 @@ impl BettingEngine {
         pot: &mut PotManager,
     ) -> GameResult<bool> {
         // Validate first
-        BettingValidator::validate_action(player, &action, &self.round)?;
+        BettingValidator::validate_action(player, &action, &self.round, pot)?;
 
         // Execute
         let (_chips, is_raise) =
@@ -322,8 +347,9 @@ mod tests {
     fn test_validate_check_when_no_bet() {
         let player = create_test_player(0, 1000);
         let round = BettingRound::new(100, BettingStructure::NoLimit);
+        let pot = PotManager::new();
 
-        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round);
+        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round, &pot);
         assert!(result.is_ok());
     }
 
@@ -332,8 +358,9 @@ mod tests {
         let player = create_test_player(0, 1000);
         let mut round = BettingRound::new(100, BettingStructure::NoLimit);
         round.current_bet = 200;
+        let pot = PotManager::new();
 
-        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round);
+        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round, &pot);
         assert!(matches!(result, Err(GameError::CannotCheck { .. })));
     }
 
@@ -341,9 +368,28 @@ mod tests {
     fn test_validate_raise_too_small() {
         let player = create_test_player(0, 1000);
         let round = BettingRound::new(100, BettingStructure::NoLimit);
+        let pot = PotManager::new();
 
-        let result = BettingValidator::validate_action(&player, &PlayerAction::Raise(50), &round);
+        let result =
+            BettingValidator::validate_action(&player, &PlayerAction::Raise(50), &round, &pot);
         assert!(matches!(result, Err(GameError::RaiseTooSmall { .. })));
+    }
+
+    #[test]
+    fn test_validate_raise_too_large_pot_limit() {
+        let mut player = create_test_player(0, 1000);
+        let mut round = BettingRound::new(50, BettingStructure::PotLimit);
+        round.current_bet = 50;
+        round.min_raise = 50;
+        player.current_bet = 25;
+
+        let mut pot = PotManager::new();
+        pot.add_bet(0, 25);
+        pot.add_bet(1, 50);
+
+        let result =
+            BettingValidator::validate_action(&player, &PlayerAction::Raise(150), &round, &pot);
+        assert!(matches!(result, Err(GameError::RaiseTooLarge { .. })));
     }
 
     #[test]
@@ -351,8 +397,9 @@ mod tests {
         let mut player = create_test_player(0, 1000);
         player.state = PlayerState::Folded;
         let round = BettingRound::new(100, BettingStructure::NoLimit);
+        let pot = PotManager::new();
 
-        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round);
+        let result = BettingValidator::validate_action(&player, &PlayerAction::Check, &round, &pot);
         assert!(matches!(result, Err(GameError::CannotAct)));
     }
 

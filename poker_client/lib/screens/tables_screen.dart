@@ -229,6 +229,10 @@ class _TablesScreenState extends State<TablesScreen>
                                         value: 'holdem',
                                         child: Text('Texas Hold\'em'),
                                       ),
+                                      const DropdownMenuItem(
+                                        value: 'plo',
+                                        child: Text('Pot Limit Omaha'),
+                                      ),
                                     ]
                                   : _variants
                                         .map(
@@ -288,6 +292,10 @@ class _TablesScreenState extends State<TablesScreen>
                                         const DropdownMenuItem(
                                           value: 'holdem',
                                           child: Text('Texas Hold\'em'),
+                                        ),
+                                        const DropdownMenuItem(
+                                          value: 'plo',
+                                          child: Text('Pot Limit Omaha'),
                                         ),
                                       ]
                                     : _variants

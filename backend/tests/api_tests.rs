@@ -336,6 +336,39 @@ async fn test_create_table_with_omaha_variant() {
 }
 
 #[tokio::test]
+async fn test_create_table_with_plo_variant() {
+    let server = setup().await;
+    let token = register_user(&server, "ploowner", "plo@example.com", "password123").await;
+
+    let club_response = server
+        .post("/api/clubs")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .json(&json!({ "name": "PLO Club" }))
+        .await;
+
+    club_response.assert_status_ok();
+    let club: Value = club_response.json();
+    let club_id = club["club"]["id"].as_str().unwrap();
+
+    let response = server
+        .post("/api/tables")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "PLO Table",
+            "small_blind": 25,
+            "big_blind": 50,
+            "variant_id": "plo"
+        }))
+        .await;
+
+    response.assert_status_ok();
+
+    let body: Value = response.json();
+    assert_eq!(body["name"], "PLO Table");
+}
+
+#[tokio::test]
 async fn test_create_table_with_invalid_variant() {
     let server = setup().await;
     let token = register_user(&server, "badvariant", "bad@example.com", "password123").await;
@@ -383,6 +416,7 @@ async fn test_list_variants() {
 
     assert!(variant_ids.contains(&"holdem"));
     assert!(variant_ids.contains(&"omaha"));
+    assert!(variant_ids.contains(&"plo"));
 }
 
 #[tokio::test]

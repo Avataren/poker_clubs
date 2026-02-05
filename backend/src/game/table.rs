@@ -599,6 +599,7 @@ impl PokerTable {
         }
 
         tracing::debug!("Processing action: {:?}", action);
+        let betting_structure = self.variant.betting_structure();
         // Process action
         match action {
             PlayerAction::Fold => {
@@ -627,6 +628,17 @@ impl PokerTable {
                     });
                 }
 
+                if let super::variant::BettingStructure::PotLimit = betting_structure {
+                    let to_call = self.current_bet - current_bet;
+                    let max_raise = self.pot.total() + to_call;
+                    if amount > max_raise {
+                        return Err(GameError::RaiseTooLarge {
+                            max_raise,
+                            attempted: amount,
+                        });
+                    }
+                }
+
                 let total_to_bet = raise_to - current_bet;
                 let actual = self.players[self.current_player].place_bet(total_to_bet);
                 self.pot.add_bet(self.current_player, actual);
@@ -643,6 +655,23 @@ impl PokerTable {
             }
             PlayerAction::AllIn => {
                 let stack = self.players[self.current_player].stack;
+
+                if let super::variant::BettingStructure::PotLimit = betting_structure {
+                    let current_bet = self.players[self.current_player].current_bet;
+                    let to_call = self.current_bet - current_bet;
+                    let max_raise = self.pot.total() + to_call;
+                    let max_total = self.current_bet + max_raise;
+                    let desired_total = current_bet + stack;
+
+                    if desired_total > max_total {
+                        let attempted_raise = desired_total.saturating_sub(self.current_bet);
+                        return Err(GameError::RaiseTooLarge {
+                            max_raise,
+                            attempted: attempted_raise,
+                        });
+                    }
+                }
+
                 let actual = self.players[self.current_player].place_bet(stack);
                 self.pot.add_bet(self.current_player, actual);
 
@@ -1483,7 +1512,7 @@ impl PokerTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::variant::{variant_from_id, OmahaHi};
+    use crate::game::variant::{variant_from_id, OmahaHi, PotLimitOmaha};
 
     #[test]
     fn test_table_default_variant() {
@@ -1518,6 +1547,57 @@ mod tests {
             variant,
         );
         assert_eq!(table.variant_id(), "omaha_hilo");
+    }
+
+    #[test]
+    fn test_table_with_plo_variant() {
+        let table = PokerTable::with_variant(
+            "t3b".to_string(),
+            "PLO Table".to_string(),
+            5,
+            10,
+            9,
+            Box::new(PotLimitOmaha),
+        );
+        assert_eq!(table.variant_id(), "plo");
+        assert_eq!(table.variant_name(), "Pot Limit Omaha");
+    }
+
+    #[test]
+    fn test_plo_raise_cannot_exceed_pot_limit() {
+        let mut table = PokerTable::with_variant(
+            "t3c".to_string(),
+            "PLO Table".to_string(),
+            25,
+            50,
+            2,
+            Box::new(PotLimitOmaha),
+        );
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+
+        table.pot = PotManager::new();
+        table.current_player = 0;
+        table.current_bet = 50;
+        table.min_raise = 50;
+        table.players[0].current_bet = 25;
+        table.players[1].current_bet = 50;
+        table.players[0].stack = 1000;
+        table.players[1].stack = 1000;
+        table.pot.add_bet(0, 25);
+        table.pot.add_bet(1, 50);
+
+        let result = table.handle_action("p1", PlayerAction::Raise(150));
+        assert!(
+            matches!(result, Err(GameError::RaiseTooLarge { .. })),
+            "unexpected result: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -1888,4 +1968,3 @@ mod tests {
         }
     }
 }
-
