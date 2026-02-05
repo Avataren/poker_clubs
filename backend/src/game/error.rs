@@ -32,6 +32,7 @@ pub enum GameError {
     CannotAct,
     CannotCheck { current_bet: i64 },
     RaiseTooSmall { min_raise: i64, attempted: i64 },
+    RaiseTooLarge { max_raise: i64, attempted: i64 },
     InvalidAction { reason: String },
 
     // Game state errors
@@ -88,6 +89,16 @@ impl fmt::Display for GameError {
                     f,
                     "Raise amount {} is too small. Minimum raise: {}",
                     attempted, min_raise
+                )
+            }
+            GameError::RaiseTooLarge {
+                max_raise,
+                attempted,
+            } => {
+                write!(
+                    f,
+                    "Raise amount {} is too large. Maximum raise: {}",
+                    attempted, max_raise
                 )
             }
             GameError::InvalidAction { reason } => {
