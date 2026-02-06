@@ -9,8 +9,11 @@
 
 use axum::http::header::AUTHORIZATION;
 use axum_test::TestServer;
-use poker_server::create_test_app;
+use poker_server::{create_test_app, create_test_db};
 use serde_json::{json, Value};
+use sqlx::Row;
+use std::sync::Arc;
+use uuid::Uuid;
 
 /// Helper to create a test server instance
 async fn setup() -> TestServer {
@@ -255,6 +258,180 @@ async fn test_sng_unregister() {
     let details: Value = details_response.json();
     assert_eq!(details["tournament"]["registered_players"], 0);
     assert_eq!(details["tournament"]["prize_pool"], 0);
+}
+
+#[tokio::test]
+async fn test_prize_distribution_rolls_back_on_failure() {
+    let pool = Arc::new(create_test_db().await);
+    let jwt_manager = Arc::new(poker_server::auth::JwtManager::new("test_secret_key".to_string()));
+    let game_server = Arc::new(poker_server::ws::GameServer::new(
+        jwt_manager,
+        pool.clone(),
+    ));
+    let manager = poker_server::tournament::TournamentManager::new(pool.clone(), game_server);
+
+    let club_id = Uuid::new_v4().to_string();
+    let admin_id = Uuid::new_v4().to_string();
+    let runner_up_id = Uuid::new_v4().to_string();
+    let third_place_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&admin_id)
+    .bind("admin_user")
+    .bind("admin@example.com")
+    .bind("password")
+    .execute(&*pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&runner_up_id)
+    .bind("runner_up")
+    .bind("runner_up@example.com")
+    .bind("password")
+    .execute(&*pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&third_place_id)
+    .bind("third_place")
+    .bind("third@example.com")
+    .bind("password")
+    .execute(&*pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO clubs (id, name, admin_id) VALUES (?, ?, ?)")
+        .bind(&club_id)
+        .bind("Rollback Club")
+        .bind(&admin_id)
+        .execute(&*pool)
+        .await
+        .unwrap();
+
+    for user_id in [&admin_id, &runner_up_id, &third_place_id] {
+        sqlx::query("INSERT INTO club_members (club_id, user_id, balance) VALUES (?, ?, ?)")
+            .bind(&club_id)
+            .bind(user_id)
+            .bind(1000_i64)
+            .execute(&*pool)
+            .await
+            .unwrap();
+    }
+
+    let tournament_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO tournaments (
+            id, club_id, name, format_id, variant_id, buy_in, starting_stack, prize_pool,
+            max_players, min_players, registered_players, remaining_players, current_blind_level,
+            level_duration_secs, level_start_time, status, scheduled_start, pre_seat_secs,
+            actual_start, finished_at, cancel_reason, allow_rebuys, max_rebuys, rebuy_amount,
+            rebuy_stack, allow_addons, max_addons, addon_amount, addon_stack, late_registration_secs,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&tournament_id)
+    .bind(&club_id)
+    .bind("Rollback Tournament")
+    .bind("sng")
+    .bind("holdem")
+    .bind(100_i64)
+    .bind(1500_i64)
+    .bind(300_i64)
+    .bind(3_i32)
+    .bind(2_i32)
+    .bind(3_i32)
+    .bind(3_i32)
+    .bind(0_i32)
+    .bind(60_i64)
+    .bind(&now)
+    .bind("running")
+    .bind::<Option<String>>(None)
+    .bind(0_i64)
+    .bind(&now)
+    .bind::<Option<String>>(None)
+    .bind::<Option<String>>(None)
+    .bind(0_i32)
+    .bind(0_i32)
+    .bind(0_i64)
+    .bind(0_i64)
+    .bind(0_i32)
+    .bind(0_i32)
+    .bind(0_i64)
+    .bind(0_i64)
+    .bind(0_i64)
+    .bind(&now)
+    .execute(&*pool)
+    .await
+    .unwrap();
+
+    for user_id in [&admin_id, &runner_up_id, &third_place_id] {
+        sqlx::query(
+            "INSERT INTO tournament_registrations (
+                tournament_id, user_id, registered_at, prize_amount, rebuys, addons
+            ) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&tournament_id)
+        .bind(user_id)
+        .bind(&now)
+        .bind(0_i64)
+        .bind(0_i32)
+        .bind(0_i32)
+        .execute(&*pool)
+        .await
+        .unwrap();
+    }
+
+    let trigger_sql = format!(
+        "CREATE TRIGGER fail_prize_update
+         BEFORE UPDATE ON tournament_registrations
+         WHEN NEW.user_id = '{}' AND NEW.prize_amount > 0
+         BEGIN
+             SELECT RAISE(ABORT, 'fail prize update');
+         END;",
+        runner_up_id
+    );
+    sqlx::query(&trigger_sql)
+        .execute(&*pool)
+        .await
+        .unwrap();
+
+    manager
+        .eliminate_player(&tournament_id, &third_place_id)
+        .await
+        .unwrap();
+    let result = manager
+        .eliminate_player(&tournament_id, &runner_up_id)
+        .await;
+    assert!(result.is_err());
+
+    let prize_amounts: Vec<i64> = sqlx::query(
+        "SELECT prize_amount FROM tournament_registrations WHERE tournament_id = ?",
+    )
+        .bind(&tournament_id)
+        .fetch_all(&*pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<i64, _>("prize_amount"))
+        .collect();
+    assert!(prize_amounts.iter().all(|amount| *amount == 0));
+
+    let balances: Vec<i64> = sqlx::query("SELECT balance FROM club_members WHERE club_id = ?")
+        .bind(&club_id)
+        .fetch_all(&*pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<i64, _>("balance"))
+        .collect();
+    assert!(balances.iter().all(|balance| *balance == 1000));
 }
 
 #[tokio::test]
