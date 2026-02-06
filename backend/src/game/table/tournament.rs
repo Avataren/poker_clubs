@@ -52,26 +52,13 @@ impl PokerTable {
         Ok(())
     }
 
-    /// Check for eliminated players (stack = 0 in tournament mode)
-    /// Returns list of user_ids who are eliminated
-    /// Eliminated players are removed from the table
+    /// Check for eliminated players (stack = 0 in tournament mode).
+    /// Removes them from the table and appends their user_ids to `pending_eliminations`.
+    /// Called at the start of each new hand and when transitioning to Waiting.
     pub fn check_eliminations(&mut self) -> Vec<String> {
         if !self.format.eliminates_players() {
             return vec![];
         }
-
-        // Only eliminate players when no hand is in progress (Waiting phase)
-        // This ensures players see the complete hand result (showdown, pot animation)
-        // before being removed from the table
-        if self.phase != GamePhase::Waiting {
-            tracing::debug!(
-                "check_eliminations: Skipping - phase is {:?}, not Waiting",
-                self.phase
-            );
-            return vec![];
-        }
-
-        tracing::info!("check_eliminations: Processing in Waiting phase");
 
         let mut eliminated = vec![];
 
@@ -82,27 +69,48 @@ impl PokerTable {
                 eliminated.push(player.user_id.clone());
                 to_remove.push(idx);
                 tracing::info!(
-                    "Player {} ({}) eliminated from tournament",
+                    "Player {} ({}) eliminated from tournament (seat {})",
                     player.username,
-                    player.user_id
+                    player.user_id,
+                    player.seat
                 );
             }
+        }
+
+        if to_remove.is_empty() {
+            return vec![];
         }
 
         // Remove eliminated players from the table (in reverse order to preserve indices)
         for &idx in to_remove.iter().rev() {
             self.players.remove(idx);
+
+            // Adjust dealer_seat for the removal
+            if !self.players.is_empty() {
+                if self.dealer_seat >= self.players.len() {
+                    self.dealer_seat = self.players.len() - 1;
+                } else if idx < self.dealer_seat {
+                    self.dealer_seat -= 1;
+                }
+            }
         }
 
-        // Adjust current_player index if needed
-        if !to_remove.is_empty() && !self.players.is_empty() {
-            // Ensure current_player is still valid
+        // Ensure current_player is still valid
+        if !self.players.is_empty() {
             if self.current_player >= self.players.len() {
                 self.current_player = 0;
             }
         }
 
+        // Buffer eliminations for the background task to drain
+        self.pending_eliminations.extend(eliminated.iter().cloned());
+
         eliminated
+    }
+
+    /// Drain and return buffered eliminations (consumed by the tournament lifecycle task).
+    pub fn drain_pending_eliminations(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_eliminations)
     }
 
     /// Check if tournament is finished (1 or fewer players remaining)

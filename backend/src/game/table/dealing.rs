@@ -5,6 +5,9 @@ impl PokerTable {
         self.last_winner_message = None;
         self.winning_hand = None;
 
+        // Remove broke players before starting a new hand (tournament mode)
+        self.check_eliminations();
+
         // Reset all players for new hand
         for player in &mut self.players {
             player.reset_for_new_hand();

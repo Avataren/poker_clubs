@@ -21,7 +21,17 @@ impl PokerTable {
             return Err(GameError::TableFull);
         }
 
-        let seat = self.players.len();
+        // Find the next available seat number
+        let mut occupied = vec![false; self.max_seats];
+        for p in &self.players {
+            if p.seat < self.max_seats {
+                occupied[p.seat] = true;
+            }
+        }
+        let seat = occupied
+            .iter()
+            .position(|taken| !*taken)
+            .ok_or(GameError::TableFull)?;
         let mut player = Player::new(user_id, username, seat, buyin);
 
         // If a hand is in progress, make player wait until next hand
@@ -53,12 +63,9 @@ impl PokerTable {
 
         self.players.retain(|p| p.user_id != user_id);
 
-        // Recalculate seat numbers
-        for (idx, player) in self.players.iter_mut().enumerate() {
-            player.seat = idx;
-        }
+        // Seats are preserved — players keep their physical seat numbers.
 
-        // Adjust dealer_seat and current_player if needed
+        // Adjust dealer_seat and current_player vec indices after removal
         if let Some(removed_idx) = removed_idx {
             if !self.players.is_empty() {
                 // If dealer was removed or is now out of bounds, move it to a valid position

@@ -2637,24 +2637,25 @@ async fn test_elimination_only_happens_in_waiting_phase() {
         .add_player("p3".to_string(), "Player3".to_string(), 1000)
         .unwrap();
 
-    // Start a hand to get out of Waiting phase
-    table.start_new_hand();
-    assert_eq!(table.phase, GamePhase::PreFlop);
-
-    // Simulate player losing all chips during the hand
+    // Simulate player losing all chips
     table.players[1].stack = 0;
 
-    // Check eliminations should NOT remove the player during PreFlop
-    let eliminated = table.check_eliminations();
-    assert_eq!(eliminated.len(), 0, "Should not eliminate during PreFlop phase");
-    assert_eq!(table.players.len(), 3, "Player should still be at table during PreFlop");
+    // Ensure we're in Waiting phase
+    table.phase = GamePhase::Waiting;
 
-    // Verify player 2 is still there
-    assert!(table.players.iter().any(|p| p.user_id == "p2"));
+    // start_new_hand calls check_eliminations internally — broke player is removed
+    // before the new hand begins
+    table.start_new_hand();
+    assert_eq!(table.players.len(), 2, "Broke player should be removed when starting new hand");
+    assert!(!table.players.iter().any(|p| p.user_id == "p2"), "p2 should be eliminated");
+
+    // Eliminated IDs should be buffered for the lifecycle task to drain
+    let pending = table.drain_pending_eliminations();
+    assert_eq!(pending, vec!["p2".to_string()]);
 }
 
 #[tokio::test]
-async fn test_elimination_blocked_during_showdown() {
+async fn test_showdown_delay_prevents_immediate_elimination() {
     use poker_server::game::format::SitAndGo;
     use poker_server::game::table::{GamePhase, PokerTable};
     use poker_server::game::variant::TexasHoldem;
@@ -2679,20 +2680,27 @@ async fn test_elimination_blocked_during_showdown() {
         .add_player("p2".to_string(), "Player2".to_string(), 1000)
         .unwrap();
 
-    // Manually set phase to Showdown (simulating end of hand)
+    // Manually set phase to Showdown with recent timestamp (delay not yet expired)
     table.phase = GamePhase::Showdown;
+    table.last_phase_change_time = Some(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    );
 
     // Simulate player losing all chips
     table.players[1].stack = 0;
 
-    // Check eliminations should NOT remove the player during Showdown
-    let eliminated = table.check_eliminations();
-    assert_eq!(eliminated.len(), 0, "Should not eliminate during Showdown phase");
-    assert_eq!(table.players.len(), 2, "Player should still be at table during Showdown");
+    // check_auto_advance should NOT advance yet (showdown delay not expired)
+    let advanced = table.check_auto_advance();
+    assert!(!advanced, "Should not advance before showdown delay expires");
+    // Player is still visible at the table during the showdown display
+    assert_eq!(table.players.len(), 2, "Player should still be visible during showdown delay");
 }
 
 #[tokio::test]
-async fn test_elimination_blocked_during_flop_turn_river() {
+async fn test_check_eliminations_removes_broke_players() {
     use poker_server::game::format::SitAndGo;
     use poker_server::game::table::{GamePhase, PokerTable};
     use poker_server::game::variant::TexasHoldem;
@@ -2716,29 +2724,29 @@ async fn test_elimination_blocked_during_flop_turn_river() {
     table
         .add_player("p2".to_string(), "Player2".to_string(), 1000)
         .unwrap();
+    table
+        .add_player("p3".to_string(), "Player3".to_string(), 1000)
+        .unwrap();
 
-    // Test all non-waiting phases
-    for phase in [GamePhase::Flop, GamePhase::Turn, GamePhase::River] {
-        table.phase = phase.clone();
-        table.players[1].stack = 0;
+    // Simulate player losing all chips
+    table.players[1].stack = 0;
 
-        let eliminated = table.check_eliminations();
-        assert_eq!(
-            eliminated.len(),
-            0,
-            "Should not eliminate during {:?} phase",
-            phase
-        );
-        assert_eq!(
-            table.players.len(),
-            2,
-            "Player should still be at table during {:?}",
-            phase
-        );
+    // check_eliminations removes broke players and buffers their IDs
+    let eliminated = table.check_eliminations();
+    assert_eq!(eliminated.len(), 1);
+    assert_eq!(eliminated[0], "p2");
+    assert_eq!(table.players.len(), 2, "Broke player should be removed");
+    assert!(!table.players.iter().any(|p| p.user_id == "p2"));
 
-        // Reset for next iteration
-        table.players[1].stack = 1000;
-    }
+    // Remaining players keep their original seats
+    assert_eq!(table.players[0].seat, 0);
+    assert_eq!(table.players[1].seat, 2);
+
+    // Buffered for lifecycle task to drain
+    let pending = table.drain_pending_eliminations();
+    assert_eq!(pending, vec!["p2".to_string()]);
+    // Second drain returns empty
+    assert!(table.drain_pending_eliminations().is_empty());
 }
 
 #[tokio::test]
@@ -2820,65 +2828,50 @@ async fn test_all_in_showdown_players_see_results_before_elimination() {
     // Both players go all-in using handle_action
     let p1_id = table.players[0].user_id.clone();
     let p2_id = table.players[1].user_id.clone();
-    
+
     // First player action
     table.handle_action(&p1_id, PlayerAction::AllIn).unwrap();
-    
+
     // Second player calls (or goes all-in)
     table.handle_action(&p2_id, PlayerAction::Call).unwrap();
 
-    // After both all-in, game should auto-advance through streets
-    // Use check_auto_advance to simulate the passage of time
-    // The game might go to Flop, Turn, River, and Showdown automatically
-
-    // Simulate the auto-advance through all streets (normally done by background task)
+    // Simulate auto-advance through streets to Showdown
     while table.phase != GamePhase::Showdown && table.phase != GamePhase::Waiting {
-        // Force time to pass by manipulating last_phase_change_time
-        table.last_phase_change_time = Some(0); // Set to epoch to ensure delay has passed
-        table.check_auto_advance();
-    }
-
-    // At this point we should be in Showdown
-    // One player should have 0 chips (the loser)
-    let loser = table.players.iter().find(|p| p.stack == 0);
-    
-    if let Some(loser) = loser {
-        let loser_id = loser.user_id.clone();
-        
-        // During Showdown, elimination check should NOT remove the player
-        let eliminated = table.check_eliminations();
-        assert_eq!(
-            eliminated.len(),
-            0,
-            "Should not eliminate during Showdown - player should see the result first!"
-        );
-        
-        // The loser should still be visible at the table
-        assert!(
-            table.players.iter().any(|p| p.user_id == loser_id),
-            "Loser should still be visible at table during Showdown"
-        );
-        
-        // Now advance to Waiting phase
         table.last_phase_change_time = Some(0);
         table.check_auto_advance();
-        
-        // After showdown delay, should transition to Waiting (only 1 player with chips)
-        assert_eq!(
-            table.phase,
-            GamePhase::Waiting,
-            "Should be in Waiting phase after showdown"
-        );
-        
-        // NOW elimination should happen
-        let eliminated = table.check_eliminations();
-        assert_eq!(
-            eliminated.len(),
-            1,
-            "Should eliminate in Waiting phase after showdown"
-        );
-        assert_eq!(eliminated[0], loser_id);
     }
+
+    // During Showdown, the loser is still at the table (visible for results)
+    assert_eq!(table.phase, GamePhase::Showdown);
+    assert_eq!(table.players.len(), 2, "Both players visible during showdown");
+
+    // Showdown delay has NOT expired yet — check_auto_advance should NOT advance
+    table.last_phase_change_time = Some(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    );
+    let advanced = table.check_auto_advance();
+    assert!(!advanced, "Should not advance before showdown delay expires");
+    assert_eq!(table.players.len(), 2, "Both players still visible during delay");
+
+    // Now expire the showdown delay — this triggers start_new_hand which
+    // removes broke players before dealing
+    table.last_phase_change_time = Some(0);
+    table.check_auto_advance();
+
+    // After auto-advance, the loser should be eliminated
+    // (start_new_hand called check_eliminations internally)
+    assert!(
+        table.phase == GamePhase::Waiting,
+        "Should be in Waiting (only 1 player with chips)"
+    );
+    assert_eq!(table.players.len(), 1, "Loser should be removed after showdown");
+
+    // Buffered for the lifecycle task
+    let pending = table.drain_pending_eliminations();
+    assert_eq!(pending.len(), 1, "One player should be pending elimination");
 }
 
 #[tokio::test]

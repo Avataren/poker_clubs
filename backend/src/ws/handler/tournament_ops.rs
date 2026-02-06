@@ -157,12 +157,15 @@ impl GameServer {
         self.notify_table_update(table_id).await;
     }
 
-    /// Check a table for eliminations and return (tournament_id, eliminated_users)
+    /// Drain buffered eliminations from a table.
+    /// Eliminations are buffered by `check_eliminations()` which runs at the
+    /// start of each new hand, so this always has fresh data regardless of
+    /// which phase the table is in.
     pub async fn check_table_eliminations(&self, table_id: &str) -> Option<(String, Vec<String>)> {
         let (tournament_id, eliminated) = {
             let mut tables = self.tables.write().await;
             let table = tables.get_mut(table_id)?;
-            let eliminated = table.check_eliminations();
+            let eliminated = table.drain_pending_eliminations();
             if eliminated.is_empty() {
                 return None;
             }

@@ -88,6 +88,9 @@ pub struct PokerTable {
     pub street_delay_ms: u64,          // Delay between flop/turn/river
     pub showdown_delay_ms: u64,        // Delay to show results
     pub tournament_id: Option<String>, // If this is a tournament table
+    /// Buffer of user_ids eliminated since last drain (used by tournament lifecycle)
+    #[serde(skip)]
+    pub pending_eliminations: Vec<String>,
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
     #[serde(skip, default = "default_format")]
@@ -127,6 +130,7 @@ impl Clone for PokerTable {
             street_delay_ms: self.street_delay_ms,
             showdown_delay_ms: self.showdown_delay_ms,
             tournament_id: self.tournament_id.clone(),
+            pending_eliminations: self.pending_eliminations.clone(),
             variant: self.variant.clone_box(),
             format: self.format.clone_box(),
         }
@@ -209,6 +213,7 @@ impl PokerTable {
             street_delay_ms: DEFAULT_STREET_DELAY_MS,
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
             tournament_id: None,
+            pending_eliminations: Vec::new(),
             variant,
             format,
         }
