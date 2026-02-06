@@ -99,6 +99,13 @@ pub async fn create_test_app() -> (Router, Arc<ws::GameServer>) {
         pool: pool.clone(),
         jwt_manager: jwt_manager.clone(),
         game_server: game_server.clone(),
+        oauth_config: config::OAuthConfig {
+            google_client_id: "test-google-client".to_string(),
+            apple_client_id: "test-apple-client".to_string(),
+            apple_team_id: "test-team".to_string(),
+            apple_key_id: "test-key".to_string(),
+            apple_private_key: "test-private-key".to_string(),
+        },
     });
 
     let table_state = Arc::new(api::TableAppState {

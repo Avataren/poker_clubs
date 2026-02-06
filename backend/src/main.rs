@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         jwt_manager: jwt_manager.clone(),
         game_server: game_server.clone(),
+        oauth_config: config.oauth.clone(),
     });
 
     // Create shared state for tables endpoint

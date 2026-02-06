@@ -13,6 +13,8 @@ pub struct User {
     pub created_at: String,
     #[serde(skip_serializing)]
     pub is_bot: bool,
+    #[serde(skip_serializing)]
+    pub auth_provider: String,
 }
 
 impl User {
@@ -24,6 +26,7 @@ impl User {
             password_hash,
             created_at: Utc::now().to_rfc3339(),
             is_bot: false,
+            auth_provider: "local".to_string(),
         }
     }
 
@@ -35,6 +38,7 @@ impl User {
             password_hash: "$2b$12$BOTACCOUNT_NO_PASSWORD".to_string(),
             created_at: Utc::now().to_rfc3339(),
             is_bot: true,
+            auth_provider: "system".to_string(),
         }
     }
 }
