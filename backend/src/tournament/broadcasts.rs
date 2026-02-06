@@ -69,12 +69,15 @@ impl BroadcastService {
             .await?;
 
             // Calculate remaining time for this level (server-side)
-            let remaining_secs = remaining_level_time_secs(
+            let remaining_secs = match remaining_level_time_secs_checked(
+                &tournament.id,
                 &level_start_time,
                 tournament.level_duration_secs,
                 Utc::now(),
-            )
-            .expect("Invalid tournament level_start_time");
+            ) {
+                Some(secs) => secs,
+                None => continue,
+            };
 
             // Create tournament info message with current server time
             let message = ServerMessage::TournamentInfo {
@@ -114,10 +117,31 @@ fn remaining_level_time_secs(
     Some((level_duration_secs - elapsed_secs).max(0))
 }
 
+fn remaining_level_time_secs_checked(
+    tournament_id: &str,
+    level_start_time: &str,
+    level_duration_secs: i64,
+    now: DateTime<Utc>,
+) -> Option<i64> {
+    match remaining_level_time_secs(level_start_time, level_duration_secs, now) {
+        Some(secs) => Some(secs),
+        None => {
+            tracing::warn!(
+                "Invalid tournament level_start_time for tournament {}: {}",
+                tournament_id,
+                level_start_time
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn remaining_level_time_secs_computes_remaining() {
@@ -126,5 +150,61 @@ mod tests {
 
         assert_eq!(remaining_level_time_secs(&start, 60, now), Some(30));
         assert_eq!(remaining_level_time_secs("bad", 60, now), None);
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedWriter {
+        fn contents(&self) -> Vec<u8> {
+            self.buffer.lock().expect("lock log buffer").clone()
+        }
+    }
+
+    struct SharedWriterGuard {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for SharedWriterGuard {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.buffer.lock().expect("lock log buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedWriter {
+        type Writer = SharedWriterGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedWriterGuard {
+                buffer: self.buffer.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn remaining_level_time_secs_checked_logs_invalid_timestamp() {
+        let now = Utc::now();
+        let writer = SharedWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(writer.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let result = remaining_level_time_secs_checked("tournament-1", "not-a-time", 60, now);
+
+        assert!(result.is_none());
+
+        let output = String::from_utf8(writer.contents()).expect("valid utf8 logs");
+        assert!(output.contains("Invalid tournament level_start_time"));
+        assert!(output.contains("tournament-1"));
+        assert!(output.contains("not-a-time"));
     }
 }
