@@ -195,28 +195,40 @@ impl LifecycleService {
             return Ok(None);
         }
 
-        // Update remaining players (prevent underflow)
-        tournament.remaining_players = (tournament.remaining_players - 1).max(0);
-        let finish_position = tournament.remaining_players + 1;
+        let mut tx = self.ctx.pool.begin().await?;
 
-        sqlx::query("UPDATE tournaments SET remaining_players = ? WHERE id = ?")
-            .bind(tournament.remaining_players)
-            .bind(tournament_id)
-            .execute(&*self.ctx.pool)
-            .await?;
+        // Update remaining players (prevent underflow) and fetch the new value atomically.
+        let remaining_players: i32 = sqlx::query_scalar(
+            "UPDATE tournaments
+             SET remaining_players = CASE
+                 WHEN remaining_players > 0 THEN remaining_players - 1
+                 ELSE 0
+             END
+             WHERE id = ?
+             RETURNING remaining_players",
+        )
+        .bind(tournament_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
-        // Record elimination
+        let finish_position = remaining_players + 1;
+
+        // Record elimination within the same transaction.
         sqlx::query(
-            "UPDATE tournament_registrations 
-             SET eliminated_at = ?, finish_position = ? 
+            "UPDATE tournament_registrations
+             SET eliminated_at = ?, finish_position = ?
              WHERE tournament_id = ? AND user_id = ?",
         )
         .bind(Utc::now().to_rfc3339())
         .bind(finish_position)
         .bind(tournament_id)
         .bind(user_id)
-        .execute(&*self.ctx.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
+
+        tournament.remaining_players = remaining_players;
 
         // Get username and potential prize
         let username = self.ctx.get_username(user_id).await?;
@@ -251,7 +263,7 @@ impl LifecycleService {
             .await;
 
         // Check if tournament is finished
-        if tournament.remaining_players <= 1 {
+        if remaining_players <= 1 {
             return Ok(Some(self.finish_tournament(tournament_id).await?));
         }
 
@@ -454,6 +466,10 @@ fn normalize_min_players(min_players: i32, max_players: i32) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{db, ws::GameServer};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::Arc;
+    use uuid::Uuid;
 
     #[test]
     fn normalize_min_players_defaults_to_two() {
@@ -464,5 +480,156 @@ mod tests {
     fn normalize_min_players_rejects_out_of_bounds() {
         assert!(normalize_min_players(1, 8).is_err());
         assert!(normalize_min_players(10, 8).is_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_eliminations_assign_unique_positions() {
+        let db_path = std::env::temp_dir().join(format!(
+            "tournament_concurrency_{}.sqlite",
+            Uuid::new_v4()
+        ));
+        let db_url = format!("sqlite:{}", db_path.display());
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect(&db_url)
+            .await
+            .expect("Failed to create database");
+
+        db::run_migrations(&pool)
+            .await
+            .expect("Failed to run migrations");
+
+        let jwt_manager = Arc::new(crate::auth::JwtManager::new("test_secret".to_string()));
+        let game_server = Arc::new(GameServer::new(jwt_manager, Arc::new(pool.clone())));
+        let ctx = Arc::new(TournamentContext::new(Arc::new(pool.clone()), game_server));
+        let service = LifecycleService::new(ctx);
+
+        let club_id = Uuid::new_v4().to_string();
+        let admin_id = Uuid::new_v4().to_string();
+        let player_two = Uuid::new_v4().to_string();
+        let player_three = Uuid::new_v4().to_string();
+        let player_four = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+
+        for (user_id, username) in [
+            (&admin_id, "admin_user"),
+            (&player_two, "player_two"),
+            (&player_three, "player_three"),
+            (&player_four, "player_four"),
+        ] {
+            sqlx::query(
+                "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
+            )
+            .bind(user_id)
+            .bind(username)
+            .bind(format!("{}@example.com", username))
+            .bind("password")
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        sqlx::query("INSERT INTO clubs (id, name, admin_id) VALUES (?, ?, ?)")
+            .bind(&club_id)
+            .bind("Concurrency Club")
+            .bind(&admin_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let tournament_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO tournaments (
+                id, club_id, name, format_id, variant_id, buy_in, starting_stack, prize_pool,
+                max_players, min_players, registered_players, remaining_players, current_blind_level,
+                level_duration_secs, level_start_time, status, scheduled_start, pre_seat_secs,
+                actual_start, finished_at, cancel_reason, allow_rebuys, max_rebuys, rebuy_amount,
+                rebuy_stack, allow_addons, max_addons, addon_amount, addon_stack, late_registration_secs,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&tournament_id)
+        .bind(&club_id)
+        .bind("Concurrency Tournament")
+        .bind("sng")
+        .bind("holdem")
+        .bind(100_i64)
+        .bind(1500_i64)
+        .bind(400_i64)
+        .bind(4_i32)
+        .bind(2_i32)
+        .bind(4_i32)
+        .bind(4_i32)
+        .bind(0_i32)
+        .bind(60_i64)
+        .bind(&now)
+        .bind("running")
+        .bind::<Option<String>>(None)
+        .bind(0_i64)
+        .bind(&now)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind(0_i32)
+        .bind(0_i32)
+        .bind(0_i64)
+        .bind(0_i32)
+        .bind(0_i32)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i32)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for user_id in [&admin_id, &player_two, &player_three, &player_four] {
+            sqlx::query(
+                "INSERT INTO tournament_registrations (tournament_id, user_id) VALUES (?, ?)",
+            )
+            .bind(&tournament_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let elimination_one = service.eliminate_player(&tournament_id, &player_two);
+        let elimination_two = service.eliminate_player(&tournament_id, &player_three);
+
+        let (result_one, result_two) = tokio::join!(elimination_one, elimination_two);
+        result_one.unwrap();
+        result_two.unwrap();
+
+        let position_one: i32 = sqlx::query_scalar(
+            "SELECT finish_position FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(&tournament_id)
+        .bind(&player_two)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let position_two: i32 = sqlx::query_scalar(
+            "SELECT finish_position FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?",
+        )
+        .bind(&tournament_id)
+        .bind(&player_three)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let mut positions = vec![position_one, position_two];
+        positions.sort();
+        assert_eq!(positions, vec![3, 4]);
+
+        let remaining_players: i32 = sqlx::query_scalar(
+            "SELECT remaining_players FROM tournaments WHERE id = ?",
+        )
+        .bind(&tournament_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(remaining_players, 2);
     }
 }
