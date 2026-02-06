@@ -467,7 +467,7 @@ fn normalize_min_players(min_players: i32, max_players: i32) -> Result<i32> {
 mod tests {
     use super::*;
     use crate::{db, ws::GameServer};
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -488,10 +488,12 @@ mod tests {
             "tournament_concurrency_{}.sqlite",
             Uuid::new_v4()
         ));
-        let db_url = format!("sqlite:{}", db_path.display());
+        let db_options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(&db_url)
+            .connect_with(db_options)
             .await
             .expect("Failed to create database");
 
@@ -576,6 +578,7 @@ mod tests {
         .bind(0_i32)
         .bind(0_i64)
         .bind(0_i64)
+        .bind(0_i32)
         .bind(0_i32)
         .bind(&now)
         .execute(&pool)
