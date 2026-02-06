@@ -5,6 +5,7 @@ use crate::{
     tournament::prizes::{PrizeStructure, PrizeWinner},
 };
 use chrono::Utc;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{
@@ -433,6 +434,8 @@ impl LifecycleService {
         .fetch_all(&*self.ctx.pool)
         .await?;
 
+        let mut tournaments_with_eliminations = HashSet::new();
+
         for (tournament_id, table_id) in tables {
             // Check if this table has any eliminations
             if let Some((_, eliminated_users)) =
@@ -454,7 +457,6 @@ impl LifecycleService {
                                 tournament_id,
                                 prizes.len()
                             );
-                            // TODO: Broadcast tournament finished message via WebSocket
                         }
                         Ok(None) => {
                             // Elimination recorded, tournament continues
@@ -469,6 +471,227 @@ impl LifecycleService {
                         }
                     }
                 }
+
+                tournaments_with_eliminations.insert(tournament_id);
+            }
+        }
+
+        // Balance tables for tournaments that had eliminations
+        for tournament_id in tournaments_with_eliminations {
+            if let Err(e) = self.balance_tournament_tables(&tournament_id).await {
+                tracing::error!(
+                    "Failed to balance tables for tournament {}: {:?}",
+                    tournament_id,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Balance player counts across tournament tables.
+    /// Closes empty tables, consolidates 1-player tables, and rebalances uneven tables.
+    async fn balance_tournament_tables(&self, tournament_id: &str) -> Result<()> {
+        // Get active tournament tables
+        let table_rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1",
+        )
+        .bind(tournament_id)
+        .fetch_all(&*self.ctx.pool)
+        .await?;
+
+        let table_ids: Vec<String> = table_rows.into_iter().map(|(id,)| id).collect();
+        if table_ids.len() <= 1 {
+            return Ok(());
+        }
+
+        let mut counts = self
+            .ctx
+            .game_server
+            .get_table_player_counts(&table_ids)
+            .await;
+
+        // Close empty tables
+        let empty_tables: Vec<String> = counts
+            .iter()
+            .filter(|(_, c)| *c == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for table_id in &empty_tables {
+            sqlx::query(
+                "UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ? AND table_id = ?",
+            )
+            .bind(tournament_id)
+            .bind(table_id)
+            .execute(&*self.ctx.pool)
+            .await?;
+            tracing::info!(
+                "Closed empty tournament table {} in tournament {}",
+                table_id,
+                tournament_id
+            );
+        }
+        counts.retain(|(_, c)| *c > 0);
+
+        if counts.len() <= 1 {
+            return Ok(());
+        }
+
+        // Consolidate 1-player tables: move the lone player elsewhere and close the table
+        loop {
+            // Find a table with exactly 1 player
+            let lone_table = counts.iter().find(|(_, c)| *c == 1).map(|(id, _)| id.clone());
+            let lone_table_id = match lone_table {
+                Some(id) => id,
+                None => break,
+            };
+
+            // Find another table with room (not the lone table itself)
+            let dest = counts
+                .iter()
+                .filter(|(id, _)| *id != lone_table_id)
+                .min_by_key(|(_, c)| *c)
+                .map(|(id, _)| id.clone());
+            let dest_table_id = match dest {
+                Some(id) => id,
+                None => break,
+            };
+
+            // Get the lone player
+            let player_id = match self
+                .ctx
+                .game_server
+                .get_last_player_at_table(&lone_table_id)
+                .await
+            {
+                Some(id) => id,
+                None => break,
+            };
+
+            // Move them
+            if let Err(e) = self
+                .ctx
+                .game_server
+                .move_tournament_player(&lone_table_id, &dest_table_id, &player_id)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to consolidate player {} from table {}: {}",
+                    player_id,
+                    lone_table_id,
+                    e
+                );
+                break;
+            }
+
+            // Update registration
+            sqlx::query(
+                "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?",
+            )
+            .bind(&dest_table_id)
+            .bind(tournament_id)
+            .bind(&player_id)
+            .execute(&*self.ctx.pool)
+            .await?;
+
+            // Close the now-empty table
+            sqlx::query(
+                "UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ? AND table_id = ?",
+            )
+            .bind(tournament_id)
+            .bind(&lone_table_id)
+            .execute(&*self.ctx.pool)
+            .await?;
+            tracing::info!(
+                "Consolidated lone player from table {} to {} in tournament {}",
+                lone_table_id,
+                dest_table_id,
+                tournament_id
+            );
+
+            // Update local counts
+            if let Some(pos) = counts.iter().position(|(id, _)| *id == dest_table_id) {
+                counts[pos].1 += 1;
+            }
+            counts.retain(|(id, _)| *id != lone_table_id);
+
+            if counts.len() <= 1 {
+                return Ok(());
+            }
+        }
+
+        // Rebalance loop: while max - min >= 2, move one player from max to min
+        loop {
+            let max_entry = counts.iter().max_by_key(|(_, c)| *c).cloned();
+            let min_entry = counts.iter().min_by_key(|(_, c)| *c).cloned();
+
+            let (max_id, max_count) = match max_entry {
+                Some(e) => e,
+                None => break,
+            };
+            let (min_id, min_count) = match min_entry {
+                Some(e) => e,
+                None => break,
+            };
+
+            if (max_count as i64) - (min_count as i64) < 2 {
+                break;
+            }
+
+            // Pick the last player from the most populated table
+            let player_id = match self
+                .ctx
+                .game_server
+                .get_last_player_at_table(&max_id)
+                .await
+            {
+                Some(id) => id,
+                None => break,
+            };
+
+            if let Err(e) = self
+                .ctx
+                .game_server
+                .move_tournament_player(&max_id, &min_id, &player_id)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to balance player {} from table {} to {}: {}",
+                    player_id,
+                    max_id,
+                    min_id,
+                    e
+                );
+                break;
+            }
+
+            // Update registration
+            sqlx::query(
+                "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?",
+            )
+            .bind(&min_id)
+            .bind(tournament_id)
+            .bind(&player_id)
+            .execute(&*self.ctx.pool)
+            .await?;
+
+            tracing::info!(
+                "Rebalanced player {} from table {} ({}) to table {} ({}) in tournament {}",
+                player_id,
+                max_id,
+                max_count,
+                min_id,
+                min_count,
+                tournament_id
+            );
+
+            // Update local counts
+            if let Some(pos) = counts.iter().position(|(id, _)| *id == max_id) {
+                counts[pos].1 -= 1;
+            }
+            if let Some(pos) = counts.iter().position(|(id, _)| *id == min_id) {
+                counts[pos].1 += 1;
             }
         }
 

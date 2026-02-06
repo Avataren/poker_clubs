@@ -159,16 +159,118 @@ impl GameServer {
 
     /// Check a table for eliminations and return (tournament_id, eliminated_users)
     pub async fn check_table_eliminations(&self, table_id: &str) -> Option<(String, Vec<String>)> {
-        let mut tables = self.tables.write().await;
-        if let Some(table) = tables.get_mut(table_id) {
+        let (tournament_id, eliminated) = {
+            let mut tables = self.tables.write().await;
+            let table = tables.get_mut(table_id)?;
             let eliminated = table.check_eliminations();
-            if !eliminated.is_empty() {
-                if let Some(tournament_id) = &table.tournament_id {
-                    return Some((tournament_id.clone(), eliminated));
-                }
+            if eliminated.is_empty() {
+                return None;
+            }
+            let tid = table.tournament_id.clone()?;
+            (tid, eliminated)
+        };
+        // Tables lock dropped — notify clients so eliminated players disappear
+        self.notify_table_update(table_id).await;
+        // Deregister eliminated bots
+        {
+            let mut bot_mgr = self.bot_manager.write().await;
+            for user_id in &eliminated {
+                bot_mgr.remove_bot(table_id, user_id);
             }
         }
-        None
+        Some((tournament_id, eliminated))
+    }
+
+    /// Move a tournament player from one table to another.
+    /// Handles bot re-registration and notifies both tables.
+    pub async fn move_tournament_player(
+        &self,
+        from_table_id: &str,
+        to_table_id: &str,
+        user_id: &str,
+    ) -> Result<(), String> {
+        // Extract player info and move within a single tables lock
+        let (username, stack) = {
+            let mut tables = self.tables.write().await;
+            let from_table = tables
+                .get(from_table_id)
+                .ok_or_else(|| "Source table not found".to_string())?;
+            let player = from_table
+                .players
+                .iter()
+                .find(|p| p.user_id == user_id)
+                .ok_or_else(|| "Player not found on source table".to_string())?;
+            let username = player.username.clone();
+            let stack = player.stack;
+
+            // Remove from source
+            let from_table = tables.get_mut(from_table_id).unwrap();
+            from_table.remove_player(user_id);
+
+            // Find next available seat on dest table
+            let to_table = tables
+                .get_mut(to_table_id)
+                .ok_or_else(|| "Destination table not found".to_string())?;
+            if to_table.players.len() >= to_table.max_seats {
+                return Err("Destination table is full".to_string());
+            }
+            let mut occupied = vec![false; to_table.max_seats];
+            for p in &to_table.players {
+                if p.seat < to_table.max_seats {
+                    occupied[p.seat] = true;
+                }
+            }
+            let seat = occupied
+                .iter()
+                .position(|taken| !*taken)
+                .ok_or_else(|| "No available seat on destination table".to_string())?;
+
+            to_table
+                .take_seat(user_id.to_string(), username.clone(), seat, stack)
+                .map_err(|e| format!("Failed to seat player: {:?}", e))?;
+
+            (username, stack)
+        };
+
+        // Move bot registration if applicable
+        {
+            let mut bot_mgr = self.bot_manager.write().await;
+            bot_mgr.move_bot(from_table_id, to_table_id, user_id);
+        }
+
+        // Notify both tables
+        self.notify_table_update(from_table_id).await;
+        self.notify_table_update(to_table_id).await;
+
+        tracing::info!(
+            "Moved player {} ({}) with stack {} from table {} to table {}",
+            username,
+            user_id,
+            stack,
+            from_table_id,
+            to_table_id
+        );
+
+        Ok(())
+    }
+
+    /// Get player counts for a set of tournament tables.
+    pub async fn get_table_player_counts(&self, table_ids: &[String]) -> Vec<(String, usize)> {
+        let tables = self.tables.read().await;
+        table_ids
+            .iter()
+            .filter_map(|id| {
+                tables.get(id.as_str()).map(|t| (id.clone(), t.players.len()))
+            })
+            .collect()
+    }
+
+    /// Get the user_id of the last player in a table's player list (for balancing moves).
+    pub async fn get_last_player_at_table(&self, table_id: &str) -> Option<String> {
+        let tables = self.tables.read().await;
+        tables
+            .get(table_id)
+            .and_then(|t| t.players.last().map(|p| p.user_id.clone()))
     }
 
     /// Broadcast a tournament event to all tables in a tournament

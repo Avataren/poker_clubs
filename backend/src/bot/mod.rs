@@ -117,6 +117,26 @@ impl BotManager {
         }
     }
 
+    /// Move a bot from one table to another. Returns true if the bot was found and moved.
+    pub fn move_bot(&mut self, from_table_id: &str, to_table_id: &str, user_id: &str) -> bool {
+        let bot = if let Some(bots) = self.bots.get_mut(from_table_id) {
+            if let Some(pos) = bots.iter().position(|b| b.user_id == user_id) {
+                Some(bots.remove(pos))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(bot) = bot {
+            self.bots.entry(to_table_id.to_string()).or_default().push(bot);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Check if a user_id belongs to a bot.
     pub fn is_bot(&self, user_id: &str) -> bool {
         self.bots
