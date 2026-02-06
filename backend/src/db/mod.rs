@@ -80,6 +80,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             "add_balance_constraints",
             include_str!("migrations/007_add_balance_constraints.sql"),
         ),
+        (
+            8,
+            "add_oauth_identities",
+            include_str!("migrations/008_add_oauth_identities.sql"),
+        ),
     ];
 
     for (version, name, sql) in migrations {

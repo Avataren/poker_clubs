@@ -1,6 +1,7 @@
 use crate::{
     audit,
     auth::JwtManager,
+    config::OAuthConfig,
     db::{models::User, DbPool},
     error::{AppError, Result},
     ws::GameServer,
@@ -49,12 +50,15 @@ pub struct AppState {
     pub pool: DbPool,
     pub jwt_manager: Arc<JwtManager>,
     pub game_server: Arc<GameServer>,
+    pub oauth_config: OAuthConfig,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
+        .route("/oauth/google", post(google_login))
+        .route("/oauth/apple", post(apple_login))
 }
 
 async fn register(
@@ -140,6 +144,11 @@ async fn login(
     // Timing-safe: always perform bcrypt::verify even when user not found
     let (user, valid) = match user {
         Some(u) => {
+            if u.auth_provider != "local" {
+                return Err(AppError::Auth(
+                    "Use Google/Apple login for this account".to_string(),
+                ));
+            }
             let ok = bcrypt::verify(req.password.as_bytes(), &u.password_hash)
                 .map_err(|e| {
                     AppError::Internal(anyhow::anyhow!("Failed to verify password: {}", e))
@@ -163,6 +172,63 @@ async fn login(
     audit::log_auth_event(&user.username, "login", true);
 
     // Generate JWT token
+    let token = state
+        .jwt_manager
+        .create_token(user.id.clone(), user.username.clone())?;
+
+    Ok(Json(AuthResponse {
+        token,
+        user: user.into(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthLoginRequest {
+    id_token: String,
+}
+
+async fn google_login(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<OAuthLoginRequest>,
+) -> Result<Json<AuthResponse>> {
+    if !state.oauth_config.google_enabled() {
+        return Err(AppError::Auth(
+            "Google login is not configured".to_string(),
+        ));
+    }
+
+    let profile =
+        crate::auth::oauth::verify_google_token(&req.id_token, &state.oauth_config).await?;
+    let user = crate::auth::oauth::find_or_create_user(&state.pool, profile).await?;
+
+    audit::log_auth_event(&user.username, "login_google", true);
+
+    let token = state
+        .jwt_manager
+        .create_token(user.id.clone(), user.username.clone())?;
+
+    Ok(Json(AuthResponse {
+        token,
+        user: user.into(),
+    }))
+}
+
+async fn apple_login(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<OAuthLoginRequest>,
+) -> Result<Json<AuthResponse>> {
+    if !state.oauth_config.apple_enabled() {
+        return Err(AppError::Auth(
+            "Apple login is not configured".to_string(),
+        ));
+    }
+
+    let profile =
+        crate::auth::oauth::verify_apple_token(&req.id_token, &state.oauth_config).await?;
+    let user = crate::auth::oauth::find_or_create_user(&state.pool, profile).await?;
+
+    audit::log_auth_event(&user.username, "login_apple", true);
+
     let token = state
         .jwt_manager
         .create_token(user.id.clone(), user.username.clone())?;
