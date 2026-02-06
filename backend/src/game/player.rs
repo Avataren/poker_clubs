@@ -9,6 +9,7 @@ pub enum PlayerState {
     SittingOut,     // Voluntarily sitting out (won't auto-activate)
     WaitingForHand, // Joined mid-hand, waiting for next hand to start
     Eliminated,     // Tournament only: player has no chips left
+    Disconnected,   // WebSocket disconnected, waiting for reconnection (grace period)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,8 +82,8 @@ impl Player {
         self.last_action = None;
         self.pot_won = 0;
 
-        // Activate players who have chips and aren't voluntarily sitting out or eliminated
-        if self.stack > 0 && self.state != PlayerState::SittingOut && self.state != PlayerState::Eliminated {
+        // Activate players who have chips and aren't voluntarily sitting out, eliminated, or disconnected
+        if self.stack > 0 && self.state != PlayerState::SittingOut && self.state != PlayerState::Eliminated && self.state != PlayerState::Disconnected {
             self.state = PlayerState::Active;
         }
         // Players with 0 stack will be handled by check_eliminations in tournament mode

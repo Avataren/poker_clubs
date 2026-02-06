@@ -8,7 +8,7 @@ use crate::{
     tournament::prizes::PrizeStructure,
     ws::GameServer,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -275,14 +275,24 @@ impl TournamentContext {
                 .await?;
         }
 
-        // Refund all registered players
-        for registration in registrations {
-            self.refund_buy_in(
-                &tournament.club_id,
-                &registration.user_id,
-                tournament.buy_in,
-            )
+        // Wrap refunds + status update in a transaction
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&*self.pool)
             .await?;
+
+        // Refund all registered players first
+        for registration in &registrations {
+            if let Err(e) = self
+                .refund_buy_in(
+                    &tournament.club_id,
+                    &registration.user_id,
+                    tournament.buy_in,
+                )
+                .await
+            {
+                let _ = sqlx::query("ROLLBACK").execute(&*self.pool).await;
+                return Err(e);
+            }
         }
 
         tournament.status = "cancelled".to_string();
@@ -291,7 +301,7 @@ impl TournamentContext {
         tournament.prize_pool = 0;
         tournament.remaining_players = 0;
 
-        sqlx::query(
+        if let Err(e) = sqlx::query(
             "UPDATE tournaments SET status = ?, cancel_reason = ?, finished_at = ?, prize_pool = ?, remaining_players = ? WHERE id = ?",
         )
         .bind(&tournament.status)
@@ -301,7 +311,15 @@ impl TournamentContext {
         .bind(tournament.remaining_players)
         .bind(&tournament.id)
         .execute(&*self.pool)
-        .await?;
+        .await
+        {
+            let _ = sqlx::query("ROLLBACK").execute(&*self.pool).await;
+            return Err(e.into());
+        }
+
+        sqlx::query("COMMIT")
+            .execute(&*self.pool)
+            .await?;
 
         if let Some(state) = self.tournaments.write().await.get_mut(&tournament.id) {
             state.tournament = tournament.clone();
@@ -486,7 +504,7 @@ impl TournamentContext {
         previous_finish_position: Option<i32>,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE tournaments SET prize_pool = prize_pool - ?, remaining_players = remaining_players - 1 WHERE id = ?",
+            "UPDATE tournaments SET prize_pool = MAX(prize_pool - ?, 0), remaining_players = MAX(remaining_players - 1, 0) WHERE id = ?",
         )
         .bind(rebuy_amount)
         .bind(&tournament.id)
@@ -525,10 +543,10 @@ impl TournamentContext {
         user_id: &str,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE tournaments 
-             SET registered_players = registered_players - 1,
-                 prize_pool = prize_pool - ?,
-                 remaining_players = remaining_players - 1
+            "UPDATE tournaments
+             SET registered_players = MAX(registered_players - 1, 0),
+                 prize_pool = MAX(prize_pool - ?, 0),
+                 remaining_players = MAX(remaining_players - 1, 0)
              WHERE id = ?",
         )
         .bind(tournament.buy_in)
@@ -1025,5 +1043,40 @@ impl TournamentContext {
             .await;
 
         Ok(())
+    }
+
+    /// Remove finished/cancelled tournaments from in-memory cache after 1 hour.
+    pub(crate) async fn cleanup_finished_tournaments(&self) {
+        let now = Utc::now();
+        let one_hour = Duration::hours(1);
+
+        let mut tournaments = self.tournaments.write().await;
+        let before = tournaments.len();
+
+        tournaments.retain(|_id, state| {
+            let status = &state.tournament.status;
+            if status == "finished" || status == "cancelled" {
+                // Check finished_at timestamp
+                if let Some(ref finished_str) = state.tournament.finished_at {
+                    if let Ok(finished_at) = NaiveDateTime::parse_from_str(finished_str, "%Y-%m-%d %H:%M:%S") {
+                        let finished_utc = finished_at.and_utc();
+                        if now - finished_utc > one_hour {
+                            tracing::info!(
+                                "Cleaning up finished tournament {} (finished at {})",
+                                state.tournament.id,
+                                finished_str
+                            );
+                            return false; // Remove from cache
+                        }
+                    }
+                }
+            }
+            true // Keep in cache
+        });
+
+        let removed = before - tournaments.len();
+        if removed > 0 {
+            tracing::info!("Cleaned up {} finished tournaments from memory", removed);
+        }
     }
 }

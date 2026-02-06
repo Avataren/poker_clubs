@@ -171,4 +171,10 @@ impl TournamentManager {
     pub async fn broadcast_tournament_info(&self) -> Result<()> {
         self.broadcasts.broadcast_tournament_info().await
     }
+
+    /// Remove finished/cancelled tournaments from in-memory cache after 1 hour.
+    /// Called periodically by background task.
+    pub async fn cleanup_finished_tournaments(&self) {
+        self.ctx.cleanup_finished_tournaments().await;
+    }
 }

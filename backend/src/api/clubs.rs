@@ -1,5 +1,6 @@
 use crate::{
     api::auth::AppState,
+    audit,
     auth::AuthUser,
     db::models::{Club, ClubMember},
     error::Result,
@@ -259,6 +260,20 @@ async fn add_member_balance(
         ));
     }
 
+    // Verify target user exists in the club
+    let member_exists: Option<(i64,)> =
+        sqlx::query_as("SELECT balance FROM club_members WHERE club_id = ? AND user_id = ?")
+            .bind(&club_id)
+            .bind(&user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+    if member_exists.is_none() {
+        return Err(crate::error::AppError::NotFound(
+            "User is not a member of this club".to_string(),
+        ));
+    }
+
     // Update the member's balance
     sqlx::query("UPDATE club_members SET balance = balance + ? WHERE club_id = ? AND user_id = ?")
         .bind(req.amount)
@@ -274,6 +289,8 @@ async fn add_member_balance(
             .bind(&user_id)
             .fetch_one(&state.pool)
             .await?;
+
+    audit::log_balance_change(&club_id, &user_id, &auth_user.user_id, req.amount, new_balance);
 
     Ok(Json(BalanceResponse { new_balance }))
 }

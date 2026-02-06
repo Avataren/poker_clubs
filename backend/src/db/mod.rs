@@ -11,9 +11,13 @@ pub async fn create_pool(database_url: &str) -> Result<DbPool, sqlx::Error> {
         let db_path = database_url.strip_prefix("sqlite:").unwrap();
         if !Path::new(db_path).exists() {
             if let Some(parent) = Path::new(db_path).parent() {
-                std::fs::create_dir_all(parent).ok();
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    tracing::warn!("Failed to create database directory {:?}: {}", parent, e);
+                }
             }
-            std::fs::File::create(db_path).ok();
+            if let Err(e) = std::fs::File::create(db_path) {
+                tracing::warn!("Failed to create database file {}: {}", db_path, e);
+            }
         }
     }
 
@@ -70,6 +74,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             6,
             "add_tournament_rebuys_addons_late_registration",
             include_str!("migrations/006_add_tournament_rebuys_addons_late_registration.sql"),
+        ),
+        (
+            7,
+            "add_balance_constraints",
+            include_str!("migrations/007_add_balance_constraints.sql"),
         ),
     ];
 

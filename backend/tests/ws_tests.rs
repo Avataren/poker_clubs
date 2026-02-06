@@ -14,6 +14,25 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio::time::{sleep, Duration};
 
+type WsStream = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+/// Read next text message from WebSocket, skipping Ping frames (auto-replies with Pong).
+async fn recv_text(ws: &mut WsStream) -> Message {
+    loop {
+        let msg = ws.next().await.unwrap().unwrap();
+        match &msg {
+            Message::Ping(data) => {
+                let _ = ws.send(Message::Pong(data.clone())).await;
+                continue;
+            }
+            Message::Pong(_) => continue,
+            _ => return msg,
+        }
+    }
+}
+
 async fn register_and_get_token(
     client: &reqwest::Client,
     base_url: &str,
@@ -29,7 +48,7 @@ async fn register_and_get_token(
             .json(&json!({
                 "username": username,
                 "email": email,
-                "password": "password123"
+                "password": "Password123"
             }))
             .send()
             .await;
@@ -185,7 +204,7 @@ async fn test_ws_connect_and_receive_connected_message() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Should receive Connected message
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         assert!(matches!(server_msg, ServerMessage::Connected));
@@ -221,14 +240,14 @@ async fn test_ws_ping_pong() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Send Ping
     let ping_msg = serde_json::to_string(&ClientMessage::Ping).unwrap();
     ws_stream.send(Message::Text(ping_msg)).await.unwrap();
 
     // Should receive Pong
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         assert!(matches!(server_msg, ServerMessage::Pong));
@@ -250,7 +269,7 @@ async fn test_ws_join_table_as_observer() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Join table as observer (buyin = 0)
     let join_msg = serde_json::to_string(&ClientMessage::JoinTable {
@@ -261,7 +280,7 @@ async fn test_ws_join_table_as_observer() {
     ws_stream.send(Message::Text(join_msg)).await.unwrap();
 
     // Should receive TableState
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -285,7 +304,7 @@ async fn test_ws_take_seat_at_table() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Take seat at table
     let take_seat_msg = serde_json::to_string(&ClientMessage::TakeSeat {
@@ -297,7 +316,7 @@ async fn test_ws_take_seat_at_table() {
     ws_stream.send(Message::Text(take_seat_msg)).await.unwrap();
 
     // Should receive TableState with player seated
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -324,7 +343,7 @@ async fn test_ws_join_table_with_buyin() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Join with buyin (auto-seat)
     let join_msg = serde_json::to_string(&ClientMessage::JoinTable {
@@ -335,7 +354,7 @@ async fn test_ws_join_table_with_buyin() {
     ws_stream.send(Message::Text(join_msg)).await.unwrap();
 
     // Should receive TableState with player seated
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -359,7 +378,7 @@ async fn test_ws_join_nonexistent_table() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Try to join non-existent table
     let join_msg = serde_json::to_string(&ClientMessage::JoinTable {
@@ -370,7 +389,7 @@ async fn test_ws_join_nonexistent_table() {
     ws_stream.send(Message::Text(join_msg)).await.unwrap();
 
     // Should receive Error
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -397,7 +416,7 @@ async fn test_ws_get_table_state() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Join table first
     let join_msg = serde_json::to_string(&ClientMessage::JoinTable {
@@ -406,14 +425,14 @@ async fn test_ws_get_table_state() {
     })
     .unwrap();
     ws_stream.send(Message::Text(join_msg)).await.unwrap();
-    ws_stream.next().await.unwrap().unwrap(); // Consume join response
+    recv_text(&mut ws_stream).await; // Consume join response
 
     // Request table state
     let get_state_msg = serde_json::to_string(&ClientMessage::GetTableState).unwrap();
     ws_stream.send(Message::Text(get_state_msg)).await.unwrap();
 
     // Should receive TableState
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -437,14 +456,14 @@ async fn test_ws_get_table_state_not_at_table() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Request table state without joining a table
     let get_state_msg = serde_json::to_string(&ClientMessage::GetTableState).unwrap();
     ws_stream.send(Message::Text(get_state_msg)).await.unwrap();
 
     // Should receive Error
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -471,7 +490,7 @@ async fn test_ws_leave_table() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Join table
     let join_msg = serde_json::to_string(&ClientMessage::TakeSeat {
@@ -481,7 +500,7 @@ async fn test_ws_leave_table() {
     })
     .unwrap();
     ws_stream.send(Message::Text(join_msg)).await.unwrap();
-    ws_stream.next().await.unwrap().unwrap(); // Consume join response
+    recv_text(&mut ws_stream).await; // Consume join response
 
     // Leave table
     let leave_msg = serde_json::to_string(&ClientMessage::LeaveTable).unwrap();
@@ -530,14 +549,14 @@ async fn test_ws_two_players_start_game() {
     let (mut ws1, _) = connect_async(&ws_url1)
         .await
         .expect("Failed to connect player 1");
-    ws1.next().await.unwrap().unwrap(); // Consume Connected
+    recv_text(&mut ws1).await; // Consume Connected
 
     // Connect player 2
     let ws_url2 = format!("ws://{}/ws?token={}", addr, token2);
     let (mut ws2, _) = connect_async(&ws_url2)
         .await
         .expect("Failed to connect player 2");
-    ws2.next().await.unwrap().unwrap(); // Consume Connected
+    recv_text(&mut ws2).await; // Consume Connected
 
     // Player 1 takes seat 0
     let seat_msg = serde_json::to_string(&ClientMessage::TakeSeat {
@@ -547,7 +566,7 @@ async fn test_ws_two_players_start_game() {
     })
     .unwrap();
     ws1.send(Message::Text(seat_msg)).await.unwrap();
-    let msg = ws1.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws1).await;
 
     // Verify player 1 is seated and game is still waiting
     if let Message::Text(text) = msg {
@@ -595,11 +614,11 @@ async fn test_ws_player_action_fold() {
     // Connect both players
     let ws_url1 = format!("ws://{}/ws?token={}", addr, token1);
     let (mut ws1, _) = connect_async(&ws_url1).await.unwrap();
-    ws1.next().await.unwrap().unwrap();
+    recv_text(&mut ws1).await;
 
     let ws_url2 = format!("ws://{}/ws?token={}", addr, token2);
     let (mut ws2, _) = connect_async(&ws_url2).await.unwrap();
-    ws2.next().await.unwrap().unwrap();
+    recv_text(&mut ws2).await;
 
     // Both players take seats
     let seat_msg = serde_json::to_string(&ClientMessage::TakeSeat {
@@ -609,7 +628,7 @@ async fn test_ws_player_action_fold() {
     })
     .unwrap();
     ws1.send(Message::Text(seat_msg)).await.unwrap();
-    ws1.next().await.unwrap().unwrap();
+    recv_text(&mut ws1).await;
 
     let seat_msg = serde_json::to_string(&ClientMessage::TakeSeat {
         table_id: table_id.clone(),
@@ -618,7 +637,7 @@ async fn test_ws_player_action_fold() {
     })
     .unwrap();
     ws2.send(Message::Text(seat_msg)).await.unwrap();
-    ws2.next().await.unwrap().unwrap();
+    recv_text(&mut ws2).await;
 
     // Consume broadcast messages
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -629,7 +648,7 @@ async fn test_ws_player_action_fold() {
         .await
         .unwrap();
 
-    let msg = ws1.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws1).await;
     let current_player_seat = if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         match server_msg {
@@ -695,14 +714,28 @@ impl TwoPlayerGame {
         // Connect player 1
         let ws_url1 = format!("ws://{}/ws?token={}", addr, token1);
         let (ws1_stream, _) = connect_async(&ws_url1).await.unwrap();
-        let (ws1_sink, mut ws1) = ws1_stream.split();
-        ws1.next().await.unwrap().unwrap(); // Consume Connected
+        let (mut ws1_sink, mut ws1) = ws1_stream.split();
+        // Consume Connected (skip any Ping frames)
+        loop {
+            match ws1.next().await.unwrap().unwrap() {
+                Message::Ping(data) => { let _ = ws1_sink.send(Message::Pong(data)).await; }
+                Message::Pong(_) => {}
+                _ => break,
+            }
+        }
 
         // Connect player 2
         let ws_url2 = format!("ws://{}/ws?token={}", addr, token2);
         let (ws2_stream, _) = connect_async(&ws_url2).await.unwrap();
-        let (ws2_sink, mut ws2) = ws2_stream.split();
-        ws2.next().await.unwrap().unwrap(); // Consume Connected
+        let (mut ws2_sink, mut ws2) = ws2_stream.split();
+        // Consume Connected (skip any Ping frames)
+        loop {
+            match ws2.next().await.unwrap().unwrap() {
+                Message::Ping(data) => { let _ = ws2_sink.send(Message::Pong(data)).await; }
+                Message::Pong(_) => {}
+                _ => break,
+            }
+        }
 
         let mut game = Self {
             ws1,
@@ -750,16 +783,30 @@ impl TwoPlayerGame {
     }
 
     async fn recv_p1_timeout(&mut self) -> Option<ServerMessage> {
-        match tokio::time::timeout(tokio::time::Duration::from_millis(100), self.ws1.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(&text).ok(),
-            _ => None,
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() { return None; }
+            match tokio::time::timeout(remaining, self.ws1.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => return serde_json::from_str(&text).ok(),
+                Ok(Some(Ok(Message::Ping(data)))) => { let _ = self.ws1_sink.send(Message::Pong(data)).await; continue; }
+                Ok(Some(Ok(Message::Pong(_)))) => continue,
+                _ => return None,
+            }
         }
     }
 
     async fn recv_p2_timeout(&mut self) -> Option<ServerMessage> {
-        match tokio::time::timeout(tokio::time::Duration::from_millis(100), self.ws2.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(&text).ok(),
-            _ => None,
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() { return None; }
+            match tokio::time::timeout(remaining, self.ws2.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => return serde_json::from_str(&text).ok(),
+                Ok(Some(Ok(Message::Ping(data)))) => { let _ = self.ws2_sink.send(Message::Pong(data)).await; continue; }
+                Ok(Some(Ok(Message::Pong(_)))) => continue,
+                _ => return None,
+            }
         }
     }
 
@@ -1131,14 +1178,14 @@ async fn test_ws_viewing_clubs_list() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Subscribe to clubs list view
     let view_msg = serde_json::to_string(&ClientMessage::ViewingClubsList).unwrap();
     ws_stream.send(Message::Text(view_msg)).await.unwrap();
 
     // Should receive Connected (subscription success)
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         assert!(matches!(server_msg, ServerMessage::Connected));
@@ -1156,7 +1203,7 @@ async fn test_ws_viewing_club() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Subscribe to specific club view
     let view_msg = serde_json::to_string(&ClientMessage::ViewingClub {
@@ -1166,7 +1213,7 @@ async fn test_ws_viewing_club() {
     ws_stream.send(Message::Text(view_msg)).await.unwrap();
 
     // Should receive Connected (subscription success)
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         assert!(matches!(server_msg, ServerMessage::Connected));
@@ -1183,19 +1230,19 @@ async fn test_ws_leaving_view() {
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("Failed to connect");
 
     // Consume Connected message
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Subscribe to clubs list view
     let view_msg = serde_json::to_string(&ClientMessage::ViewingClubsList).unwrap();
     ws_stream.send(Message::Text(view_msg)).await.unwrap();
-    ws_stream.next().await.unwrap().unwrap();
+    recv_text(&mut ws_stream).await;
 
     // Leave view
     let leave_msg = serde_json::to_string(&ClientMessage::LeavingView).unwrap();
     ws_stream.send(Message::Text(leave_msg)).await.unwrap();
 
     // Should receive Connected (unsubscribe success)
-    let msg = ws_stream.next().await.unwrap().unwrap();
+    let msg = recv_text(&mut ws_stream).await;
     if let Message::Text(text) = msg {
         let server_msg: ServerMessage = serde_json::from_str(&text).unwrap();
         assert!(matches!(server_msg, ServerMessage::Connected));
@@ -1374,13 +1421,27 @@ async fn test_ws_unequal_allin_side_pots_conserve_chips() {
     // Connect player 1
     let ws_url1 = format!("ws://{}/ws?token={}", addr, token1);
     let (ws1_stream, _) = connect_async(&ws_url1).await.unwrap();
-    let (ws1_sink, mut ws1) = ws1_stream.split();
-    ws1.next().await.unwrap().unwrap(); // Connected
+    let (mut ws1_sink, mut ws1) = ws1_stream.split();
+    // Consume Connected (skip any Ping frames)
+    loop {
+        match ws1.next().await.unwrap().unwrap() {
+            Message::Ping(data) => { let _ = ws1_sink.send(Message::Pong(data)).await; }
+            Message::Pong(_) => {}
+            _ => break,
+        }
+    }
 
     let ws_url2 = format!("ws://{}/ws?token={}", addr, token2);
     let (ws2_stream, _) = connect_async(&ws_url2).await.unwrap();
-    let (ws2_sink, mut ws2) = ws2_stream.split();
-    ws2.next().await.unwrap().unwrap(); // Connected
+    let (mut ws2_sink, mut ws2) = ws2_stream.split();
+    // Consume Connected (skip any Ping frames)
+    loop {
+        match ws2.next().await.unwrap().unwrap() {
+            Message::Ping(data) => { let _ = ws2_sink.send(Message::Pong(data)).await; }
+            Message::Pong(_) => {}
+            _ => break,
+        }
+    }
 
     let mut game = TwoPlayerGame {
         ws1,

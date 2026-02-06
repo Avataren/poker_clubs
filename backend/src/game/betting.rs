@@ -141,10 +141,16 @@ impl BettingValidator {
         }
 
         // For fixed-limit, raise must be exactly the bet size
+        // Note: The actual street-aware enforcement is done in table/actions.rs
+        // which has access to the current game phase. This standalone validator
+        // checks that the amount is at least one of the valid bet sizes.
         if let BettingStructure::FixedLimit { small_bet, big_bet } = &round.structure {
-            // In early streets, raises are small_bet; in later streets, big_bet
-            // TODO: Need to know which street we're on
-            let _ = (small_bet, big_bet); // Silence warnings for now
+            if amount != *small_bet && amount != *big_bet {
+                return Err(GameError::RaiseNotExact {
+                    required: *small_bet, // default to small_bet in standalone context
+                    attempted: amount,
+                });
+            }
         }
 
         // Check if player has enough chips

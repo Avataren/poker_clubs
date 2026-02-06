@@ -102,7 +102,7 @@ impl BlindsService {
         for (table_id,) in tournament_tables {
             self.ctx
                 .game_server
-                .update_table_blinds(&table_id, new_level.small_blind, new_level.big_blind)
+                .update_table_blinds(&table_id, new_level.small_blind, new_level.big_blind, new_level.ante)
                 .await;
         }
 
@@ -114,7 +114,7 @@ impl BlindsService {
                 tournament_id,
                 ServerMessage::TournamentBlindLevelIncreased {
                     tournament_id: tournament_id.to_string(),
-                    level: (tournament.current_blind_level + 1) as i64,
+                    level: tournament.current_blind_level as i64,
                     small_blind: new_level.small_blind,
                     big_blind: new_level.big_blind,
                     ante: new_level.ante,

@@ -51,5 +51,8 @@ class Player {
   bool get isFolded => state == 'Folded';
   bool get isAllIn => state == 'AllIn';
   bool get isEliminated => state == 'Eliminated';
+  bool get isDisconnected => state == 'Disconnected';
+  bool get isSittingOut => state == 'SittingOut';
+  bool get isWaitingForHand => state == 'WaitingForHand';
   bool get isBot => userId.startsWith('bot_');
 }

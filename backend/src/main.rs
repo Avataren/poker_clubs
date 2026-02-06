@@ -1,10 +1,14 @@
-use poker_server::{api, auth, config, create_app, db, tournament, ws};
+use poker_server::{api, auth, config, db, tournament, ws};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
+
+    // Create cancellation token for graceful shutdown
+    let shutdown_token = CancellationToken::new();
 
     // Load config
     let config = config::Config::from_env();
@@ -54,84 +58,175 @@ async fn main() -> anyhow::Result<()> {
         tournament_manager: tournament_manager.clone(),
     });
 
-    // Build router using lib function
-    let app = create_app(
+    // Build router using lib function with CORS origins from config
+    let app = poker_server::create_app_with_cors(
         auth_state,
         table_state,
         tournament_state,
         game_server.clone(),
+        &config.cors_allowed_origins,
     );
 
     // Spawn background task to check for auto-advances
     let game_server_clone = game_server.clone();
+    let token = shutdown_token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
-            interval.tick().await;
-            game_server_clone.check_all_tables_auto_advance().await;
+            tokio::select! {
+                _ = interval.tick() => {
+                    game_server_clone.check_all_tables_auto_advance().await;
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Auto-advance task shutting down");
+                    break;
+                }
+            }
         }
     });
 
     // Spawn background task for bot actions (check every 500ms)
     let game_server_bots = game_server.clone();
+    let token = shutdown_token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
         loop {
-            interval.tick().await;
-            game_server_bots.check_bot_actions().await;
+            tokio::select! {
+                _ = interval.tick() => {
+                    game_server_bots.check_bot_actions().await;
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Bot actions task shutting down");
+                    break;
+                }
+            }
         }
     });
 
     // Spawn background task for tournament blind level advancement (check every 1 second)
     let tournament_mgr_blinds = tournament_manager.clone();
+    let token = shutdown_token.clone();
     tokio::spawn(async move {
         tracing::info!("Tournament blind level check task started (runs every 1s)");
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
-            interval.tick().await;
-            if let Err(e) = tournament_mgr_blinds.check_all_blind_levels().await {
-                tracing::error!("Error checking blind levels: {:?}", e);
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Err(e) = tournament_mgr_blinds.check_all_blind_levels().await {
+                        tracing::error!("Error checking blind levels: {:?}", e);
+                    }
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Blind level check task shutting down");
+                    break;
+                }
             }
         }
     });
 
     // Spawn background task for tournament player eliminations (check every 5 seconds)
     let tournament_mgr_eliminations = tournament_manager.clone();
+    let token = shutdown_token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
         loop {
-            interval.tick().await;
-            if let Err(e) = tournament_mgr_eliminations
-                .check_tournament_eliminations()
-                .await
-            {
-                tracing::error!("Error checking tournament eliminations: {:?}", e);
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Err(e) = tournament_mgr_eliminations
+                        .check_tournament_eliminations()
+                        .await
+                    {
+                        tracing::error!("Error checking tournament eliminations: {:?}", e);
+                    }
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Tournament elimination task shutting down");
+                    break;
+                }
             }
         }
     });
 
     // Spawn background task for broadcasting tournament info (every 1 second)
     let tournament_mgr_info = tournament_manager.clone();
+    let token = shutdown_token.clone();
     tokio::spawn(async move {
         tracing::info!("Tournament info broadcast task started (runs every 1s)");
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
-            interval.tick().await;
-            // Spawn each broadcast in its own task so it never blocks the timer
-            let mgr = tournament_mgr_info.clone();
-            tokio::spawn(async move {
-                if let Err(e) = mgr.broadcast_tournament_info().await {
-                    tracing::error!("Error broadcasting tournament info: {:?}", e);
+            tokio::select! {
+                _ = interval.tick() => {
+                    let mgr = tournament_mgr_info.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = mgr.broadcast_tournament_info().await {
+                            tracing::error!("Error broadcasting tournament info: {:?}", e);
+                        }
+                    });
                 }
-            });
+                _ = token.cancelled() => {
+                    tracing::info!("Tournament info broadcast task shutting down");
+                    break;
+                }
+            }
         }
     });
 
-    // Start server
+    // Spawn background task to clean up finished tournaments (check every 5 minutes)
+    let tournament_mgr_cleanup = tournament_manager.clone();
+    let token = shutdown_token.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    tournament_mgr_cleanup.cleanup_finished_tournaments().await;
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Tournament cleanup task shutting down");
+                    break;
+                }
+            }
+        }
+    });
+
+    // Spawn background task to clean up expired disconnections (check every 10 seconds)
+    let game_server_dc = game_server.clone();
+    let token = shutdown_token.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    game_server_dc.cleanup_expired_disconnections().await;
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Disconnection cleanup task shutting down");
+                    break;
+                }
+            }
+        }
+    });
+
+    // Start server with graceful shutdown
     let listener = tokio::net::TcpListener::bind(&config.server_addr()).await?;
     tracing::info!("Server listening on {}", config.server_addr());
 
-    axum::serve(listener, app).await?;
+    let shutdown_signal = shutdown_token.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install CTRL+C handler");
+        tracing::info!("Received CTRL+C, initiating graceful shutdown...");
+        shutdown_signal.cancel();
+    });
 
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_token.cancelled().await;
+            tracing::info!("Server shutting down gracefully");
+        })
+        .await?;
+
+    tracing::info!("Server shutdown complete");
     Ok(())
 }

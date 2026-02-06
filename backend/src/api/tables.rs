@@ -83,7 +83,19 @@ async fn create_table(
         .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
-    let _auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    // Verify user is a member of the club (and ideally admin)
+    let membership: Option<(i64,)> =
+        sqlx::query_as("SELECT balance FROM club_members WHERE club_id = ? AND user_id = ?")
+            .bind(&req.club_id)
+            .bind(&auth_user.user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+    if membership.is_none() {
+        return Err(crate::error::AppError::Forbidden);
+    }
 
     // Get variant (default to Texas Hold'em)
     let variant_id = req.variant_id.as_deref().unwrap_or("holdem").to_string();
@@ -197,7 +209,20 @@ async fn list_tables(
         .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
-    let _auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    // Verify user is a member of the club
+    let membership: Option<(i64,)> =
+        sqlx::query_as("SELECT balance FROM club_members WHERE club_id = ? AND user_id = ?")
+            .bind(&club_id)
+            .bind(&auth_user.user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+    if membership.is_none() {
+        return Err(crate::error::AppError::Forbidden);
+    }
+
     let tables: Vec<Table> = sqlx::query_as("SELECT * FROM tables WHERE club_id = ?")
         .bind(&club_id)
         .fetch_all(&state.pool)

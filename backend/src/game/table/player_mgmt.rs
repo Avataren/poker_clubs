@@ -1,0 +1,217 @@
+use super::*;
+
+impl PokerTable {
+    pub fn add_player(
+        &mut self,
+        user_id: String,
+        username: String,
+        buyin: i64,
+    ) -> GameResult<usize> {
+        // Check if player is already at the table and not broke
+        if let Some(existing) = self.players.iter().find(|p| p.user_id == user_id) {
+            // If player is sitting out with no chips (broke), remove them so they can rebuy
+            if existing.state == PlayerState::SittingOut && existing.stack == 0 {
+                self.remove_player(&user_id);
+            } else {
+                return Err(GameError::PlayerAlreadySeated);
+            }
+        }
+
+        if self.players.len() >= self.max_seats {
+            return Err(GameError::TableFull);
+        }
+
+        let seat = self.players.len();
+        let mut player = Player::new(user_id, username, seat, buyin);
+
+        // If a hand is in progress, make player wait until next hand
+        if self.phase != GamePhase::Waiting {
+            player.state = PlayerState::WaitingForHand;
+            tracing::debug!(
+                "Player {} joining mid-hand, setting to WaitingForHand",
+                player.username
+            );
+        }
+
+        self.players.push(player);
+
+        // Start game if we have enough players AND the format allows auto-start
+        // Cash games: auto-start with 2+ players
+        // Tournaments (SNG/MTT): do NOT auto-start, wait for explicit start
+        if self.players.len() >= MIN_PLAYERS_TO_START
+            && self.phase == GamePhase::Waiting
+            && self.format.should_auto_start() {
+            self.start_new_hand();
+        }
+
+        Ok(seat)
+    }
+
+    pub fn remove_player(&mut self, user_id: &str) {
+        // Find the index of the player being removed
+        let removed_idx = self.players.iter().position(|p| p.user_id == user_id);
+
+        self.players.retain(|p| p.user_id != user_id);
+
+        // Recalculate seat numbers
+        for (idx, player) in self.players.iter_mut().enumerate() {
+            player.seat = idx;
+        }
+
+        // Adjust dealer_seat and current_player if needed
+        if let Some(removed_idx) = removed_idx {
+            if !self.players.is_empty() {
+                // If dealer was removed or is now out of bounds, move it to a valid position
+                if self.dealer_seat >= self.players.len() || self.dealer_seat == removed_idx {
+                    self.dealer_seat = if self.dealer_seat > 0 {
+                        (self.dealer_seat - 1).min(self.players.len() - 1)
+                    } else {
+                        0
+                    };
+                } else if removed_idx < self.dealer_seat {
+                    // Player before dealer was removed, adjust dealer index
+                    self.dealer_seat -= 1;
+                }
+
+                // Same for current_player
+                if self.current_player >= self.players.len() || self.current_player == removed_idx {
+                    self.current_player = if self.current_player > 0 {
+                        (self.current_player - 1).min(self.players.len() - 1)
+                    } else {
+                        0
+                    };
+                } else if removed_idx < self.current_player {
+                    // Player before current was removed, adjust current index
+                    self.current_player -= 1;
+                }
+            }
+        }
+    }
+
+    pub fn take_seat(
+        &mut self,
+        user_id: String,
+        username: String,
+        seat: usize,
+        buyin: i64,
+    ) -> GameResult<usize> {
+        // Check if player is already at the table
+        if let Some(existing) = self.players.iter().find(|p| p.user_id == user_id) {
+            // If player is sitting out with no chips (broke), remove them so they can rebuy
+            if existing.state == PlayerState::SittingOut && existing.stack == 0 {
+                self.players.retain(|p| p.user_id != user_id);
+            } else {
+                return Err(GameError::PlayerAlreadySeated);
+            }
+        }
+
+        // Validate seat number
+        if seat >= self.max_seats {
+            return Err(GameError::InvalidSeat {
+                seat,
+                max_seats: self.max_seats,
+            });
+        }
+
+        // Check if seat is occupied
+        if self.players.iter().any(|p| p.seat == seat) {
+            return Err(GameError::SeatOccupied { seat });
+        }
+
+        let mut player = Player::new(user_id, username, seat, buyin);
+
+        // If a hand is in progress, make player wait until next hand
+        if self.phase != GamePhase::Waiting {
+            player.state = PlayerState::WaitingForHand;
+            tracing::debug!(
+                "Player {} joining mid-hand, setting to WaitingForHand",
+                player.username
+            );
+        }
+
+        self.players.push(player);
+
+        // Start game if we have enough active players AND the format allows auto-start
+        // Cash games: auto-start with 2+ players
+        // Tournaments (SNG/MTT): do NOT auto-start, wait for explicit start
+        if self.active_players_count() >= MIN_PLAYERS_TO_START
+            && self.phase == GamePhase::Waiting
+            && self.format.should_auto_start() {
+            self.start_new_hand();
+        }
+
+        Ok(seat)
+    }
+
+    pub fn stand_up(&mut self, user_id: &str) -> GameResult<()> {
+        let player = self
+            .players
+            .iter_mut()
+            .find(|p| p.user_id == user_id)
+            .ok_or(GameError::PlayerNotAtTable)?;
+
+        // If player is in an active hand, mark them to stand up after hand concludes
+        if self.phase != GamePhase::Waiting
+            && (player.state == PlayerState::Active || player.state == PlayerState::AllIn)
+        {
+            player.state = PlayerState::SittingOut;
+            tracing::debug!(
+                "Player {} will stand up after current hand",
+                player.username
+            );
+            Ok(())
+        } else {
+            // Remove player immediately
+            let username = player.username.clone();
+            self.players.retain(|p| p.user_id != user_id);
+            tracing::debug!("Player {} stood up immediately", username);
+            Ok(())
+        }
+    }
+
+    pub fn top_up(&mut self, user_id: &str, amount: i64) -> GameResult<()> {
+        // Find the player
+        let player = self
+            .players
+            .iter_mut()
+            .find(|p| p.user_id == user_id)
+            .ok_or(GameError::PlayerNotAtTable)?;
+
+        // Validate top-up amount
+        if amount <= 0 {
+            return Err(GameError::InvalidAction {
+                reason: "Top-up amount must be positive".to_string(),
+            });
+        }
+
+        // Check if player can top up during a hand
+        if self.phase != GamePhase::Waiting && player.state != PlayerState::SittingOut {
+            return Err(GameError::GameInProgress);
+        }
+
+        // Add chips to player's stack
+        player.stack += amount;
+
+        // If player was sitting out due to being broke, set them to WaitingForHand
+        if player.state == PlayerState::SittingOut && player.stack > 0 {
+            player.state = PlayerState::WaitingForHand;
+            tracing::info!(
+                "Player {} topped up ${} and is now waiting for next hand",
+                player.username,
+                amount
+            );
+        }
+
+        // If we're in Waiting phase, check if we can now start a new hand
+        if self.phase == GamePhase::Waiting {
+            let playable_count = self.players.iter().filter(|p| p.stack > 0).count();
+
+            if playable_count >= MIN_PLAYERS_TO_START {
+                tracing::info!("Enough players with chips after top-up, starting new hand");
+                self.start_new_hand();
+            }
+        }
+
+        Ok(())
+    }
+}

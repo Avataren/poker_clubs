@@ -67,7 +67,7 @@ async fn test_register_new_user() {
         .json(&json!({
             "username": "testuser",
             "email": "test@example.com",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await;
 
@@ -89,7 +89,7 @@ async fn test_register_duplicate_username() {
         .json(&json!({
             "username": "testuser",
             "email": "test1@example.com",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await
         .assert_status_ok();
@@ -100,7 +100,7 @@ async fn test_register_duplicate_username() {
         .json(&json!({
             "username": "testuser",
             "email": "test2@example.com",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await;
 
@@ -133,7 +133,7 @@ async fn test_login_success() {
         .json(&json!({
             "username": "testuser",
             "email": "test@example.com",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await
         .assert_status_ok();
@@ -143,7 +143,7 @@ async fn test_login_success() {
         .post("/api/auth/login")
         .json(&json!({
             "username": "testuser",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await;
 
@@ -164,7 +164,7 @@ async fn test_login_wrong_password() {
         .json(&json!({
             "username": "testuser",
             "email": "test@example.com",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await
         .assert_status_ok();
@@ -189,7 +189,7 @@ async fn test_login_nonexistent_user() {
         .post("/api/auth/login")
         .json(&json!({
             "username": "nonexistent",
-            "password": "password123"
+            "password": "Password123"
         }))
         .await;
 
@@ -203,7 +203,7 @@ async fn test_login_nonexistent_user() {
 #[tokio::test]
 async fn test_create_club() {
     let server = setup().await;
-    let token = register_user(&server, "clubowner", "owner@example.com", "password123").await;
+    let token = register_user(&server, "clubowner", "owner@example.com", "Password123").await;
 
     let response = server
         .post("/api/clubs")
@@ -236,7 +236,7 @@ async fn test_create_club_unauthorized() {
 #[tokio::test]
 async fn test_get_my_clubs() {
     let server = setup().await;
-    let token = register_user(&server, "clubowner", "owner@example.com", "password123").await;
+    let token = register_user(&server, "clubowner", "owner@example.com", "Password123").await;
 
     // Create a club
     server
@@ -267,7 +267,7 @@ async fn test_get_my_clubs() {
 #[tokio::test]
 async fn test_create_table_with_default_variant() {
     let server = setup().await;
-    let token = register_user(&server, "tableowner", "table@example.com", "password123").await;
+    let token = register_user(&server, "tableowner", "table@example.com", "Password123").await;
 
     // Create a club first
     let club_response = server
@@ -303,7 +303,7 @@ async fn test_create_table_with_default_variant() {
 #[tokio::test]
 async fn test_create_table_with_omaha_variant() {
     let server = setup().await;
-    let token = register_user(&server, "omahaowner", "omaha@example.com", "password123").await;
+    let token = register_user(&server, "omahaowner", "omaha@example.com", "Password123").await;
 
     // Create a club first
     let club_response = server
@@ -338,7 +338,7 @@ async fn test_create_table_with_omaha_variant() {
 #[tokio::test]
 async fn test_create_table_with_plo_variant() {
     let server = setup().await;
-    let token = register_user(&server, "ploowner", "plo@example.com", "password123").await;
+    let token = register_user(&server, "ploowner", "plo@example.com", "Password123").await;
 
     let club_response = server
         .post("/api/clubs")
@@ -371,7 +371,7 @@ async fn test_create_table_with_plo_variant() {
 #[tokio::test]
 async fn test_create_table_with_invalid_variant() {
     let server = setup().await;
-    let token = register_user(&server, "badvariant", "bad@example.com", "password123").await;
+    let token = register_user(&server, "badvariant", "bad@example.com", "Password123").await;
 
     // Create a club first
     let club_response = server
@@ -440,7 +440,7 @@ async fn test_list_formats() {
 #[tokio::test]
 async fn test_get_club_tables() {
     let server = setup().await;
-    let token = register_user(&server, "tablelister", "list@example.com", "password123").await;
+    let token = register_user(&server, "tablelister", "list@example.com", "Password123").await;
 
     // Create a club
     let club_response = server

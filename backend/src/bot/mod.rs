@@ -11,6 +11,7 @@ use crate::game::table::PokerTable;
 use crate::game::{GamePhase, PlayerAction};
 use std::collections::HashMap;
 use strategy::{BotGameView, BotStrategy, SimpleStrategy};
+use uuid::Uuid;
 
 /// A bot player with its decision-making strategy.
 pub struct BotPlayer {
@@ -38,8 +39,8 @@ impl BotPlayer {
 pub struct BotManager {
     /// Maps table_id -> list of bot players at that table
     bots: HashMap<String, Vec<BotPlayer>>,
-    /// Counter for generating unique bot IDs
-    next_bot_id: u32,
+    /// Counter for generating unique bot names
+    next_bot_name_idx: u32,
 }
 
 /// Bot names to cycle through.
@@ -52,7 +53,7 @@ impl BotManager {
     pub fn new() -> Self {
         Self {
             bots: HashMap::new(),
-            next_bot_id: 1,
+            next_bot_name_idx: 1,
         }
     }
 
@@ -63,12 +64,13 @@ impl BotManager {
         name: Option<String>,
         strategy_name: Option<&str>,
     ) -> (String, String) {
-        let id = self.next_bot_id;
-        self.next_bot_id += 1;
+        let idx = self.next_bot_name_idx;
+        self.next_bot_name_idx += 1;
 
-        let user_id = format!("bot_{}", id);
+        // Use UUID to prevent collision on restart
+        let user_id = format!("bot_{}", Uuid::new_v4());
         let username = name.unwrap_or_else(|| {
-            let base = BOT_NAMES[(id as usize - 1) % BOT_NAMES.len()];
+            let base = BOT_NAMES[(idx as usize - 1) % BOT_NAMES.len()];
             format!("{} (Bot)", base)
         });
 
@@ -216,7 +218,7 @@ mod tests {
         let mut mgr = BotManager::new();
 
         let (id1, name1) = mgr.add_bot("table_1", None, None);
-        assert_eq!(id1, "bot_1");
+        assert!(id1.starts_with("bot_"));
         assert!(name1.contains("Bot"));
         assert!(mgr.is_bot(&id1));
 
@@ -225,7 +227,7 @@ mod tests {
             Some("Custom Bot".to_string()),
             Some("aggressive"),
         );
-        assert_eq!(id2, "bot_2");
+        assert!(id2.starts_with("bot_"));
         assert!(mgr.is_bot(&id2));
 
         assert!(mgr.remove_bot("table_1", &id1));

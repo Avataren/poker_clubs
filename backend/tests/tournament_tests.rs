@@ -47,7 +47,7 @@ async fn create_club(server: &TestServer, owner: &str) -> (String, String, Strin
         server,
         owner,
         &format!("{}@example.com", owner),
-        "password123",
+        "Password123",
     )
     .await;
 
@@ -158,7 +158,7 @@ async fn test_sng_registration() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -220,7 +220,7 @@ async fn test_sng_unregister() {
 
     // Register player
     let (token, user_id) =
-        register_user(&server, "player1", "player1@example.com", "password123").await;
+        register_user(&server, "player1", "player1@example.com", "Password123").await;
 
     server
         .post("/api/clubs/join")
@@ -288,7 +288,7 @@ async fn test_sng_auto_start() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -382,7 +382,7 @@ async fn test_mtt_manual_start() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -452,7 +452,7 @@ async fn test_late_registration_requires_open_seat() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -482,7 +482,7 @@ async fn test_late_registration_requires_open_seat() {
         &server,
         "late_player",
         "late_player@example.com",
-        "password123",
+        "Password123",
     )
     .await;
 
@@ -610,7 +610,7 @@ async fn test_blind_level_advancement() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -679,7 +679,7 @@ async fn test_prize_structure() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -737,7 +737,7 @@ async fn test_insufficient_balance() {
 
     // Register player without sufficient balance
     let (token, _user_id) =
-        register_user(&server, "poorplayer", "poor@example.com", "password123").await;
+        register_user(&server, "poorplayer", "poor@example.com", "Password123").await;
 
     server
         .post("/api/clubs/join")
@@ -790,7 +790,7 @@ async fn test_fill_with_bots_sng() {
             &server,
             &username,
             &format!("{}@example.com", username),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -1029,7 +1029,7 @@ async fn test_cancel_tournament_refunds_players() {
 
     // Register a player
     let (token, user_id) =
-        register_user(&server, "player1", "player1@example.com", "password123").await;
+        register_user(&server, "player1", "player1@example.com", "Password123").await;
 
     server
         .post("/api/clubs/join")
@@ -1196,7 +1196,7 @@ async fn test_registration_deducts_balance() {
 
     // Register player
     let (token, user_id) =
-        register_user(&server, "player1", "player1@example.com", "password123").await;
+        register_user(&server, "player1", "player1@example.com", "Password123").await;
 
     server
         .post("/api/clubs/join")
@@ -1283,7 +1283,7 @@ async fn test_unregister_refunds_balance() {
 
     // Register player
     let (token, user_id) =
-        register_user(&server, "player1", "player1@example.com", "password123").await;
+        register_user(&server, "player1", "player1@example.com", "Password123").await;
 
     server
         .post("/api/clubs/join")
@@ -1375,7 +1375,7 @@ async fn test_cannot_register_without_balance() {
 
     // Register player with insufficient balance
     let (token, user_id) =
-        register_user(&server, "poorplayer", "poor@example.com", "password123").await;
+        register_user(&server, "poorplayer", "poor@example.com", "Password123").await;
 
     server
         .post("/api/clubs/join")
@@ -1440,7 +1440,7 @@ async fn test_cannot_register_without_club_membership() {
 
     // Register player without joining club
     let (token, _user_id) =
-        register_user(&server, "outsider", "outsider@example.com", "password123").await;
+        register_user(&server, "outsider", "outsider@example.com", "Password123").await;
 
     // Try to register without being a club member (should fail)
     let reg_response = server
@@ -1526,7 +1526,7 @@ async fn test_cannot_unregister_after_start() {
             &server,
             &format!("starttest{}", i),
             &format!("starttest{}@example.com", i),
-            "password123",
+            "Password123",
         )
         .await;
 
@@ -1616,7 +1616,7 @@ async fn test_multiple_clubs_separate_bankrolls() {
 
     // Register a player in both clubs
     let (player_token, player_id) =
-        register_user(&server, "multclub", "multi@example.com", "password123").await;
+        register_user(&server, "multclub", "multi@example.com", "Password123").await;
 
     // Join both clubs
     server
@@ -2366,7 +2366,7 @@ async fn test_prize_pool_integrity() {
                 &server,
                 &username,
                 &format!("{}@example.com", username),
-                "password123",
+                "Password123",
             )
             .await;
 

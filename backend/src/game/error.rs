@@ -33,10 +33,13 @@ pub enum GameError {
     CannotCheck { current_bet: i64 },
     RaiseTooSmall { min_raise: i64, attempted: i64 },
     RaiseTooLarge { max_raise: i64, attempted: i64 },
+    RaiseNotExact { required: i64, attempted: i64 },
+    MaxRaisesReached { max_raises: usize },
     InvalidAction { reason: String },
 
     // Game state errors
     InvalidPhase { expected: String, actual: String },
+    InvalidPhaseTransition { from: String, to: String },
     GameInProgress,
     GameNotInProgress,
 
@@ -101,6 +104,23 @@ impl fmt::Display for GameError {
                     attempted, max_raise
                 )
             }
+            GameError::RaiseNotExact {
+                required,
+                attempted,
+            } => {
+                write!(
+                    f,
+                    "Raise must be exactly {}. Attempted: {}",
+                    required, attempted
+                )
+            }
+            GameError::MaxRaisesReached { max_raises } => {
+                write!(
+                    f,
+                    "Maximum number of raises ({}) reached this round",
+                    max_raises
+                )
+            }
             GameError::InvalidAction { reason } => {
                 write!(f, "Invalid action: {}", reason)
             }
@@ -111,6 +131,13 @@ impl fmt::Display for GameError {
                     f,
                     "Invalid phase. Expected: {}, Actual: {}",
                     expected, actual
+                )
+            }
+            GameError::InvalidPhaseTransition { from, to } => {
+                write!(
+                    f,
+                    "Invalid phase transition from {} to {}",
+                    from, to
                 )
             }
             GameError::GameInProgress => {

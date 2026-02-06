@@ -3,6 +3,7 @@
 //! This module exposes the server components for integration testing.
 
 pub mod api;
+pub mod audit;
 pub mod auth;
 pub mod bot;
 pub mod config;
@@ -14,7 +15,7 @@ pub mod ws;
 
 use axum::{routing::get, Router};
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// Creates the application router with all endpoints
 pub fn create_app(
@@ -23,10 +24,32 @@ pub fn create_app(
     tournament_state: Arc<api::TournamentAppState>,
     game_server: Arc<ws::GameServer>,
 ) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    create_app_with_cors(auth_state, table_state, tournament_state, game_server, &[])
+}
+
+/// Creates the application router with configurable CORS origins
+pub fn create_app_with_cors(
+    auth_state: Arc<api::AppState>,
+    table_state: Arc<api::TableAppState>,
+    tournament_state: Arc<api::TournamentAppState>,
+    game_server: Arc<ws::GameServer>,
+    cors_origins: &[String],
+) -> Router {
+    let cors = if cors_origins.is_empty() {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else {
+        let origins: Vec<_> = cors_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods(Any)
+            .allow_headers(Any)
+    };
 
     Router::new()
         .route("/", get(|| async { "Poker Server" }))

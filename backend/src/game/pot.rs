@@ -129,6 +129,69 @@ impl PotManager {
         payouts
     }
 
+    /// Award pots in a hi-lo game.
+    /// For each pot, the hi winners and lo winners each get half.
+    /// If there are no qualifying lo winners for a pot, hi winners get the entire pot.
+    /// Odd chip goes to hi winner (standard rule).
+    pub fn award_pots_hilo(
+        &self,
+        hi_winners_by_pot: Vec<Vec<usize>>,
+        lo_winners_by_pot: Vec<Vec<usize>>,
+    ) -> HashMap<usize, i64> {
+        let mut payouts = HashMap::new();
+
+        for (pot_idx, pot) in self.pots.iter().enumerate() {
+            let hi_winners = hi_winners_by_pot
+                .get(pot_idx)
+                .cloned()
+                .unwrap_or_default();
+            let lo_winners = lo_winners_by_pot
+                .get(pot_idx)
+                .cloned()
+                .unwrap_or_default();
+
+            if hi_winners.is_empty() {
+                continue;
+            }
+
+            if lo_winners.is_empty() {
+                // No qualifying low -- entire pot to hi winners
+                let share = pot.amount / hi_winners.len() as i64;
+                let remainder = pot.amount % hi_winners.len() as i64;
+                for (i, &winner_idx) in hi_winners.iter().enumerate() {
+                    let amount = if i == 0 { share + remainder } else { share };
+                    *payouts.entry(winner_idx).or_insert(0) += amount;
+                }
+            } else {
+                // Split pot: hi gets half, lo gets half. Odd chip to hi.
+                let hi_half = (pot.amount + 1) / 2; // ceiling division -- odd chip to hi
+                let lo_half = pot.amount - hi_half;
+
+                // Distribute hi half
+                if !hi_winners.is_empty() {
+                    let share = hi_half / hi_winners.len() as i64;
+                    let remainder = hi_half % hi_winners.len() as i64;
+                    for (i, &winner_idx) in hi_winners.iter().enumerate() {
+                        let amount = if i == 0 { share + remainder } else { share };
+                        *payouts.entry(winner_idx).or_insert(0) += amount;
+                    }
+                }
+
+                // Distribute lo half
+                if lo_half > 0 {
+                    let share = lo_half / lo_winners.len() as i64;
+                    let remainder = lo_half % lo_winners.len() as i64;
+                    for (i, &winner_idx) in lo_winners.iter().enumerate() {
+                        let amount = if i == 0 { share + remainder } else { share };
+                        *payouts.entry(winner_idx).or_insert(0) += amount;
+                    }
+                }
+            }
+        }
+
+        payouts
+    }
+
     /// Reset for a new hand
     pub fn reset(&mut self) {
         self.pots = vec![Pot {
@@ -349,5 +412,93 @@ mod tests {
 
         assert_eq!(payouts.get(&0), Some(&150));
         assert_eq!(payouts.get(&2), Some(&150));
+    }
+
+    #[test]
+    fn test_hilo_split_even_pot() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.pots = vec![Pot {
+            amount: 300,
+            eligible_players: vec![0, 1],
+        }];
+
+        // Player 0 wins hi, Player 1 wins lo
+        let payouts = pot_mgr.award_pots_hilo(vec![vec![0]], vec![vec![1]]);
+        assert_eq!(payouts.get(&0), Some(&150)); // hi half
+        assert_eq!(payouts.get(&1), Some(&150)); // lo half
+    }
+
+    #[test]
+    fn test_hilo_odd_chip_to_hi() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.pots = vec![Pot {
+            amount: 301,
+            eligible_players: vec![0, 1],
+        }];
+
+        let payouts = pot_mgr.award_pots_hilo(vec![vec![0]], vec![vec![1]]);
+        assert_eq!(payouts.get(&0), Some(&151)); // hi gets odd chip
+        assert_eq!(payouts.get(&1), Some(&150)); // lo gets remainder
+        // Total conserved
+        let total: i64 = payouts.values().sum();
+        assert_eq!(total, 301);
+    }
+
+    #[test]
+    fn test_hilo_no_qualifying_low() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.pots = vec![Pot {
+            amount: 300,
+            eligible_players: vec![0, 1],
+        }];
+
+        // No qualifying low hand -- empty lo winners
+        let payouts = pot_mgr.award_pots_hilo(vec![vec![0]], vec![vec![]]);
+        assert_eq!(payouts.get(&0), Some(&300)); // hi gets entire pot
+        assert_eq!(payouts.get(&1), None);
+    }
+
+    #[test]
+    fn test_hilo_same_player_wins_both() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.pots = vec![Pot {
+            amount: 400,
+            eligible_players: vec![0, 1],
+        }];
+
+        // Player 0 wins both hi and lo (scoops)
+        let payouts = pot_mgr.award_pots_hilo(vec![vec![0]], vec![vec![0]]);
+        assert_eq!(payouts.get(&0), Some(&400)); // scoops entire pot
+        assert_eq!(payouts.get(&1), None);
+    }
+
+    #[test]
+    fn test_hilo_with_side_pots() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.pots = vec![
+            Pot {
+                amount: 300,
+                eligible_players: vec![0, 1, 2],
+            },
+            Pot {
+                amount: 200,
+                eligible_players: vec![1, 2],
+            },
+        ];
+
+        // Main pot: P0 wins hi, P1 wins lo
+        // Side pot: P2 wins hi, P1 wins lo
+        let payouts = pot_mgr.award_pots_hilo(
+            vec![vec![0], vec![2]],
+            vec![vec![1], vec![1]],
+        );
+        // Main: P0 gets 150 (hi half), P1 gets 150 (lo half)
+        // Side: P2 gets 100 (hi half), P1 gets 100 (lo half)
+        assert_eq!(payouts.get(&0), Some(&150));
+        assert_eq!(payouts.get(&1), Some(&250)); // 150 + 100
+        assert_eq!(payouts.get(&2), Some(&100));
+        // Total conserved
+        let total: i64 = payouts.values().sum();
+        assert_eq!(total, 500);
     }
 }

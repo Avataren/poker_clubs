@@ -186,6 +186,14 @@ async fn create_sng(
     // Verify user is club admin
     verify_club_admin(&state.pool, &req.club_id, &auth_user.user_id).await?;
 
+    // Input validation
+    if req.buy_in < 0 {
+        return Err(AppError::Validation("Buy-in must be non-negative".to_string()));
+    }
+    if req.starting_stack <= 0 {
+        return Err(AppError::Validation("Starting stack must be positive".to_string()));
+    }
+
     let config = SngConfig {
         name: req.name,
         variant_id: req.variant_id.unwrap_or_else(|| "holdem".to_string()),
@@ -234,6 +242,14 @@ async fn create_mtt(
 
     // Verify user is club admin
     verify_club_admin(&state.pool, &req.club_id, &auth_user.user_id).await?;
+
+    // Input validation
+    if req.buy_in < 0 {
+        return Err(AppError::Validation("Buy-in must be non-negative".to_string()));
+    }
+    if req.starting_stack <= 0 {
+        return Err(AppError::Validation("Starting stack must be positive".to_string()));
+    }
 
     let config = MttConfig {
         name: req.name,
@@ -286,19 +302,20 @@ async fn list_club_tournaments(
     // Verify user is club member
     verify_club_member(&state.pool, &club_id, &auth_user.user_id).await?;
 
-    // Get tournaments (active and recent)
+    // Get tournaments (active and recent, limited to 50)
     let tournaments: Vec<Tournament> = sqlx::query_as(
-        "SELECT * FROM tournaments 
-         WHERE club_id = ? 
+        "SELECT * FROM tournaments
+         WHERE club_id = ?
          AND (status != 'finished' OR finished_at > datetime('now', '-1 day'))
-         ORDER BY 
-           CASE status 
-             WHEN 'registering' THEN 1 
+         ORDER BY
+           CASE status
+             WHEN 'registering' THEN 1
              WHEN 'seating' THEN 2
-             WHEN 'running' THEN 3 
-             ELSE 4 
+             WHEN 'running' THEN 3
+             ELSE 4
            END,
-           created_at DESC",
+           created_at DESC
+         LIMIT 50",
     )
     .bind(&club_id)
     .fetch_all(&state.pool)

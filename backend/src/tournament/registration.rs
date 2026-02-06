@@ -53,30 +53,48 @@ impl RegistrationService {
             return Err(AppError::BadRequest("Tournament is full".to_string()));
         }
 
-        // Check if already registered
+        // Use BEGIN IMMEDIATE to prevent double-registration race condition
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&*self.ctx.pool)
+            .await?;
+
+        // Check if already registered (inside transaction)
         let existing = sqlx::query_as::<_, TournamentRegistration>(
             "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND user_id = ?",
         )
         .bind(tournament_id)
         .bind(user_id)
         .fetch_optional(&*self.ctx.pool)
-        .await?;
+        .await;
 
-        if existing.is_some() {
-            return Err(AppError::BadRequest("Already registered".to_string()));
+        match existing {
+            Ok(Some(_)) => {
+                let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                return Err(AppError::BadRequest("Already registered".to_string()));
+            }
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                return Err(e.into());
+            }
+            Ok(None) => {} // Not registered yet, continue
         }
 
         // Deduct buy-in from club balance
-        self.ctx
+        if let Err(e) = self
+            .ctx
             .deduct_buy_in(&tournament.club_id, user_id, tournament.buy_in)
-            .await?;
+            .await
+        {
+            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+            return Err(e);
+        }
 
         // Create registration
         let registration =
             TournamentRegistration::new(tournament_id.to_string(), user_id.to_string());
 
-        sqlx::query(
-            "INSERT INTO tournament_registrations (tournament_id, user_id, registered_at, prize_amount) 
+        if let Err(e) = sqlx::query(
+            "INSERT INTO tournament_registrations (tournament_id, user_id, registered_at, prize_amount)
              VALUES (?, ?, ?, ?)",
         )
         .bind(&registration.tournament_id)
@@ -84,7 +102,11 @@ impl RegistrationService {
         .bind(&registration.registered_at)
         .bind(registration.prize_amount)
         .execute(&*self.ctx.pool)
-        .await?;
+        .await
+        {
+            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+            return Err(e.into());
+        }
 
         // Update tournament counts and prize pool
         tournament.registered_players += 1;
@@ -93,9 +115,9 @@ impl RegistrationService {
             tournament.remaining_players += 1;
         }
 
-        sqlx::query(
-            "UPDATE tournaments 
-             SET registered_players = ?, prize_pool = ?, remaining_players = ? 
+        if let Err(e) = sqlx::query(
+            "UPDATE tournaments
+             SET registered_players = ?, prize_pool = ?, remaining_players = ?
              WHERE id = ?",
         )
         .bind(tournament.registered_players)
@@ -103,7 +125,15 @@ impl RegistrationService {
         .bind(tournament.remaining_players)
         .bind(tournament_id)
         .execute(&*self.ctx.pool)
-        .await?;
+        .await
+        {
+            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+            return Err(e.into());
+        }
+
+        sqlx::query("COMMIT")
+            .execute(&*self.ctx.pool)
+            .await?;
 
         // Update in-memory state
         if let Some(state) = self.ctx.tournaments.write().await.get_mut(tournament_id) {

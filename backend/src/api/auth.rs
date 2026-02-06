@@ -1,4 +1,5 @@
 use crate::{
+    audit,
     auth::JwtManager,
     db::{models::User, DbPool},
     error::{AppError, Result},
@@ -72,10 +73,8 @@ async fn register(
         ));
     }
 
-    if req.password.len() < 6 {
-        return Err(AppError::Validation(
-            "Password must be at least 6 characters".to_string(),
-        ));
+    if let Err(msg) = validate_password(&req.password) {
+        return Err(AppError::Validation(msg));
     }
 
     // Check if username or email already exists (case-insensitive)
@@ -123,24 +122,45 @@ async fn register(
     }))
 }
 
+/// Dummy hash for timing-safe comparison when user is not found.
+/// Generated once so that bcrypt::verify takes similar time as a real check.
+const DUMMY_HASH: &str = "$2b$12$LJ3m4ys3Lg2VBe.LBsDMzuCdNhJFUJShHTzu/hNRccWFEMOAb.Kze";
+
 async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>> {
     // Find user by username (case-insensitive)
-    let user: User = sqlx::query_as("SELECT * FROM users WHERE LOWER(username) = LOWER(?)")
-        .bind(&req.username)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| AppError::Auth("Invalid username or password".to_string()))?;
+    let user: Option<User> =
+        sqlx::query_as("SELECT * FROM users WHERE LOWER(username) = LOWER(?)")
+            .bind(&req.username)
+            .fetch_optional(&state.pool)
+            .await?;
 
-    // Verify password
-    let valid = bcrypt::verify(req.password.as_bytes(), &user.password_hash)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to verify password: {}", e)))?;
+    // Timing-safe: always perform bcrypt::verify even when user not found
+    let (user, valid) = match user {
+        Some(u) => {
+            let ok = bcrypt::verify(req.password.as_bytes(), &u.password_hash)
+                .map_err(|e| {
+                    AppError::Internal(anyhow::anyhow!("Failed to verify password: {}", e))
+                })?;
+            (Some(u), ok)
+        }
+        None => {
+            // Perform dummy verify to equalize timing
+            let _ = bcrypt::verify(req.password.as_bytes(), DUMMY_HASH);
+            (None, false)
+        }
+    };
 
     if !valid {
+        audit::log_auth_event(&req.username, "login_failed", false);
         return Err(AppError::Auth("Invalid username or password".to_string()));
     }
+
+    let user = user.unwrap(); // Safe: valid=true means user is Some
+
+    audit::log_auth_event(&user.username, "login", true);
 
     // Generate JWT token
     let token = state
@@ -151,4 +171,23 @@ async fn login(
         token,
         user: user.into(),
     }))
+}
+
+/// Validate password meets security requirements.
+fn validate_password(password: &str) -> std::result::Result<(), String> {
+    if password.len() < 8 {
+        return Err("Password must be at least 8 characters".to_string());
+    }
+    if password.len() > 72 {
+        return Err("Password must be at most 72 characters".to_string());
+    }
+    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+    if !has_upper || !has_lower || !has_digit {
+        return Err(
+            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".to_string(),
+        );
+    }
+    Ok(())
 }

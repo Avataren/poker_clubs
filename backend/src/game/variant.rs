@@ -16,7 +16,7 @@
 #![allow(dead_code)]
 
 use super::deck::Card;
-use super::hand::HandRank;
+use super::hand::{HandRank, LowHandRank};
 
 /// Betting structure types
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +74,17 @@ pub trait PokerVariant: Send + Sync + std::fmt::Debug {
     /// Returns true if this variant supports hi-lo split pots
     fn is_hi_lo(&self) -> bool {
         false
+    }
+
+    /// Evaluate the best low hand from hole cards and community cards (for hi-lo variants)
+    /// Returns None if the variant doesn't support hi-lo or no qualifying low exists
+    fn evaluate_low_hand(
+        &self,
+        hole_cards: &[Card],
+        community_cards: &[Card],
+    ) -> Option<LowHandRank> {
+        let _ = (hole_cards, community_cards);
+        None
     }
 
     /// Minimum number of players required
@@ -311,8 +322,75 @@ impl PokerVariant for OmahaHiLo {
         true
     }
 
+    fn evaluate_low_hand(
+        &self,
+        hole_cards: &[Card],
+        community_cards: &[Card],
+    ) -> Option<LowHandRank> {
+        super::hand::evaluate_omaha_low_hand(hole_cards, community_cards)
+    }
+
     fn max_players(&self) -> usize {
         9
+    }
+
+    fn clone_box(&self) -> Box<dyn PokerVariant> {
+        Box::new(self.clone())
+    }
+}
+
+/// Fixed-Limit Hold'em - structured betting with small_bet and big_bet
+#[derive(Debug, Clone)]
+pub struct FixedLimitHoldem {
+    pub small_bet: i64,
+    pub big_bet: i64,
+}
+
+impl FixedLimitHoldem {
+    pub fn new(small_bet: i64, big_bet: i64) -> Self {
+        Self { small_bet, big_bet }
+    }
+}
+
+impl PokerVariant for FixedLimitHoldem {
+    fn name(&self) -> &'static str {
+        "Fixed Limit Hold'em"
+    }
+
+    fn id(&self) -> &'static str {
+        "fl_holdem"
+    }
+
+    fn hole_cards_count(&self) -> usize {
+        2
+    }
+
+    fn streets(&self) -> Vec<StreetConfig> {
+        vec![
+            StreetConfig {
+                name: "Flop",
+                cards_to_deal: 3,
+            },
+            StreetConfig {
+                name: "Turn",
+                cards_to_deal: 1,
+            },
+            StreetConfig {
+                name: "River",
+                cards_to_deal: 1,
+            },
+        ]
+    }
+
+    fn betting_structure(&self) -> BettingStructure {
+        BettingStructure::FixedLimit {
+            small_bet: self.small_bet,
+            big_bet: self.big_bet,
+        }
+    }
+
+    fn max_players(&self) -> usize {
+        10
     }
 
     fn clone_box(&self) -> Box<dyn PokerVariant> {
@@ -375,13 +453,15 @@ pub fn variant_from_id(id: &str) -> Option<Box<dyn PokerVariant>> {
         "plo" => Some(Box::new(PotLimitOmaha)),
         "omaha_hilo" => Some(Box::new(OmahaHiLo)),
         "short_deck" => Some(Box::new(ShortDeckHoldem)),
+        // Fixed-limit requires bet sizes, so use common defaults (2/4)
+        "fl_holdem" => Some(Box::new(FixedLimitHoldem::new(2, 4))),
         _ => None,
     }
 }
 
 /// Get all available variant IDs
 pub fn available_variants() -> Vec<&'static str> {
-    vec!["holdem", "omaha", "plo", "omaha_hilo", "short_deck"]
+    vec!["holdem", "omaha", "plo", "omaha_hilo", "short_deck", "fl_holdem"]
 }
 
 #[cfg(test)]

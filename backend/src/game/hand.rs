@@ -63,6 +63,107 @@ impl Ord for HandRank {
     }
 }
 
+/// Represents a qualifying low hand in hi-lo games (8-or-better)
+/// Lower values are better. The rank is the 5 cards sorted highest to lowest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LowHandRank {
+    /// The 5 card ranks sorted highest to lowest (e.g., [8,6,4,3,2])
+    /// Lower is better - compared lexicographically
+    pub ranks: [u8; 5],
+    pub description: String,
+    pub best_cards: Vec<Card>,
+}
+
+impl Ord for LowHandRank {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Lower is better: compare lexicographically, but reverse the ordering
+        // so that a lower hand sorts as "less than" a higher hand.
+        // e.g., [5,4,3,2,1] < [8,7,6,5,4] because [5,4,3,2,1] is a better (lower) hand
+        self.ranks.cmp(&other.ranks)
+    }
+}
+
+impl PartialOrd for LowHandRank {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Evaluates the best Omaha low hand: MUST use exactly 2 hole cards and 3 community cards
+/// A qualifying low hand has 5 unique card ranks, all 8 or below (aces count as 1).
+/// Straights and flushes do NOT disqualify a low hand.
+/// Returns None if no qualifying low exists.
+pub fn evaluate_omaha_low_hand(
+    hole_cards: &[Card],
+    community_cards: &[Card],
+) -> Option<LowHandRank> {
+    if hole_cards.len() < 2 || community_cards.len() < 3 {
+        return None;
+    }
+
+    let hole_combos = combinations(hole_cards, 2);
+    let community_combos = combinations(community_cards, 3);
+
+    let mut best_low: Option<LowHandRank> = None;
+
+    for hole_combo in &hole_combos {
+        for community_combo in &community_combos {
+            // Collect the 5 cards
+            let mut five_cards: Vec<&Card> = Vec::with_capacity(5);
+            five_cards.extend(hole_combo.iter());
+            five_cards.extend(community_combo.iter());
+
+            // Convert ranks: Ace (14) counts as 1 for low evaluation
+            let mut low_ranks: Vec<u8> = five_cards
+                .iter()
+                .map(|c| if c.rank == 14 { 1 } else { c.rank })
+                .collect();
+
+            // Sort and deduplicate to check for 5 unique ranks
+            low_ranks.sort_unstable();
+            low_ranks.dedup();
+
+            // Must have 5 unique ranks, all <= 8
+            if low_ranks.len() != 5 || low_ranks.iter().any(|&r| r > 8) {
+                continue;
+            }
+
+            // Sort descending for comparison (highest card first)
+            low_ranks.sort_unstable_by(|a, b| b.cmp(a));
+            let ranks: [u8; 5] = [
+                low_ranks[0],
+                low_ranks[1],
+                low_ranks[2],
+                low_ranks[3],
+                low_ranks[4],
+            ];
+
+            // Build description
+            let description = format!(
+                "{}-{}-{}-{}-{} low",
+                ranks[0], ranks[1], ranks[2], ranks[3], ranks[4]
+            );
+
+            // Build best_cards list
+            let best_cards: Vec<Card> = five_cards.iter().copied().cloned().collect();
+
+            let low_rank = LowHandRank {
+                ranks,
+                description,
+                best_cards,
+            };
+
+            best_low = match best_low {
+                None => Some(low_rank),
+                Some(ref current) if low_rank < *current => Some(low_rank),
+                _ => best_low,
+            };
+        }
+    }
+
+    best_low
+}
+
 /// Evaluates the best 5-card hand from a player's hole cards and community cards
 pub fn evaluate_hand(hole_cards: &[Card], community_cards: &[Card]) -> HandRank {
     let mut all_cards = Vec::new();
@@ -764,5 +865,89 @@ mod tests {
 
         // Not enough cards for Omaha
         assert!(evaluate_omaha_hand(&hole_cards, &community_cards).is_none());
+    }
+
+    #[test]
+    fn test_low_hand_wheel_is_best() {
+        let hole_cards = vec![
+            Card::new(14, 0), // Ace (plays as low)
+            Card::new(2, 1),
+            Card::new(10, 2),
+            Card::new(11, 3),
+        ];
+        let community_cards = vec![
+            Card::new(3, 0),
+            Card::new(4, 1),
+            Card::new(5, 2),
+            Card::new(13, 3),
+            Card::new(12, 0),
+        ];
+        let low = evaluate_omaha_low_hand(&hole_cards, &community_cards);
+        assert!(low.is_some());
+        let low = low.unwrap();
+        assert_eq!(low.ranks, [5, 4, 3, 2, 1]); // Wheel: 5-4-3-2-A
+    }
+
+    #[test]
+    fn test_low_hand_no_qualifying() {
+        // All community cards are 9+, no qualifying low
+        let hole_cards = vec![
+            Card::new(14, 0),
+            Card::new(2, 1),
+            Card::new(3, 2),
+            Card::new(4, 3),
+        ];
+        let community_cards = vec![
+            Card::new(9, 0),
+            Card::new(10, 1),
+            Card::new(11, 2),
+            Card::new(12, 3),
+            Card::new(13, 0),
+        ];
+        let low = evaluate_omaha_low_hand(&hole_cards, &community_cards);
+        assert!(low.is_none());
+    }
+
+    #[test]
+    fn test_low_hand_comparison() {
+        // 8-7-6-5-4 vs 7-5-4-3-2 - second is better (lower)
+        let low1 = LowHandRank {
+            ranks: [8, 7, 6, 5, 4],
+            description: "8-7-6-5-4 low".to_string(),
+            best_cards: vec![],
+        };
+        let low2 = LowHandRank {
+            ranks: [7, 5, 4, 3, 2],
+            description: "7-5-4-3-2 low".to_string(),
+            best_cards: vec![],
+        };
+        assert!(low2 < low1); // Lower is better
+    }
+
+    #[test]
+    fn test_low_hand_unique_ranks_required() {
+        // Pairs don't qualify for low - need 5 unique ranks
+        let hole_cards = vec![
+            Card::new(2, 0),
+            Card::new(2, 1),  // Pair of 2s
+            Card::new(10, 2),
+            Card::new(11, 3),
+        ];
+        let community_cards = vec![
+            Card::new(3, 0),
+            Card::new(3, 1), // Pair of 3s
+            Card::new(8, 2),
+            Card::new(13, 3),
+            Card::new(12, 0),
+        ];
+        // The only combos with 2 hole cards all use at least one 2, and community has 3,3,8
+        // With hole (2,10) or (2,11) + community, we can't make 5 unique low ranks
+        // With hole (2,2) + community (3,3,8) = ranks 2,2,3,3,8 - not 5 unique
+        // hole(2,10) + community(3,8,K) = 2,3,8,10,K - 10 and K don't qualify
+        // hole(2,10) + community(3,3,8) = 2,3,3,8,10 - not unique, 10 > 8
+        // hole(2,11) similarly fails
+        // So no qualifying low should exist here
+        let low = evaluate_omaha_low_hand(&hole_cards, &community_cards);
+        assert!(low.is_none(), "Should not qualify: {:?}", low);
     }
 }

@@ -16,40 +16,45 @@ class PlayerWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 160,
-      margin: const EdgeInsets.all(8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isCurrentTurn ? Colors.amber[700] : Colors.white10,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isMe ? Colors.green : Colors.transparent,
-          width: 3,
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  isMe ? '${player.username} (You)' : player.username,
-                  style: TextStyle(
-                    color: isCurrentTurn ? Colors.black : Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (isCurrentTurn)
-                const Icon(Icons.timer, color: Colors.black, size: 16),
-            ],
+    final isInactive = player.isDisconnected || player.isSittingOut || player.isFolded || player.isEliminated;
+    return Opacity(
+      opacity: isInactive ? 0.5 : 1.0,
+      child: Container(
+        width: 160,
+        margin: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isCurrentTurn ? Colors.amber[700] : Colors.white10,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isMe ? Colors.green : Colors.transparent,
+            width: 3,
           ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    isMe ? '${player.username} (You)' : player.username,
+                    style: TextStyle(
+                      color: isCurrentTurn ? Colors.black : Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (isCurrentTurn)
+                  const Icon(Icons.timer, color: Colors.black, size: 16),
+                if (player.isDisconnected)
+                  const Icon(Icons.wifi_off, color: Colors.red, size: 16),
+              ],
+            ),
           const SizedBox(height: 4),
           Text(
             'Stack: \$${player.stack}',
@@ -83,6 +88,7 @@ class PlayerWidget extends StatelessWidget {
             ),
           ],
         ],
+      ),
       ),
     );
   }

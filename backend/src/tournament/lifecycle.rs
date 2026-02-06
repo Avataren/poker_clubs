@@ -195,8 +195,8 @@ impl LifecycleService {
             return Ok(None);
         }
 
-        // Update remaining players
-        tournament.remaining_players -= 1;
+        // Update remaining players (prevent underflow)
+        tournament.remaining_players = (tournament.remaining_players - 1).max(0);
         let finish_position = tournament.remaining_players + 1;
 
         sqlx::query("UPDATE tournaments SET remaining_players = ? WHERE id = ?")
@@ -317,7 +317,7 @@ impl LifecycleService {
         Ok(winners)
     }
 
-    /// Distribute prizes to winners
+    /// Distribute prizes to winners (atomic transaction)
     async fn distribute_prizes(&self, tournament_id: &str) -> Result<Vec<PrizeWinner>> {
         let tournament = self.ctx.load_tournament(tournament_id).await?;
 
@@ -331,13 +331,18 @@ impl LifecycleService {
 
         // Get all registrations ordered by finish position
         let registrations = sqlx::query_as::<_, TournamentRegistration>(
-            "SELECT * FROM tournament_registrations 
-             WHERE tournament_id = ? 
+            "SELECT * FROM tournament_registrations
+             WHERE tournament_id = ?
              ORDER BY COALESCE(finish_position, 999999)",
         )
         .bind(tournament_id)
         .fetch_all(&*self.ctx.pool)
         .await?;
+
+        // Wrap entire prize distribution in a single transaction
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&*self.ctx.pool)
+            .await?;
 
         let mut winners = Vec::new();
 
@@ -347,23 +352,38 @@ impl LifecycleService {
 
                 if prize > 0 {
                     // Update registration with prize
-                    sqlx::query(
-                        "UPDATE tournament_registrations SET prize_amount = ? 
+                    if let Err(e) = sqlx::query(
+                        "UPDATE tournament_registrations SET prize_amount = ?
                          WHERE tournament_id = ? AND user_id = ?",
                     )
                     .bind(prize)
                     .bind(tournament_id)
                     .bind(&registration.user_id)
                     .execute(&*self.ctx.pool)
-                    .await?;
+                    .await
+                    {
+                        let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                        return Err(e.into());
+                    }
 
                     // Credit balance
-                    self.ctx
+                    if let Err(e) = self
+                        .ctx
                         .credit_prize(&tournament.club_id, &registration.user_id, prize)
-                        .await?;
+                        .await
+                    {
+                        let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                        return Err(e);
+                    }
 
                     // Load username
-                    let username = self.ctx.get_username(&registration.user_id).await?;
+                    let username = match self.ctx.get_username(&registration.user_id).await {
+                        Ok(u) => u,
+                        Err(e) => {
+                            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                            return Err(e);
+                        }
+                    };
 
                     winners.push(PrizeWinner {
                         user_id: registration.user_id,
@@ -374,6 +394,10 @@ impl LifecycleService {
                 }
             }
         }
+
+        sqlx::query("COMMIT")
+            .execute(&*self.ctx.pool)
+            .await?;
 
         Ok(winners)
     }

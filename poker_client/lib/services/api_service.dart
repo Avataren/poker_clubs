@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config.dart';
 import '../models/club.dart';
 import '../models/tournament.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://127.0.0.1:3000';
+  static const String baseUrl = AppConfig.httpBaseUrl;
   String? _token;
   String? _userId;
 
