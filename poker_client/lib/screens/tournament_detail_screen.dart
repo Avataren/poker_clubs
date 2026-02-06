@@ -280,6 +280,51 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     }
   }
 
+  Future<void> _deleteTournament() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Tournament'),
+        content: const Text(
+          'Are you sure you want to permanently delete this tournament? '
+          'Registered players will be refunded.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade900,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isProcessing = true);
+
+    try {
+      await widget.apiService.deleteTournament(widget.tournamentId);
+      if (mounted) {
+        _showSnackBar('Tournament deleted');
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      _showSnackBar('Error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
   Future<void> _fillWithBots() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -561,11 +606,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     final isRegistered = _detail!.isRegistered;
     final canRegister = _detail!.canRegister;
 
-    if (tournament.status == 'finished' || tournament.status == 'cancelled') {
-      return null;
-    }
-
-    final actionButtons = [
+    final actionButtons = <Widget>[
       if (tournament.status == 'registering' &&
           _detail!.registrations.length < tournament.maxPlayers)
         ElevatedButton.icon(
@@ -581,7 +622,25 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
-      if (tournament.status != 'finished' && tournament.status != 'cancelled')
+      if ((tournament.status == 'registering' ||
+              tournament.status == 'seating') &&
+          _detail!.registrations.length >= tournament.minPlayers)
+        ElevatedButton.icon(
+          onPressed: _isProcessing ? null : _startTournament,
+          icon: const Icon(Icons.play_arrow, size: 18),
+          label: const Text(
+            'Start Now',
+            style: TextStyle(fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green.shade700,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+      if (tournament.status != 'finished' &&
+          tournament.status != 'cancelled' &&
+          tournament.status != 'running')
         ElevatedButton.icon(
           onPressed: _isProcessing ? null : _cancelTournament,
           icon: const Icon(Icons.cancel, size: 18),
@@ -595,12 +654,29 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
-      _buildActionButton(
-        tournament,
-        isRegistered,
-        canRegister,
-      ),
+      if (tournament.status != 'running')
+        ElevatedButton.icon(
+          onPressed: _isProcessing ? null : _deleteTournament,
+          icon: const Icon(Icons.delete_forever, size: 18),
+          label: const Text(
+            'Delete',
+            style: TextStyle(fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red.shade900,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+      if (tournament.status != 'finished' && tournament.status != 'cancelled')
+        _buildActionButton(
+          tournament,
+          isRegistered,
+          canRegister,
+        ),
     ];
+
+    if (actionButtons.isEmpty) return null;
 
     return Container(
       padding: const EdgeInsets.all(16),

@@ -1,7 +1,11 @@
 pub mod models;
 
-use sqlx::{sqlite::SqlitePool, Pool, Sqlite};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    Pool, Sqlite,
+};
 use std::path::Path;
+use std::str::FromStr;
 
 pub type DbPool = Pool<Sqlite>;
 
@@ -21,7 +25,15 @@ pub async fn create_pool(database_url: &str) -> Result<DbPool, sqlx::Error> {
         }
     }
 
-    SqlitePool::connect(database_url).await
+    let options = SqliteConnectOptions::from_str(database_url)?
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(10))
+        .pragma("synchronous", "NORMAL");
+
+    SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
 }
 
 pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {

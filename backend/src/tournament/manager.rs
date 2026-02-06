@@ -172,6 +172,17 @@ impl TournamentManager {
         self.broadcasts.broadcast_tournament_info().await
     }
 
+    /// Check all tournaments with a scheduled start and trigger auto-start/cancel.
+    /// Called periodically by background task.
+    pub async fn check_scheduled_starts(&self) -> Result<()> {
+        self.lifecycle.check_scheduled_starts().await
+    }
+
+    /// Remove a tournament from the in-memory cache.
+    pub async fn remove_from_cache(&self, tournament_id: &str) {
+        self.ctx.tournaments.write().await.remove(tournament_id);
+    }
+
     /// Remove finished/cancelled tournaments from in-memory cache after 1 hour.
     /// Called periodically by background task.
     pub async fn cleanup_finished_tournaments(&self) {

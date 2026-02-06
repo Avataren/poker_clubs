@@ -398,6 +398,31 @@ impl LifecycleService {
         Ok(winners)
     }
 
+    /// Check all tournaments with a scheduled start time and trigger
+    /// `refresh_tournament_timing()` so they auto-start or auto-cancel.
+    /// Called periodically by background task.
+    pub(crate) async fn check_scheduled_starts(&self) -> Result<()> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM tournaments
+             WHERE status IN ('registering', 'seating')
+               AND scheduled_start IS NOT NULL",
+        )
+        .fetch_all(&*self.ctx.pool)
+        .await?;
+
+        for (tournament_id,) in rows {
+            if let Err(e) = self.ctx.load_tournament(&tournament_id).await {
+                tracing::error!(
+                    "Error refreshing scheduled tournament {}: {:?}",
+                    tournament_id,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Check all tournament tables for player eliminations
     /// Called periodically by background task
     pub(crate) async fn check_tournament_eliminations(&self) -> Result<()> {

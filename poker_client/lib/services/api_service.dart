@@ -417,6 +417,20 @@ class ApiService {
     }
   }
 
+  /// Delete a tournament (admin only)
+  Future<void> deleteTournament(String tournamentId) async {
+    if (!isAuthenticated) throw Exception('Not authenticated');
+
+    final response = await http.delete(
+      Uri.parse('$baseUrl/api/tournaments/$tournamentId'),
+      headers: {'Authorization': 'Bearer $_token'},
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to delete tournament: ${response.body}');
+    }
+  }
+
   /// Get tournament results
   Future<List<TournamentResult>> getTournamentResults(
     String tournamentId,

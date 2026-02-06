@@ -153,7 +153,7 @@ pub fn router() -> Router<Arc<TournamentAppState>> {
         .route("/sng", post(create_sng))
         .route("/mtt", post(create_mtt))
         .route("/club/:club_id", get(list_club_tournaments))
-        .route("/:id", get(get_tournament_details))
+        .route("/:id", get(get_tournament_details).delete(delete_tournament))
         .route("/:id/cancel", delete(cancel_tournament))
         // Registration
         .route("/:id/register", post(register_for_tournament))
@@ -249,6 +249,15 @@ async fn create_mtt(
     }
     if req.starting_stack <= 0 {
         return Err(AppError::Validation("Starting stack must be positive".to_string()));
+    }
+
+    // Validate scheduled_start is not in the past
+    if let Some(ref scheduled_start) = req.scheduled_start {
+        let parsed = DateTime::parse_from_rfc3339(scheduled_start)
+            .map_err(|_| AppError::Validation("Invalid scheduled_start format (expected RFC3339)".to_string()))?;
+        if parsed.with_timezone(&Utc) < Utc::now() {
+            return Err(AppError::Validation("Scheduled start cannot be in the past".to_string()));
+        }
     }
 
     let config = MttConfig {
@@ -682,6 +691,58 @@ async fn cancel_tournament(
     Ok(Json(updated_tournament))
 }
 
+async fn delete_tournament(
+    State(state): State<Arc<TournamentAppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
+
+    let tournament: Tournament = sqlx::query_as("SELECT * FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound("Tournament not found".to_string()))?;
+
+    // Verify user is club admin
+    verify_club_admin(&state.pool, &tournament.club_id, &auth_user.user_id).await?;
+
+    // Cannot delete a running tournament
+    if tournament.status == "running" {
+        return Err(AppError::BadRequest(
+            "Cannot delete a running tournament. Cancel it first.".to_string(),
+        ));
+    }
+
+    // If registering/seating, cancel first to handle refunds
+    if tournament.status == "registering" || tournament.status == "seating" {
+        state
+            .tournament_manager
+            .cancel_tournament(&id, Some("Tournament deleted by admin"))
+            .await?;
+    }
+
+    // Delete from database (ON DELETE CASCADE handles child tables)
+    sqlx::query("DELETE FROM tournaments WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    // Remove from in-memory cache
+    state.tournament_manager.remove_from_cache(&id).await;
+
+    // Notify club members
+    state.game_server.notify_club(&tournament.club_id).await;
+
+    tracing::info!("Deleted tournament {} ({})", tournament.name, id);
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
 async fn get_tournament_results(
     State(state): State<Arc<TournamentAppState>>,
     Path(id): Path<String>,
@@ -815,61 +876,60 @@ async fn fill_with_bots(
         return Err(AppError::BadRequest("Tournament is full".to_string()));
     }
 
-    // Add bots to fill remaining spots
-    for i in 0..spots_remaining {
-        let bot_username = format!("Bot_{}", current_count + i + 1);
+    // Create all bot users in a single transaction on one connection
+    let bot_password_hash = "$2b$12$BOTACCOUNT_NO_PASSWORD";
+    let mut bot_entries: Vec<(String, String)> = Vec::with_capacity(spots_remaining as usize);
 
-        tracing::info!("Creating bot: {}", bot_username);
+    {
+        let mut conn = state.pool.acquire().await?;
+        sqlx::query("BEGIN").execute(&mut *conn).await?;
+        for i in 0..spots_remaining {
+            let bot_username = format!("Bot_{}", current_count + i + 1);
+            let bot_id = uuid::Uuid::new_v4().to_string();
 
-        // Create bot user with is_bot flag
-        let bot_id = uuid::Uuid::new_v4().to_string();
-        let bot_password_hash = "$2b$12$BOTACCOUNT_NO_PASSWORD";
-
-        let insert_result = sqlx::query(
-            "INSERT INTO users (id, username, email, password_hash, is_bot) 
-             VALUES (?, ?, ?, ?, 1)
-             ON CONFLICT(username) DO NOTHING",
-        )
-        .bind(&bot_id)
-        .bind(&bot_username)
-        .bind(format!("{}@bot.local", bot_username))
-        .bind(bot_password_hash)
-        .execute(&state.pool)
-        .await;
-
-        if let Err(e) = insert_result {
-            tracing::error!("Failed to insert bot user {}: {:?}", bot_username, e);
-            return Err(e.into());
-        }
-
-        // Get the bot's actual ID (in case it already existed)
-        let actual_bot_id =
-            match sqlx::query_as::<_, (String,)>("SELECT id FROM users WHERE username = ?")
-                .bind(&bot_username)
-                .fetch_one(&state.pool)
-                .await
+            if let Err(e) = sqlx::query(
+                "INSERT INTO users (id, username, email, password_hash, is_bot)
+                 VALUES (?, ?, ?, ?, 1)
+                 ON CONFLICT(username) DO NOTHING",
+            )
+            .bind(&bot_id)
+            .bind(&bot_username)
+            .bind(format!("{}@bot.local", bot_username))
+            .bind(bot_password_hash)
+            .execute(&mut *conn)
+            .await
             {
-                Ok((id,)) => {
-                    tracing::info!("Bot {} has ID: {}", bot_username, id);
-                    id
-                }
-                Err(e) => {
-                    tracing::error!("Failed to fetch bot ID for {}: {:?}", bot_username, e);
-                    return Err(e.into());
-                }
-            };
+                tracing::error!("Failed to insert bot user {}: {:?}", bot_username, e);
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                return Err(e.into());
+            }
 
-        // Register bot for tournament (bots don't need club membership or balance)
-        tracing::info!("Registering bot {} for tournament", bot_username);
+            let (actual_bot_id,): (String,) =
+                sqlx::query_as("SELECT id FROM users WHERE username = ?")
+                    .bind(&bot_username)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to fetch bot ID for {}: {:?}", bot_username, e);
+                        AppError::from(e)
+                    })?;
+
+            bot_entries.push((actual_bot_id, bot_username));
+        }
+        sqlx::query("COMMIT").execute(&mut *conn).await?;
+    }
+
+    // Register bots one at a time (each uses its own transaction)
+    for (bot_id, bot_username) in &bot_entries {
         if let Err(e) = state
             .tournament_manager
-            .register_player(&id, &actual_bot_id, &bot_username)
+            .register_player(&id, bot_id, bot_username)
             .await
         {
             tracing::error!("Failed to register bot {}: {:?}", bot_username, e);
             return Err(e);
         }
-        tracing::info!("Successfully registered bot {}", bot_username);
+        tracing::info!("Registered bot {}", bot_username);
     }
 
     // Notify club members

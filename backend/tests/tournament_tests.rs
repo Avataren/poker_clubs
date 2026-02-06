@@ -2880,3 +2880,162 @@ async fn test_all_in_showdown_players_see_results_before_elimination() {
         assert_eq!(eliminated[0], loser_id);
     }
 }
+
+#[tokio::test]
+async fn test_fill_with_bots_mtt_large() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create MTT with 45 seats - reproduces the "database is locked" scenario
+    let response = server
+        .post("/api/tournaments/mtt")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Large MTT Bots Test",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 45,
+            "min_players": 2,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Fill all 45 spots with bots in one call
+    let fill_response = server
+        .post(&format!("/api/tournaments/{}/fill-bots", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+
+    fill_response.assert_status_ok();
+    let fill_body: Value = fill_response.json();
+
+    assert_eq!(fill_body["tournament"]["registered_players"], 45);
+    assert_eq!(fill_body["registrations"].as_array().unwrap().len(), 45);
+
+    // All should be bots
+    let bot_count = fill_body["registrations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["username"].as_str().unwrap().starts_with("Bot_"))
+        .count();
+    assert_eq!(bot_count, 45);
+}
+
+#[tokio::test]
+async fn test_fill_with_bots_already_full() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Full SNG Test",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 2,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Fill with bots
+    server
+        .post(&format!("/api/tournaments/{}/fill-bots", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await
+        .assert_status_ok();
+
+    // Second fill should fail since tournament is now full (SNG auto-starts)
+    let second_fill = server
+        .post(&format!("/api/tournaments/{}/fill-bots", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+
+    second_fill.assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_fill_with_bots_mixed_real_and_bots() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    let response = server
+        .post("/api/tournaments/mtt")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Mixed MTT",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 20,
+            "min_players": 2,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Register 5 real players
+    for i in 1..=5 {
+        let username = format!("realplayer{}", i);
+        let (token, user_id) = register_user(
+            &server,
+            &username,
+            &format!("{}@example.com", username),
+            "Password123",
+        )
+        .await;
+
+        server
+            .post("/api/clubs/join")
+            .json(&json!({"club_id": club_id.clone()}))
+            .add_header(AUTHORIZATION, format!("Bearer {}", token))
+            .await
+            .assert_status_ok();
+
+        add_balance(&server, &owner_token, &club_id, &user_id, 1000).await;
+
+        server
+            .post(&format!("/api/tournaments/{}/register", tournament_id))
+            .add_header(AUTHORIZATION, format!("Bearer {}", token))
+            .await
+            .assert_status_ok();
+    }
+
+    // Fill remaining 15 spots with bots
+    let fill_response = server
+        .post(&format!("/api/tournaments/{}/fill-bots", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+
+    fill_response.assert_status_ok();
+    let fill_body: Value = fill_response.json();
+
+    assert_eq!(fill_body["tournament"]["registered_players"], 20);
+
+    let registrations = fill_body["registrations"].as_array().unwrap();
+    let bot_count = registrations
+        .iter()
+        .filter(|r| r["username"].as_str().unwrap().starts_with("Bot_"))
+        .count();
+    let real_count = registrations.len() - bot_count;
+
+    assert_eq!(bot_count, 15);
+    assert_eq!(real_count, 5);
+}

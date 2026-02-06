@@ -281,6 +281,7 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
   final _levelDurationController = TextEditingController(text: '10');
 
   String _tournamentType = 'sng';
+  DateTime? _scheduledStart;
   bool _isCreating = false;
 
   @override
@@ -291,6 +292,35 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
     _startingStackController.dispose();
     _levelDurationController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDateTime() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _scheduledStart ?? now.add(const Duration(hours: 1)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+    );
+    if (date == null || !mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: _scheduledStart != null
+          ? TimeOfDay.fromDateTime(_scheduledStart!)
+          : TimeOfDay.fromDateTime(now.add(const Duration(hours: 1))),
+    );
+    if (time == null || !mounted) return;
+
+    setState(() {
+      _scheduledStart = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+    });
   }
 
   Future<void> _createTournament() async {
@@ -316,6 +346,7 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
           maxPlayers: int.parse(_maxPlayersController.text),
           startingStack: int.parse(_startingStackController.text),
           levelDurationMins: int.parse(_levelDurationController.text),
+          scheduledStart: _scheduledStart,
         );
       }
 
@@ -396,6 +427,36 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
                 validator: (value) =>
                     value?.isEmpty ?? true ? 'Required' : null,
               ),
+              if (_tournamentType == 'mtt') ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _scheduledStart != null
+                            ? 'Start: ${_scheduledStart!.year}-${_scheduledStart!.month.toString().padLeft(2, '0')}-${_scheduledStart!.day.toString().padLeft(2, '0')} ${_scheduledStart!.hour.toString().padLeft(2, '0')}:${_scheduledStart!.minute.toString().padLeft(2, '0')}'
+                            : 'No scheduled start',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.schedule),
+                      onPressed: _pickDateTime,
+                      tooltip: 'Pick date & time',
+                    ),
+                    if (_scheduledStart != null)
+                      IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () =>
+                            setState(() => _scheduledStart = null),
+                        tooltip: 'Clear',
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

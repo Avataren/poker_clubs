@@ -1,7 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/tournament.dart';
 
-class TournamentStatusWidget extends StatelessWidget {
+class TournamentStatusWidget extends StatefulWidget {
   final Tournament tournament;
   final int registeredCount;
 
@@ -10,6 +11,77 @@ class TournamentStatusWidget extends StatelessWidget {
     required this.tournament,
     required this.registeredCount,
   });
+
+  @override
+  State<TournamentStatusWidget> createState() =>
+      _TournamentStatusWidgetState();
+}
+
+class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
+  Timer? _countdownTimer;
+  Duration _remaining = Duration.zero;
+
+  bool get _isPreStart =>
+      widget.tournament.status == 'registering' ||
+      widget.tournament.status == 'seating';
+
+  @override
+  void initState() {
+    super.initState();
+    _startCountdownIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant TournamentStatusWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tournament.status != widget.tournament.status ||
+        oldWidget.tournament.scheduledStart != widget.tournament.scheduledStart) {
+      _startCountdownIfNeeded();
+    }
+  }
+
+  void _startCountdownIfNeeded() {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+
+    if (!_isPreStart || widget.tournament.scheduledStart == null) return;
+
+    _updateRemaining();
+    _countdownTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _updateRemaining(),
+    );
+  }
+
+  void _updateRemaining() {
+    final diff =
+        widget.tournament.scheduledStart!.difference(DateTime.now().toUtc());
+    setState(() {
+      _remaining = diff.isNegative ? Duration.zero : diff;
+    });
+    if (diff.isNegative) {
+      _countdownTimer?.cancel();
+      _countdownTimer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  String _formatCountdown(Duration d) {
+    final hours = d.inHours;
+    final minutes = d.inMinutes.remainder(60);
+    final seconds = d.inSeconds.remainder(60);
+    if (hours > 0) {
+      return '${hours}h ${minutes}m ${seconds}s';
+    } else if (minutes > 0) {
+      return '${minutes}m ${seconds}s';
+    }
+    return '${seconds}s';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,47 +99,89 @@ class TournamentStatusWidget extends StatelessWidget {
                   'Tournament Info',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                _buildStatusBadge(tournament.status),
+                _buildStatusBadge(widget.tournament.status),
               ],
             ),
             const SizedBox(height: 16),
-            _buildInfoRow('Type', tournament.tournamentType.toUpperCase()),
-            _buildInfoRow('Buy-in', '\$${_formatChips(tournament.buyIn)}'),
+            _buildInfoRow(
+                'Type', widget.tournament.tournamentType.toUpperCase()),
+            _buildInfoRow(
+                'Buy-in', '\$${_formatChips(widget.tournament.buyIn)}'),
             _buildInfoRow(
               'Prize Pool',
-              '\$${_formatChips(tournament.prizePool)}',
+              '\$${_formatChips(widget.tournament.prizePool)}',
             ),
             _buildInfoRow(
               'Players',
-              '$registeredCount / ${tournament.maxPlayers}',
+              '${widget.registeredCount} / ${widget.tournament.maxPlayers}',
             ),
             _buildInfoRow(
               'Starting Stack',
-              '${_formatChips(tournament.startingStack)} chips',
+              '${_formatChips(widget.tournament.startingStack)} chips',
             ),
             _buildInfoRow(
               'Level Duration',
-              '${tournament.levelDurationMins} minutes',
+              '${widget.tournament.levelDurationMins} minutes',
             ),
-            if (tournament.scheduledStart != null)
+            if (widget.tournament.scheduledStart != null && _isPreStart)
+              _buildCountdownRow()
+            else if (widget.tournament.scheduledStart != null)
               _buildInfoRow(
                 'Scheduled Start',
-                _formatDateTime(tournament.scheduledStart!),
+                _formatDateTime(widget.tournament.scheduledStart!),
               ),
-            if (tournament.actualStart != null)
+            if (widget.tournament.actualStart != null)
               _buildInfoRow(
                 'Started At',
-                _formatDateTime(tournament.actualStart!),
+                _formatDateTime(widget.tournament.actualStart!),
               ),
-            if (tournament.finishedAt != null)
+            if (widget.tournament.finishedAt != null)
               _buildInfoRow(
                 'Finished At',
-                _formatDateTime(tournament.finishedAt!),
+                _formatDateTime(widget.tournament.finishedAt!),
               ),
             const SizedBox(height: 12),
-            _buildProgressBar(registeredCount, tournament.maxPlayers),
+            _buildProgressBar(
+                widget.registeredCount, widget.tournament.maxPlayers),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCountdownRow() {
+    final isUrgent = _remaining.inMinutes < 5;
+    final color = _remaining == Duration.zero
+        ? Colors.grey
+        : isUrgent
+            ? Colors.red
+            : Colors.orange;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text('Starts In',
+              style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _remaining == Duration.zero
+                  ? 'Starting...'
+                  : _formatCountdown(_remaining),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -80,6 +194,10 @@ class TournamentStatusWidget extends StatelessWidget {
       case 'registering':
         color = Colors.blue;
         label = 'Registration Open';
+        break;
+      case 'seating':
+        color = Colors.teal;
+        label = 'Seating';
         break;
       case 'running':
         color = Colors.orange;

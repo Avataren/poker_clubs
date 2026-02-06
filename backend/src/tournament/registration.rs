@@ -53,9 +53,12 @@ impl RegistrationService {
             return Err(AppError::BadRequest("Tournament is full".to_string()));
         }
 
+        // Acquire a single connection for the entire transaction
+        let mut conn = self.ctx.pool.acquire().await?;
+
         // Use BEGIN IMMEDIATE to prevent double-registration race condition
         sqlx::query("BEGIN IMMEDIATE")
-            .execute(&*self.ctx.pool)
+            .execute(&mut *conn)
             .await?;
 
         // Check if already registered (inside transaction)
@@ -64,29 +67,57 @@ impl RegistrationService {
         )
         .bind(tournament_id)
         .bind(user_id)
-        .fetch_optional(&*self.ctx.pool)
+        .fetch_optional(&mut *conn)
         .await;
 
         match existing {
             Ok(Some(_)) => {
-                let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
                 return Err(AppError::BadRequest("Already registered".to_string()));
             }
             Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
                 return Err(e.into());
             }
             Ok(None) => {} // Not registered yet, continue
         }
 
-        // Deduct buy-in from club balance
-        if let Err(e) = self
-            .ctx
-            .deduct_buy_in(&tournament.club_id, user_id, tournament.buy_in)
+        // Deduct buy-in from club balance (inline to keep on same connection)
+        let (is_bot,): (bool,) =
+            match sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
+                .bind(user_id)
+                .fetch_one(&mut *conn)
+                .await
+            {
+                Ok(row) => row,
+                Err(e) => {
+                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                    return Err(e.into());
+                }
+            };
+
+        if !is_bot {
+            let result = match sqlx::query(
+                "UPDATE club_members SET balance = balance - ? WHERE club_id = ? AND user_id = ? AND balance >= ?",
+            )
+            .bind(tournament.buy_in)
+            .bind(&tournament.club_id)
+            .bind(user_id)
+            .bind(tournament.buy_in)
+            .execute(&mut *conn)
             .await
-        {
-            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
-            return Err(e);
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                    return Err(e.into());
+                }
+            };
+
+            if result.rows_affected() == 0 {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                return Err(AppError::BadRequest("Insufficient balance".to_string()));
+            }
         }
 
         // Create registration
@@ -101,10 +132,10 @@ impl RegistrationService {
         .bind(&registration.user_id)
         .bind(&registration.registered_at)
         .bind(registration.prize_amount)
-        .execute(&*self.ctx.pool)
+        .execute(&mut *conn)
         .await
         {
-            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             return Err(e.into());
         }
 
@@ -124,16 +155,19 @@ impl RegistrationService {
         .bind(tournament.prize_pool)
         .bind(tournament.remaining_players)
         .bind(tournament_id)
-        .execute(&*self.ctx.pool)
+        .execute(&mut *conn)
         .await
         {
-            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             return Err(e.into());
         }
 
         sqlx::query("COMMIT")
-            .execute(&*self.ctx.pool)
+            .execute(&mut *conn)
             .await?;
+
+        // Drop connection back to pool before proceeding
+        drop(conn);
 
         // Update in-memory state
         if let Some(state) = self.ctx.tournaments.write().await.get_mut(tournament_id) {

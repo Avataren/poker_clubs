@@ -172,6 +172,27 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Spawn background task for scheduled tournament auto-start (check every 5 seconds)
+    let tournament_mgr_scheduled = tournament_manager.clone();
+    let token = shutdown_token.clone();
+    tokio::spawn(async move {
+        tracing::info!("Scheduled tournament start check task started (runs every 5s)");
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Err(e) = tournament_mgr_scheduled.check_scheduled_starts().await {
+                        tracing::error!("Error checking scheduled starts: {:?}", e);
+                    }
+                }
+                _ = token.cancelled() => {
+                    tracing::info!("Scheduled start check task shutting down");
+                    break;
+                }
+            }
+        }
+    });
+
     // Spawn background task to clean up finished tournaments (check every 5 minutes)
     let tournament_mgr_cleanup = tournament_manager.clone();
     let token = shutdown_token.clone();
