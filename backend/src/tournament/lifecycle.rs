@@ -340,9 +340,7 @@ impl LifecycleService {
         .await?;
 
         // Wrap entire prize distribution in a single transaction
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&*self.ctx.pool)
-            .await?;
+        let mut tx = self.ctx.pool.begin().await?;
 
         let mut winners = Vec::new();
 
@@ -352,38 +350,26 @@ impl LifecycleService {
 
                 if prize > 0 {
                     // Update registration with prize
-                    if let Err(e) = sqlx::query(
+                    sqlx::query(
                         "UPDATE tournament_registrations SET prize_amount = ?
                          WHERE tournament_id = ? AND user_id = ?",
                     )
                     .bind(prize)
                     .bind(tournament_id)
                     .bind(&registration.user_id)
-                    .execute(&*self.ctx.pool)
-                    .await
-                    {
-                        let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
-                        return Err(e.into());
-                    }
+                    .execute(&mut *tx)
+                    .await?;
 
                     // Credit balance
-                    if let Err(e) = self
-                        .ctx
-                        .credit_prize(&tournament.club_id, &registration.user_id, prize)
-                        .await
-                    {
-                        let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
-                        return Err(e);
-                    }
+                    self.ctx
+                        .credit_prize_tx(&mut tx, &tournament.club_id, &registration.user_id, prize)
+                        .await?;
 
                     // Load username
-                    let username = match self.ctx.get_username(&registration.user_id).await {
-                        Ok(u) => u,
-                        Err(e) => {
-                            let _ = sqlx::query("ROLLBACK").execute(&*self.ctx.pool).await;
-                            return Err(e);
-                        }
-                    };
+                    let username = self
+                        .ctx
+                        .get_username_tx(&mut tx, &registration.user_id)
+                        .await?;
 
                     winners.push(PrizeWinner {
                         user_id: registration.user_id,
@@ -395,9 +381,7 @@ impl LifecycleService {
             }
         }
 
-        sqlx::query("COMMIT")
-            .execute(&*self.ctx.pool)
-            .await?;
+        tx.commit().await?;
 
         Ok(winners)
     }

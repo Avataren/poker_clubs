@@ -9,6 +9,7 @@ use crate::{
     ws::GameServer,
 };
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use sqlx::{Sqlite, Transaction};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -677,10 +678,31 @@ impl TournamentContext {
         user_id: &str,
         amount: i64,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        self.credit_prize_tx(&mut tx, club_id, user_id, amount)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn get_username(&self, user_id: &str) -> Result<String> {
+        let mut tx = self.pool.begin().await?;
+        let username = self.get_username_tx(&mut tx, user_id).await?;
+        tx.commit().await?;
+        Ok(username)
+    }
+
+    pub(crate) async fn credit_prize_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        club_id: &str,
+        user_id: &str,
+        amount: i64,
+    ) -> Result<()> {
         // Check if this is a bot user - bots don't have club membership
         let (is_bot,): (bool,) = sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
             .bind(user_id)
-            .fetch_one(&*self.pool)
+            .fetch_one(&mut **tx)
             .await?;
 
         if is_bot {
@@ -694,16 +716,20 @@ impl TournamentContext {
         .bind(amount)
         .bind(club_id)
         .bind(user_id)
-        .execute(&*self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    pub(crate) async fn get_username(&self, user_id: &str) -> Result<String> {
+    pub(crate) async fn get_username_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        user_id: &str,
+    ) -> Result<String> {
         let result: (String,) = sqlx::query_as("SELECT username FROM users WHERE id = ?")
             .bind(user_id)
-            .fetch_one(&*self.pool)
+            .fetch_one(&mut **tx)
             .await?;
 
         Ok(result.0)
