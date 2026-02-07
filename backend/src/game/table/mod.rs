@@ -278,6 +278,10 @@ impl PokerTable {
     }
 
     pub(crate) fn next_active_player(&self, after: usize) -> usize {
+        if self.players.is_empty() {
+            tracing::warn!("next_active_player called with no players");
+            return 0;
+        }
         let mut idx = (after + 1) % self.players.len();
         let start = idx;
 

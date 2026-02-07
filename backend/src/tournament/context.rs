@@ -219,11 +219,12 @@ impl TournamentContext {
         tournament.status = "running".to_string();
         tournament.actual_start = Some(Utc::now().to_rfc3339());
         tournament.level_start_time = Some(Utc::now().to_rfc3339());
+        tournament.current_blind_level = 0;
         tournament.remaining_players = tournament.registered_players;
 
         sqlx::query(
-            "UPDATE tournaments 
-             SET status = ?, actual_start = ?, level_start_time = ?, remaining_players = ? 
+            "UPDATE tournaments
+             SET status = ?, actual_start = ?, level_start_time = ?, current_blind_level = 0, remaining_players = ?
              WHERE id = ?",
         )
         .bind(&tournament.status)
@@ -739,9 +740,9 @@ impl TournamentContext {
         use crate::game::{format::SitAndGo, variant::variant_from_id};
         use uuid::Uuid;
 
-        // Get all registered players
+        // Get all registered players (exclude any previously eliminated, e.g. from a prior run)
         let registrations: Vec<TournamentRegistration> = sqlx::query_as(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at",
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL ORDER BY registered_at",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
@@ -757,7 +758,13 @@ impl TournamentContext {
 
         // Get current blind level
         let blind_levels = self.load_blind_levels(&tournament.id).await?;
-        let current_level = &blind_levels[tournament.current_blind_level as usize];
+        let level_idx = (tournament.current_blind_level as usize).min(blind_levels.len().saturating_sub(1));
+        let current_level = blind_levels.get(level_idx).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "No blind levels found for tournament {}",
+                tournament.id
+            ))
+        })?;
 
         // Create variant
         let variant = variant_from_id(&tournament.variant_id).ok_or_else(|| {
@@ -899,9 +906,9 @@ impl TournamentContext {
         };
         use uuid::Uuid;
 
-        // Get all registered players
+        // Get all registered players (exclude any previously eliminated, e.g. from a prior run)
         let registrations: Vec<TournamentRegistration> = sqlx::query_as(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? ORDER BY registered_at",
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL ORDER BY registered_at",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
@@ -914,12 +921,21 @@ impl TournamentContext {
         let player_count = registrations.len();
 
         // Calculate number of tables needed (max 9 players per table)
-        let players_per_table = DEFAULT_MAX_SEATS;
-        let table_count = (player_count + players_per_table - 1) / players_per_table;
+        let table_count = (player_count + DEFAULT_MAX_SEATS - 1) / DEFAULT_MAX_SEATS;
+
+        // Balanced distribution: e.g. 20 players / 3 tables = 7+7+6, not 9+9+2
+        let base_per_table = player_count / table_count;
+        let extra = player_count % table_count; // first `extra` tables get base+1
 
         // Get current blind level
         let blind_levels = self.load_blind_levels(&tournament.id).await?;
-        let current_level = &blind_levels[tournament.current_blind_level as usize];
+        let level_idx = (tournament.current_blind_level as usize).min(blind_levels.len().saturating_sub(1));
+        let current_level = blind_levels.get(level_idx).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "No blind levels found for tournament {}",
+                tournament.id
+            ))
+        })?;
 
         // Create variant
         let variant_id = tournament.variant_id.clone();
@@ -971,9 +987,10 @@ impl TournamentContext {
                 )
                 .await;
 
-            // Seat players at this table
+            // Seat players at this table (balanced: first `extra` tables get one more)
+            let seats_at_this_table = if table_num < extra { base_per_table + 1 } else { base_per_table };
             let mut seat = 0;
-            while player_index < player_count && seat < players_per_table {
+            while player_index < player_count && seat < seats_at_this_table {
                 let registration = &registrations[player_index];
                 let username = self.get_username(&registration.user_id).await?;
 

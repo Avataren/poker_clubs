@@ -145,6 +145,11 @@ impl LifecycleService {
         if tournament.status == "running" {
             return Ok(());
         }
+        if tournament.status == "finished" {
+            return Err(AppError::BadRequest(
+                "Tournament has already finished".to_string(),
+            ));
+        }
         if tournament.status == "cancelled" {
             let reason = tournament
                 .cancel_reason

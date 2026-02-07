@@ -82,7 +82,18 @@ impl BlindsService {
             tracing::info!("Tournament {} in-memory cache updated", tournament_id);
         }
 
-        let new_level = &blind_levels[next_level];
+        let new_level = match blind_levels.get(next_level) {
+            Some(level) => level,
+            None => {
+                tracing::error!(
+                    "Blind level index {} out of bounds (total: {}) for tournament {}",
+                    next_level,
+                    blind_levels.len(),
+                    tournament_id
+                );
+                return Ok(false);
+            }
+        };
         tracing::info!(
             "Tournament {} advanced to level {}: {}/{}",
             tournament_id,
