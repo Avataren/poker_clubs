@@ -373,10 +373,9 @@ async fn get_tournament_tables(
 
     verify_club_member(&state.pool, &tournament.club_id, &auth_user.user_id).await?;
 
-    // Get active tournament tables with player counts from registrations
-    // Note: For accurate counts, we query based on which table each player was assigned to
+    // Get active tournament tables
     let mut tables: Vec<TournamentTableInfo> = sqlx::query_as(
-        "SELECT tt.table_id, tt.table_number, 
+        "SELECT tt.table_id, tt.table_number,
                 '' as table_name,
                 0 as player_count
          FROM tournament_tables tt
@@ -387,33 +386,49 @@ async fn get_tournament_tables(
     .fetch_all(&state.pool)
     .await?;
 
-    // Get player count for each table
-    for table in tables.iter_mut() {
-        let count: Option<(i32,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tournament_registrations 
-             WHERE tournament_id = ? AND starting_table_id = ? AND eliminated_at IS NULL",
-        )
-        .bind(&id)
-        .bind(&table.table_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    // Get live player counts from in-memory game tables
+    let table_ids: Vec<String> = tables.iter().map(|t| t.table_id.clone()).collect();
+    let live_counts = state.game_server.get_table_player_counts(&table_ids).await;
 
-        table.player_count = count.map(|(c,)| c).unwrap_or(0);
+    for table in tables.iter_mut() {
+        table.player_count = live_counts
+            .iter()
+            .find(|(id, _)| id == &table.table_id)
+            .map(|(_, c)| *c as i32)
+            .unwrap_or(0);
     }
 
-    // If no players are assigned yet (starting_table_id not set), but we have one table,
-    // count all active registrations
-    if tables.len() == 1 && tables[0].player_count == 0 {
-        let total_players: Option<(i32,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL"
+    // Filter out empty tables (players have been moved away)
+    tables.retain(|t| t.player_count > 0);
+
+    // If tournament hasn't started yet (no live tables), fall back to registration count
+    if tables.is_empty() {
+        // Re-fetch all active tables (including 0-player ones pre-start)
+        let mut all_tables: Vec<TournamentTableInfo> = sqlx::query_as(
+            "SELECT tt.table_id, tt.table_number,
+                    '' as table_name,
+                    0 as player_count
+             FROM tournament_tables tt
+             WHERE tt.tournament_id = ? AND tt.is_active = 1
+             ORDER BY tt.table_number",
         )
         .bind(&id)
-        .fetch_optional(&state.pool)
+        .fetch_all(&state.pool)
         .await?;
 
-        if let Some((count,)) = total_players {
-            tables[0].player_count = count;
+        if all_tables.len() == 1 {
+            let total_players: Option<(i32,)> = sqlx::query_as(
+                "SELECT COUNT(*) FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL"
+            )
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+            if let Some((count,)) = total_players {
+                all_tables[0].player_count = count;
+            }
         }
+        tables = all_tables;
     }
 
     Ok(Json(TournamentTablesResponse { tables }))

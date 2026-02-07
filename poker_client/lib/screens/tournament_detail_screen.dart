@@ -102,6 +102,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     if (tournamentId == widget.tournamentId) {
       _showSnackBar('$username eliminated in position $position');
       _loadDetail();
+      _loadTables();
     }
   }
 
@@ -113,6 +114,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     if (tournamentId == widget.tournamentId) {
       _showSnackBar('Tournament has finished!');
       _loadDetail();
+      _loadTables();
     }
   }
 
