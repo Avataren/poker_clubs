@@ -496,7 +496,8 @@ impl LifecycleService {
     }
 
     /// Balance player counts across tournament tables.
-    /// Closes empty tables, consolidates 1-player tables, and rebalances uneven tables.
+    /// Closes empty tables, consolidates into the fewest tables possible, and
+    /// rebalances so all tables have a similar player count.
     async fn balance_tournament_tables(&self, tournament_id: &str) -> Result<()> {
         // Get active tournament tables
         let table_rows: Vec<(String,)> = sqlx::query_as(
@@ -539,21 +540,35 @@ impl LifecycleService {
         }
         counts.retain(|(_, c)| *c > 0);
 
-        // Final table consolidation: if total remaining players fit on one table, merge all into one
-        let total_players: usize = counts.iter().map(|(_, c)| *c).sum();
-        if counts.len() > 1 && total_players <= DEFAULT_MAX_SEATS {
-            // Pick the table with the most players as the final table
-            let final_table_id = counts.iter().max_by_key(|(_, c)| *c).unwrap().0.clone();
+        if counts.len() <= 1 {
+            return Ok(());
+        }
 
-            // Collect all other tables
-            let other_tables: Vec<String> = counts
+        // Consolidate tables: reduce to the minimum number of tables needed
+        let total_players: usize = counts.iter().map(|(_, c)| *c).sum();
+        let min_tables_needed = (total_players + DEFAULT_MAX_SEATS - 1) / DEFAULT_MAX_SEATS;
+        let min_tables_needed = min_tables_needed.max(1);
+
+        if min_tables_needed < counts.len() {
+            let tables_to_close = counts.len() - min_tables_needed;
+            let is_final_table = min_tables_needed == 1;
+
+            // Sort ascending by player count so we close the smallest tables first
+            counts.sort_by_key(|(_, c)| *c);
+
+            // The tables to close are the first `tables_to_close` entries (smallest)
+            let closing: Vec<String> = counts[..tables_to_close]
                 .iter()
-                .filter(|(id, _)| *id != final_table_id)
                 .map(|(id, _)| id.clone())
                 .collect();
 
-            // Move all players from other tables to the final table
-            for source_table_id in &other_tables {
+            // The tables that stay open are the rest
+            let remaining: Vec<String> = counts[tables_to_close..]
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            for source_table_id in &closing {
                 let player_ids = self
                     .ctx
                     .game_server
@@ -561,15 +576,32 @@ impl LifecycleService {
                     .await;
 
                 for player_id in &player_ids {
+                    // Find the remaining table with the fewest players
+                    let dest_counts = self
+                        .ctx
+                        .game_server
+                        .get_table_player_counts(&remaining)
+                        .await;
+                    let dest_table_id = dest_counts
+                        .iter()
+                        .min_by_key(|(_, c)| *c)
+                        .map(|(id, _)| id.clone());
+                    let dest_table_id = match dest_table_id {
+                        Some(id) => id,
+                        None => break,
+                    };
+
                     if let Err(e) = self
                         .ctx
                         .game_server
-                        .move_tournament_player(source_table_id, &final_table_id, player_id)
+                        .move_tournament_player(source_table_id, &dest_table_id, player_id)
                         .await
                     {
                         tracing::warn!(
-                            "Failed to move player {} to final table: {}",
+                            "Failed to move player {} from table {} to {}: {}",
                             player_id,
+                            source_table_id,
+                            dest_table_id,
                             e
                         );
                         continue;
@@ -577,7 +609,7 @@ impl LifecycleService {
 
                     // Update DB registration
                     sqlx::query("UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?")
-                        .bind(&final_table_id)
+                        .bind(&dest_table_id)
                         .bind(tournament_id)
                         .bind(player_id)
                         .execute(&*self.ctx.pool)
@@ -592,101 +624,40 @@ impl LifecycleService {
                     .await?;
             }
 
-            tracing::info!(
-                "Final table formed for tournament {} — {} players consolidated to table {}",
-                tournament_id,
-                total_players,
-                final_table_id
-            );
+            if is_final_table {
+                tracing::info!(
+                    "Final table formed for tournament {} — {} players consolidated to {} table",
+                    tournament_id,
+                    total_players,
+                    min_tables_needed
+                );
+            } else {
+                tracing::info!(
+                    "Consolidated tournament {} from {} tables to {} ({} players)",
+                    tournament_id,
+                    counts.len(),
+                    min_tables_needed,
+                    total_players
+                );
+            }
 
-            return Ok(());
+            // Refresh counts after consolidation
+            let remaining_rows: Vec<(String,)> = sqlx::query_as(
+                "SELECT table_id FROM tournament_tables WHERE tournament_id = ? AND is_active = 1",
+            )
+            .bind(tournament_id)
+            .fetch_all(&*self.ctx.pool)
+            .await?;
+            let remaining_ids: Vec<String> = remaining_rows.into_iter().map(|(id,)| id).collect();
+            counts = self
+                .ctx
+                .game_server
+                .get_table_player_counts(&remaining_ids)
+                .await;
         }
 
         if counts.len() <= 1 {
             return Ok(());
-        }
-
-        // Consolidate 1-player tables: move the lone player elsewhere and close the table
-        loop {
-            // Find a table with exactly 1 player
-            let lone_table = counts.iter().find(|(_, c)| *c == 1).map(|(id, _)| id.clone());
-            let lone_table_id = match lone_table {
-                Some(id) => id,
-                None => break,
-            };
-
-            // Find another table with room (not the lone table itself)
-            let dest = counts
-                .iter()
-                .filter(|(id, _)| *id != lone_table_id)
-                .min_by_key(|(_, c)| *c)
-                .map(|(id, _)| id.clone());
-            let dest_table_id = match dest {
-                Some(id) => id,
-                None => break,
-            };
-
-            // Get the lone player
-            let player_id = match self
-                .ctx
-                .game_server
-                .get_last_player_at_table(&lone_table_id)
-                .await
-            {
-                Some(id) => id,
-                None => break,
-            };
-
-            // Move them
-            if let Err(e) = self
-                .ctx
-                .game_server
-                .move_tournament_player(&lone_table_id, &dest_table_id, &player_id)
-                .await
-            {
-                tracing::warn!(
-                    "Failed to consolidate player {} from table {}: {}",
-                    player_id,
-                    lone_table_id,
-                    e
-                );
-                break;
-            }
-
-            // Update registration
-            sqlx::query(
-                "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?",
-            )
-            .bind(&dest_table_id)
-            .bind(tournament_id)
-            .bind(&player_id)
-            .execute(&*self.ctx.pool)
-            .await?;
-
-            // Close the now-empty table
-            sqlx::query(
-                "UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ? AND table_id = ?",
-            )
-            .bind(tournament_id)
-            .bind(&lone_table_id)
-            .execute(&*self.ctx.pool)
-            .await?;
-            tracing::info!(
-                "Consolidated lone player from table {} to {} in tournament {}",
-                lone_table_id,
-                dest_table_id,
-                tournament_id
-            );
-
-            // Update local counts
-            if let Some(pos) = counts.iter().position(|(id, _)| *id == dest_table_id) {
-                counts[pos].1 += 1;
-            }
-            counts.retain(|(id, _)| *id != lone_table_id);
-
-            if counts.len() <= 1 {
-                return Ok(());
-            }
         }
 
         // Rebalance loop: while max - min >= 2, move one player from max to min

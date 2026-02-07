@@ -42,10 +42,8 @@ impl PokerTable {
             Vec::new()
         };
 
-        // Determine overall hi winners for card highlighting
+        // Set winning hand description from overall best hand (for UI display)
         let winner_indices = determine_winners(hands.clone());
-
-        // Get the winning hand description and mark cards as highlighted for all hi winners
         if let Some(&first_winner_idx) = winner_indices.first() {
             if let Some((_, winning_hand_rank)) =
                 hands.iter().find(|(idx, _)| *idx == first_winner_idx)
@@ -55,33 +53,6 @@ impl PokerTable {
                     desc.push_str(" (Hi)");
                 }
                 self.winning_hand = Some(desc);
-
-                for &winner_idx in &winner_indices {
-                    if let Some((_, hand_rank)) = hands.iter().find(|(idx, _)| *idx == winner_idx) {
-                        let best_cards = &hand_rank.best_cards;
-
-                        tracing::info!("Hi winner {} best cards: {:?}", winner_idx, best_cards);
-
-                        for community_card in &mut self.community_cards {
-                            if best_cards.iter().any(|c| {
-                                c.rank == community_card.rank && c.suit == community_card.suit
-                            }) {
-                                community_card.highlighted = true;
-                            }
-                        }
-
-                        if let Some(winner) = self.players.get_mut(winner_idx) {
-                            for hole_card in &mut winner.hole_cards {
-                                if best_cards
-                                    .iter()
-                                    .any(|c| c.rank == hole_card.rank && c.suit == hole_card.suit)
-                                {
-                                    hole_card.highlighted = true;
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -146,7 +117,8 @@ impl PokerTable {
             self.pot.award_pots(winners_by_pot)
         };
 
-        // Mark all payout recipients as winners and build message
+        // Mark all payout recipients as winners and highlight their best 5-card hand.
+        // This ensures side-pot winners also get highlighted, not just the overall best hand.
         let mut winner_names = Vec::new();
         for (player_idx, amount) in &payouts {
             self.players[*player_idx].add_chips(*amount);
@@ -156,6 +128,37 @@ impl PokerTable {
                 "{} wins ${}",
                 self.players[*player_idx].username, amount
             ));
+
+            // Highlight the best 5-card hand for this winner
+            if let Some((_, hand_rank)) = hands.iter().find(|(idx, _)| *idx == *player_idx) {
+                let best_cards = &hand_rank.best_cards;
+
+                tracing::info!(
+                    "Winner {} ({}) best cards: {:?}",
+                    self.players[*player_idx].username,
+                    player_idx,
+                    best_cards
+                );
+
+                for community_card in &mut self.community_cards {
+                    if best_cards.iter().any(|c| {
+                        c.rank == community_card.rank && c.suit == community_card.suit
+                    }) {
+                        community_card.highlighted = true;
+                    }
+                }
+
+                if let Some(winner) = self.players.get_mut(*player_idx) {
+                    for hole_card in &mut winner.hole_cards {
+                        if best_cards
+                            .iter()
+                            .any(|c| c.rank == hole_card.rank && c.suit == hole_card.suit)
+                        {
+                            hole_card.highlighted = true;
+                        }
+                    }
+                }
+            }
         }
 
         // DON'T reset pot here - keep it visible for animation
