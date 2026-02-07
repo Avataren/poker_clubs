@@ -346,6 +346,13 @@ class WebSocketService {
     _send({'type': 'AddBot', 'payload': payload});
   }
 
+  void showCards(List<int> cardIndices) {
+    _send({
+      'type': 'ShowCards',
+      'payload': {'card_indices': cardIndices},
+    });
+  }
+
   void removeBot(String tableId, String botUserId) {
     _send({
       'type': 'RemoveBot',

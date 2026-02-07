@@ -11,6 +11,7 @@ class Player {
   final bool isWinner;
   final String? lastAction;
   final int potWon;
+  final List<bool>? shownCards;
 
   Player({
     required this.userId,
@@ -23,6 +24,7 @@ class Player {
     this.isWinner = false,
     this.lastAction,
     this.potWon = 0,
+    this.shownCards,
   });
 
   factory Player.fromJson(Map<String, dynamic> json) {
@@ -31,6 +33,11 @@ class Player {
       cards = (json['hole_cards'] as List)
           .map((c) => PokerCard.fromJson(c))
           .toList();
+    }
+
+    List<bool>? shownCards;
+    if (json['shown_cards'] != null) {
+      shownCards = (json['shown_cards'] as List).cast<bool>();
     }
 
     return Player(
@@ -44,6 +51,7 @@ class Player {
       isWinner: json['is_winner'] as bool? ?? false,
       lastAction: json['last_action'] as String?,
       potWon: json['pot_won'] as int? ?? 0,
+      shownCards: shownCards,
     );
   }
 

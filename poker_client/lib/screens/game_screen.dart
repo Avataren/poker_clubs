@@ -617,6 +617,51 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ),
 
+            // Show Cards buttons (fold-win showdown: winner can reveal cards)
+            if (_isSeated &&
+                isShowdown &&
+                myPlayer != null &&
+                myPlayer.isWinner &&
+                !myPlayer.isBot &&
+                myPlayer.shownCards != null &&
+                _gameState?.winningHand == null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                color: Colors.black45,
+                child: Wrap(
+                  spacing: 8,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    for (int i = 0; i < (myPlayer.holeCards?.length ?? 0); i++)
+                      if (myPlayer.shownCards != null &&
+                          i < myPlayer.shownCards!.length &&
+                          !myPlayer.shownCards![i])
+                        ElevatedButton(
+                          onPressed: () => _wsService.showCards([i]),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.teal,
+                          ),
+                          child: Text('Show Card ${i + 1}'),
+                        ),
+                    if (myPlayer.shownCards != null &&
+                        myPlayer.shownCards!.any((s) => !s))
+                      ElevatedButton(
+                        onPressed: () {
+                          final indices = <int>[];
+                          for (int i = 0; i < myPlayer.shownCards!.length; i++) {
+                            if (!myPlayer.shownCards![i]) indices.add(i);
+                          }
+                          _wsService.showCards(indices);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.amber[700],
+                        ),
+                        child: const Text('Show All'),
+                      ),
+                  ],
+                ),
+              ),
+
             // Action buttons (only show if seated and it's my turn)
             if (_isSeated && isMyTurn)
               Container(

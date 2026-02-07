@@ -448,6 +448,37 @@ pub(super) async fn handle_client_message(
 
         ClientMessage::Ping => ServerMessage::Pong,
 
+        ClientMessage::ShowCards { card_indices } => {
+            if card_indices.len() > 10 {
+                return ServerMessage::Error {
+                    message: "Too many card indices".to_string(),
+                };
+            }
+            if let Some(ref table_id) = current_table_id {
+                let mut tables = game_server.tables.write().await;
+                if let Some(table) = tables.get_mut(table_id) {
+                    match table.handle_show_cards(user_id, card_indices) {
+                        Ok(_) => {
+                            drop(tables);
+                            game_server.notify_table_update(table_id).await;
+                            ServerMessage::Connected
+                        }
+                        Err(e) => ServerMessage::Error {
+                            message: e.to_string(),
+                        },
+                    }
+                } else {
+                    ServerMessage::Error {
+                        message: "Table not found".to_string(),
+                    }
+                }
+            } else {
+                ServerMessage::Error {
+                    message: "Not at a table".to_string(),
+                }
+            }
+        }
+
         ClientMessage::AddBot {
             table_id,
             name,

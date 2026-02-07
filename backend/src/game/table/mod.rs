@@ -91,6 +91,7 @@ pub struct PokerTable {
     /// Buffer of user_ids eliminated since last drain (used by tournament lifecycle)
     #[serde(skip)]
     pub pending_eliminations: Vec<String>,
+    pub won_without_showdown: bool,
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
     #[serde(skip, default = "default_format")]
@@ -131,6 +132,7 @@ impl Clone for PokerTable {
             showdown_delay_ms: self.showdown_delay_ms,
             tournament_id: self.tournament_id.clone(),
             pending_eliminations: self.pending_eliminations.clone(),
+            won_without_showdown: self.won_without_showdown,
             variant: self.variant.clone_box(),
             format: self.format.clone_box(),
         }
@@ -214,6 +216,7 @@ impl PokerTable {
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
             tournament_id: None,
             pending_eliminations: Vec::new(),
+            won_without_showdown: false,
             variant,
             format,
         }

@@ -32,6 +32,10 @@ impl PokerTable {
             self.players[winner_idx].add_chips(total);
             self.players[winner_idx].is_winner = true;
             self.players[winner_idx].pot_won = total;
+            self.won_without_showdown = true;
+            // Initialize shown_cards to all false (winner can choose to reveal)
+            let num_cards = self.players[winner_idx].hole_cards.len();
+            self.players[winner_idx].shown_cards = vec![false; num_cards];
             self.last_winner_message = Some(format!(
                 "{} wins ${}",
                 self.players[winner_idx].username, total

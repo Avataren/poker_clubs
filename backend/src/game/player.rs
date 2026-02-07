@@ -26,6 +26,7 @@ pub struct Player {
     pub is_winner: bool,          // Whether this player won the last showdown
     pub last_action: Option<String>, // Last action taken (for display), cleared on new round
     pub pot_won: i64,             // Amount won from pot (for animation)
+    pub shown_cards: Vec<bool>,   // Which cards the winner chose to show after fold-win
 }
 
 impl Player {
@@ -43,6 +44,7 @@ impl Player {
             is_winner: false,
             last_action: None,
             pot_won: 0,
+            shown_cards: vec![],
         }
     }
 
@@ -81,6 +83,7 @@ impl Player {
         self.is_winner = false;
         self.last_action = None;
         self.pot_won = 0;
+        self.shown_cards.clear();
 
         // Activate players who have chips and aren't voluntarily sitting out, eliminated, or disconnected
         if self.stack > 0 && self.state != PlayerState::SittingOut && self.state != PlayerState::Eliminated && self.state != PlayerState::Disconnected {
@@ -116,4 +119,5 @@ pub enum PlayerAction {
     Call,
     Raise(i64),
     AllIn,
+    ShowCards(Vec<usize>),
 }

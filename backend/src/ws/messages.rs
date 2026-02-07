@@ -32,6 +32,11 @@ pub enum ClientMessage {
     GetTableState,
     Ping,
 
+    // Show cards after fold-win
+    ShowCards {
+        card_indices: Vec<usize>,
+    },
+
     // Bot management
     AddBot {
         table_id: String,

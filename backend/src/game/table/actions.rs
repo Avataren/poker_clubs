@@ -147,6 +147,10 @@ impl PokerTable {
                     }
                 }
             }
+            PlayerAction::ShowCards(card_indices) => {
+                // ShowCards is handled via handle_show_cards, not through handle_action
+                return self.handle_show_cards(user_id, card_indices);
+            }
         }
 
         // Record last action for display
@@ -162,6 +166,7 @@ impl PokerTable {
                 let bet = self.players[self.current_player].current_bet;
                 format!("All In ${}", bet)
             }
+            PlayerAction::ShowCards(_) => "Show Cards".to_string(),
         });
 
         // Mark player as having acted
@@ -185,6 +190,50 @@ impl PokerTable {
                 "INVALID INDEX".to_string()
             }
         );
+
+        Ok(())
+    }
+
+    pub fn handle_show_cards(&mut self, user_id: &str, card_indices: Vec<usize>) -> GameResult<()> {
+        // Must be in Showdown phase with won_without_showdown
+        if self.phase != GamePhase::Showdown || !self.won_without_showdown {
+            return Err(GameError::InvalidAction {
+                reason: "Can only show cards after winning without showdown".to_string(),
+            });
+        }
+
+        // Bots cannot show cards
+        if user_id.starts_with("bot_") {
+            return Err(GameError::InvalidAction {
+                reason: "Bots cannot show cards".to_string(),
+            });
+        }
+
+        // Find the player
+        let player = self.players.iter_mut().find(|p| p.user_id == user_id);
+        let player = match player {
+            Some(p) => p,
+            None => return Err(GameError::PlayerNotFound { user_id: user_id.to_string() }),
+        };
+
+        // Must be the winner
+        if !player.is_winner {
+            return Err(GameError::InvalidAction {
+                reason: "Only the winner can show cards".to_string(),
+            });
+        }
+
+        // Validate and set shown cards
+        for &idx in &card_indices {
+            if idx >= player.hole_cards.len() {
+                return Err(GameError::InvalidAction {
+                    reason: format!("Invalid card index: {}", idx),
+                });
+            }
+            if idx < player.shown_cards.len() {
+                player.shown_cards[idx] = true;
+            }
+        }
 
         Ok(())
     }

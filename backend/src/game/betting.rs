@@ -104,6 +104,12 @@ impl BettingValidator {
                 }
                 Ok(())
             }
+            PlayerAction::ShowCards(_) => {
+                // ShowCards is handled separately, not a betting action
+                Err(GameError::InvalidAction {
+                    reason: "ShowCards is not a betting action".to_string(),
+                })
+            }
         }
     }
 
@@ -226,6 +232,10 @@ impl BettingExecutor {
                 let target_total = player.current_bet + player.stack;
                 let requested_raise = target_total.saturating_sub(round.current_bet);
                 Self::execute_bet(player, pot, round, target_total, requested_raise)
+            }
+            PlayerAction::ShowCards(_) => {
+                // ShowCards is handled separately, not a betting action
+                (0, false)
             }
         }
     }

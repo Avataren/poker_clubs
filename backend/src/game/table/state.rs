@@ -47,6 +47,7 @@ pub struct PublicPlayerState {
     pub is_winner: bool,
     pub last_action: Option<String>,
     pub pot_won: i64, // Amount won from pot (for animation)
+    pub shown_cards: Option<Vec<bool>>, // Which cards the winner chose to show (fold-win only)
 }
 
 /// Tournament info to include in table state
@@ -111,6 +112,54 @@ impl PokerTable {
                     let is_allin_runout = self.players.iter().filter(|pl| pl.can_act()).count() < 2
                         && self.players.iter().filter(|pl| pl.is_active_in_hand()).count() >= 2;
 
+                    let hole_cards = if Some(p.user_id.as_str()) == for_user_id {
+                        // Show own cards face-up
+                        Some(p.hole_cards.clone())
+                    } else if self.phase == GamePhase::Showdown && self.won_without_showdown && p.is_winner {
+                        // Fold-win: only show cards the winner chose to reveal
+                        if p.shown_cards.iter().any(|&s| s) {
+                            Some(p.hole_cards.iter().enumerate().map(|(i, card)| {
+                                if i < p.shown_cards.len() && p.shown_cards[i] {
+                                    card.clone()
+                                } else {
+                                    Card { rank: 0, suit: 0, highlighted: false, face_up: false }
+                                }
+                            }).collect())
+                        } else {
+                            // No cards shown yet - send face-down placeholders
+                            let num_cards = p.hole_cards.len();
+                            Some(vec![
+                                Card { rank: 0, suit: 0, highlighted: false, face_up: false };
+                                num_cards
+                            ])
+                        }
+                    } else if (self.phase == GamePhase::Showdown || is_allin_runout) && p.is_active_in_hand() {
+                        // During normal showdown OR all-in runout, show all active players' cards face-up
+                        Some(p.hole_cards.clone())
+                    } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
+                        // For other players still in the hand, send placeholder face-down cards
+                        // WITHOUT revealing the actual rank/suit (security: prevent cheating via network inspection)
+                        let num_cards = p.hole_cards.len();
+                        Some(vec![
+                            Card {
+                                rank: 0,
+                                suit: 0,
+                                highlighted: false,
+                                face_up: false
+                            };
+                            num_cards
+                        ])
+                    } else {
+                        // No cards for folded/sitting out players
+                        None
+                    };
+
+                    let shown_cards_field = if self.won_without_showdown && p.is_winner && !p.shown_cards.is_empty() {
+                        Some(p.shown_cards.clone())
+                    } else {
+                        None
+                    };
+
                     PublicPlayerState {
                         user_id: p.user_id.clone(),
                         username: p.username.clone(),
@@ -118,32 +167,11 @@ impl PokerTable {
                         stack: p.stack,
                         current_bet: p.current_bet,
                         state: p.state.clone(),
-                        hole_cards: if Some(p.user_id.as_str()) == for_user_id {
-                            // Show own cards face-up
-                            Some(p.hole_cards.clone())
-                        } else if (self.phase == GamePhase::Showdown || is_allin_runout) && p.is_active_in_hand() {
-                            // During showdown OR all-in runout, show all active players' cards face-up
-                            Some(p.hole_cards.clone())
-                        } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
-                            // For other players still in the hand, send placeholder face-down cards
-                            // WITHOUT revealing the actual rank/suit (security: prevent cheating via network inspection)
-                            let num_cards = p.hole_cards.len();
-                            Some(vec![
-                                Card {
-                                    rank: 0,
-                                    suit: 0,
-                                    highlighted: false,
-                                    face_up: false
-                                };
-                                num_cards
-                            ])
-                        } else {
-                            // No cards for folded/sitting out players
-                            None
-                        },
+                        hole_cards,
                         is_winner: p.is_winner,
                         last_action: p.last_action.clone(),
                         pot_won: p.pot_won,
+                        shown_cards: shown_cards_field,
                     }
                 })
                 .collect(),

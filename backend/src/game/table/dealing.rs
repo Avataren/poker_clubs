@@ -4,6 +4,7 @@ impl PokerTable {
     pub fn start_new_hand(&mut self) {
         self.last_winner_message = None;
         self.winning_hand = None;
+        self.won_without_showdown = false;
 
         // Remove broke players before starting a new hand (tournament mode)
         self.check_eliminations();
