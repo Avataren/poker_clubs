@@ -1,6 +1,23 @@
 import 'card.dart';
 import 'player.dart';
 
+class PotInfo {
+  final int amount;
+  final List<int> eligiblePlayerSeats;
+
+  PotInfo({required this.amount, required this.eligiblePlayerSeats});
+
+  factory PotInfo.fromJson(Map<String, dynamic> json) {
+    return PotInfo(
+      amount: json['amount'] as int,
+      eligiblePlayerSeats: (json['eligible_player_seats'] as List?)
+              ?.map((s) => s as int)
+              .toList() ??
+          [],
+    );
+  }
+}
+
 class GameState {
   final String tableId;
   final String name;
@@ -13,6 +30,7 @@ class GameState {
   final String phase;
   final List<PokerCard> communityCards;
   final int potTotal;
+  final List<PotInfo> pots;
   final int currentBet;
   final int currentPlayerSeat;
   final List<Player> players;
@@ -44,6 +62,7 @@ class GameState {
     required this.phase,
     required this.communityCards,
     required this.potTotal,
+    required this.pots,
     required this.currentBet,
     required this.currentPlayerSeat,
     required this.players,
@@ -78,6 +97,10 @@ class GameState {
           .map((c) => PokerCard.fromJson(c))
           .toList(),
       potTotal: json['pot_total'] as int,
+      pots: (json['pots'] as List?)
+              ?.map((p) => PotInfo.fromJson(p as Map<String, dynamic>))
+              .toList() ??
+          [],
       currentBet: json['current_bet'] as int,
       currentPlayerSeat: json['current_player_seat'] as int,
       players: (json['players'] as List)

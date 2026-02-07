@@ -1,6 +1,12 @@
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicPot {
+    pub amount: i64,
+    pub eligible_player_seats: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicTableState {
     pub table_id: String,
     pub name: String,
@@ -13,6 +19,7 @@ pub struct PublicTableState {
     pub phase: GamePhase,
     pub community_cards: Vec<Card>,
     pub pot_total: i64,
+    pub pots: Vec<PublicPot>,
     pub current_bet: i64,
     pub ante: i64,
     pub current_player_seat: usize,
@@ -92,6 +99,46 @@ impl PokerTable {
                 .unwrap_or(0)
         };
 
+        // Compute pot breakdown for display
+        let public_pots = match self.phase {
+            GamePhase::Showdown => {
+                // During showdown, use already-calculated pots
+                self.pot.pots.iter().map(|p| PublicPot {
+                    amount: p.amount,
+                    eligible_player_seats: p.eligible_players.iter()
+                        .filter_map(|&idx| self.players.get(idx).map(|pl| pl.seat))
+                        .collect(),
+                }).collect()
+            }
+            GamePhase::Waiting => vec![],
+            _ => {
+                // Only show split pots when at least one player is all-in;
+                // otherwise different bet levels are just mid-round action, not real side pots
+                let has_allin = self.players.iter().any(|p| p.state == PlayerState::AllIn);
+                if !has_allin {
+                    vec![]
+                } else {
+                    let player_bets: Vec<(usize, i64, bool)> = self
+                        .players
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.total_bet_this_hand > 0)
+                        .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
+                        .collect();
+                    if player_bets.is_empty() {
+                        vec![]
+                    } else {
+                        self.pot.preview_side_pots(&player_bets).iter().map(|p| PublicPot {
+                            amount: p.amount,
+                            eligible_player_seats: p.eligible_players.iter()
+                                .filter_map(|&idx| self.players.get(idx).map(|pl| pl.seat))
+                                .collect(),
+                        }).collect()
+                    }
+                }
+            }
+        };
+
         PublicTableState {
             table_id: self.table_id.clone(),
             name: self.name.clone(),
@@ -100,6 +147,7 @@ impl PokerTable {
             phase: self.phase.clone(),
             community_cards: self.community_cards.clone(),
             pot_total: self.pot.total(),
+            pots: public_pots,
             current_bet: self.current_bet,
             ante: self.ante,
             current_player_seat,

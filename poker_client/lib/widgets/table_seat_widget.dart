@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../models/game_state.dart';
 import '../models/player.dart';
 import 'card_widget.dart';
 import 'chip_stack_widget.dart';
@@ -350,6 +351,7 @@ class PokerTableWidget extends StatefulWidget {
   final int? bigBlindSeat;
   final int smallBlind;
   final int potTotal;
+  final List<PotInfo> pots;
 
   const PokerTableWidget({
     super.key,
@@ -367,6 +369,7 @@ class PokerTableWidget extends StatefulWidget {
     this.bigBlindSeat,
     this.smallBlind = 10,
     this.potTotal = 0,
+    this.pots = const [],
   });
 
   @override
@@ -676,28 +679,72 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                     ),
                   );
                 })
-              // Show centered pot when not animating
+              // Show centered pot(s) when not animating
               else if (widget.potTotal > 0)
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 0),
-                  left: centerOffset.dx,
-                  top: centerOffset.dy,
-                  child: FractionalTranslation(
-                    translation: const Offset(-0.5, 0),
-                    child: ChipStackWidget(
-                      amount: widget.potTotal,
-                      smallBlind: widget.smallBlind,
-                      scale: (tableWidth / 500).clamp(0.8, 1.3),
-                      showAmount: true,
-                      textColor: Colors.lightGreenAccent,
-                    ),
-                  ),
-                ),
+                ..._buildPotDisplay(centerOffset, tableWidth),
             ],
           ),
         );
       },
     );
+  }
+
+  List<Widget> _buildPotDisplay(Offset centerOffset, double tableWidth) {
+    final pots = widget.pots;
+    final scale = (tableWidth / 500).clamp(0.8, 1.3);
+
+    // Single pot or no detailed pots: show like before (no label)
+    if (pots.length <= 1) {
+      return [
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 0),
+          left: centerOffset.dx,
+          top: centerOffset.dy,
+          child: FractionalTranslation(
+            translation: const Offset(-0.5, 0),
+            child: ChipStackWidget(
+              amount: widget.potTotal,
+              smallBlind: widget.smallBlind,
+              scale: scale,
+              showAmount: true,
+              textColor: Colors.lightGreenAccent,
+            ),
+          ),
+        ),
+      ];
+    }
+
+    // Multiple pots: lay out horizontally, side pots slightly smaller
+    return [
+      AnimatedPositioned(
+        duration: const Duration(milliseconds: 0),
+        left: centerOffset.dx,
+        top: centerOffset.dy,
+        child: FractionalTranslation(
+          translation: const Offset(-0.5, 0),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              for (int i = 0; i < pots.length; i++)
+                if (pots[i].amount > 0)
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4.0 * scale),
+                    child: ChipStackWidget(
+                      amount: pots[i].amount,
+                      smallBlind: widget.smallBlind,
+                      scale: i == 0 ? scale : scale * 0.85,
+                      showAmount: true,
+                      textColor: i == 0
+                          ? Colors.lightGreenAccent
+                          : Colors.yellow[200]!,
+                    ),
+                  ),
+            ],
+          ),
+        ),
+      ),
+    ];
   }
 
   Widget _buildSeatAtPosition(

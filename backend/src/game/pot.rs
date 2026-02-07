@@ -192,6 +192,55 @@ impl PotManager {
         payouts
     }
 
+    /// Compute side pot breakdown without mutating state.
+    /// Same algorithm as `calculate_side_pots` but returns the result instead.
+    pub fn preview_side_pots(&self, player_bets: &[(usize, i64, bool)]) -> Vec<Pot> {
+        if player_bets.is_empty() {
+            return self.pots.clone();
+        }
+
+        let mut sorted: Vec<(usize, i64, bool)> = player_bets.to_vec();
+        sorted.sort_by_key(|(_, bet, _)| *bet);
+
+        let mut result = Vec::new();
+        let mut prev_level = 0i64;
+
+        for i in 0..sorted.len() {
+            let (_, bet_level, _) = sorted[i];
+            if bet_level <= prev_level {
+                continue;
+            }
+
+            let level_contribution = bet_level - prev_level;
+            let contributors = sorted
+                .iter()
+                .filter(|(_, bet, _)| *bet > prev_level)
+                .count();
+            let pot_amount = level_contribution * contributors as i64;
+
+            let eligible: Vec<usize> = sorted
+                .iter()
+                .filter(|(_, bet, active)| *bet >= bet_level && *active)
+                .map(|(idx, _, _)| *idx)
+                .collect();
+
+            if pot_amount > 0 {
+                result.push(Pot {
+                    amount: pot_amount,
+                    eligible_players: eligible,
+                });
+            }
+
+            prev_level = bet_level;
+        }
+
+        if result.is_empty() {
+            self.pots.clone()
+        } else {
+            result
+        }
+    }
+
     /// Reset for a new hand
     pub fn reset(&mut self) {
         self.pots = vec![Pot {
@@ -470,6 +519,56 @@ mod tests {
         let payouts = pot_mgr.award_pots_hilo(vec![vec![0]], vec![vec![0]]);
         assert_eq!(payouts.get(&0), Some(&400)); // scoops entire pot
         assert_eq!(payouts.get(&1), None);
+    }
+
+    #[test]
+    fn test_preview_side_pots_returns_correct_pots() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.add_bet(0, 1000);
+        pot_mgr.add_bet(1, 3000);
+        pot_mgr.add_bet(2, 5000);
+
+        let player_bets = vec![(0, 1000, true), (1, 3000, true), (2, 5000, true)];
+        let preview = pot_mgr.preview_side_pots(&player_bets);
+
+        assert_eq!(preview.len(), 3);
+        assert_eq!(preview[0].amount, 3000);
+        assert_eq!(preview[1].amount, 4000);
+        assert_eq!(preview[2].amount, 2000);
+        let total: i64 = preview.iter().map(|p| p.amount).sum();
+        assert_eq!(total, 9000);
+    }
+
+    #[test]
+    fn test_preview_side_pots_does_not_mutate() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.add_bet(0, 50);
+        pot_mgr.add_bet(1, 100);
+        pot_mgr.add_bet(2, 100);
+
+        // Snapshot original state
+        let original_pots_len = pot_mgr.pots.len();
+        let original_total = pot_mgr.total();
+
+        let player_bets = vec![(0, 50, true), (1, 100, true), (2, 100, true)];
+        let _preview = pot_mgr.preview_side_pots(&player_bets);
+
+        // Original state unchanged
+        assert_eq!(pot_mgr.pots.len(), original_pots_len);
+        assert_eq!(pot_mgr.total(), original_total);
+    }
+
+    #[test]
+    fn test_preview_side_pots_single_bet_level() {
+        let mut pot_mgr = PotManager::new();
+        pot_mgr.add_bet(0, 100);
+        pot_mgr.add_bet(1, 100);
+
+        let player_bets = vec![(0, 100, true), (1, 100, true)];
+        let preview = pot_mgr.preview_side_pots(&player_bets);
+
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0].amount, 200);
     }
 
     #[test]

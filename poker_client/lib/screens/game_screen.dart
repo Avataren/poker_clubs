@@ -416,6 +416,7 @@ class _GameScreenState extends State<GameScreen> {
           bigBlindSeat: _gameState!.bigBlindSeat,
           smallBlind: widget.table.smallBlind,
           potTotal: _gameState!.potTotal,
+          pots: _gameState!.pots,
         ),
 
         // Table center overlay (community cards) - responsive positioning
@@ -490,7 +491,7 @@ class _GameScreenState extends State<GameScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.table.name),
-        backgroundColor: Colors.green[800],
+        backgroundColor: Colors.grey[850],
         actions: [
           // Only show top-up button if format allows it
           if (_isSeated &&

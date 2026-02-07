@@ -123,7 +123,7 @@ class _TablesScreenState extends State<TablesScreen>
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.club.name),
-        backgroundColor: Colors.green,
+        backgroundColor: Colors.grey[850],
         bottom: TabBar(
           controller: _tabController,
           tabs: const [

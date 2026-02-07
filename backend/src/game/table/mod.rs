@@ -7,7 +7,7 @@ mod showdown;
 mod state;
 mod tournament;
 
-pub use state::{PublicTableState, PublicPlayerState, TournamentInfo};
+pub use state::{PublicPot, PublicTableState, PublicPlayerState, TournamentInfo};
 
 use super::{
     constants::{
