@@ -268,6 +268,15 @@ impl GameServer {
             .collect()
     }
 
+    /// Get all player user_ids at a table (for final table consolidation).
+    pub async fn get_all_player_ids_at_table(&self, table_id: &str) -> Vec<String> {
+        let tables = self.tables.read().await;
+        tables
+            .get(table_id)
+            .map(|t| t.players.iter().map(|p| p.user_id.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// Get the user_id of the last player in a table's player list (for balancing moves).
     pub async fn get_last_player_at_table(&self, table_id: &str) -> Option<String> {
         let tables = self.tables.read().await;

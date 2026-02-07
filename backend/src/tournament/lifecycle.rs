@@ -1,7 +1,7 @@
 use crate::{
     db::models::{Tournament, TournamentRegistration},
     error::{AppError, Result},
-    game::format::BlindSchedule,
+    game::{constants::DEFAULT_MAX_SEATS, format::BlindSchedule},
     tournament::prizes::{PrizeStructure, PrizeWinner},
 };
 use chrono::Utc;
@@ -533,6 +533,69 @@ impl LifecycleService {
             );
         }
         counts.retain(|(_, c)| *c > 0);
+
+        // Final table consolidation: if total remaining players fit on one table, merge all into one
+        let total_players: usize = counts.iter().map(|(_, c)| *c).sum();
+        if counts.len() > 1 && total_players <= DEFAULT_MAX_SEATS {
+            // Pick the table with the most players as the final table
+            let final_table_id = counts.iter().max_by_key(|(_, c)| *c).unwrap().0.clone();
+
+            // Collect all other tables
+            let other_tables: Vec<String> = counts
+                .iter()
+                .filter(|(id, _)| *id != final_table_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            // Move all players from other tables to the final table
+            for source_table_id in &other_tables {
+                let player_ids = self
+                    .ctx
+                    .game_server
+                    .get_all_player_ids_at_table(source_table_id)
+                    .await;
+
+                for player_id in &player_ids {
+                    if let Err(e) = self
+                        .ctx
+                        .game_server
+                        .move_tournament_player(source_table_id, &final_table_id, player_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to move player {} to final table: {}",
+                            player_id,
+                            e
+                        );
+                        continue;
+                    }
+
+                    // Update DB registration
+                    sqlx::query("UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?")
+                        .bind(&final_table_id)
+                        .bind(tournament_id)
+                        .bind(player_id)
+                        .execute(&*self.ctx.pool)
+                        .await?;
+                }
+
+                // Close the now-empty source table
+                sqlx::query("UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ? AND table_id = ?")
+                    .bind(tournament_id)
+                    .bind(source_table_id)
+                    .execute(&*self.ctx.pool)
+                    .await?;
+            }
+
+            tracing::info!(
+                "Final table formed for tournament {} — {} players consolidated to table {}",
+                tournament_id,
+                total_players,
+                final_table_id
+            );
+
+            return Ok(());
+        }
 
         if counts.len() <= 1 {
             return Ok(());
