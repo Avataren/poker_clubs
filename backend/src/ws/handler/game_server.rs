@@ -297,16 +297,35 @@ impl GameServer {
                     ))
                 };
 
-                // Create in-memory table with tournament format
-                let table = crate::game::PokerTable::with_variant_and_format(
+                // Load current blind level for this tournament
+                let current_level_idx = tournament.current_blind_level as usize;
+                let blind_levels: Vec<crate::db::models::TournamentBlindLevel> = sqlx::query_as(
+                    "SELECT * FROM tournament_blind_levels WHERE tournament_id = ? ORDER BY level_number",
+                )
+                .bind(&tournament_id)
+                .fetch_all(self.pool.as_ref())
+                .await
+                .map_err(|e| format!("Failed to load blind levels: {}", e))?;
+
+                // Use the current blind level's values (not the stale table DB values)
+                let (actual_sb, actual_bb, actual_ante) = if current_level_idx < blind_levels.len() {
+                    let level = &blind_levels[current_level_idx];
+                    (level.small_blind, level.big_blind, level.ante)
+                } else {
+                    (small_blind, big_blind, 0)
+                };
+
+                // Create in-memory table with tournament format and current blind level
+                let mut table = crate::game::PokerTable::with_variant_and_format(
                     id.clone(),
                     name,
-                    small_blind,
-                    big_blind,
+                    actual_sb,
+                    actual_bb,
                     9, // DEFAULT_MAX_SEATS
                     variant,
                     format,
                 );
+                table.ante = actual_ante;
 
                 // Set tournament ID on the table
                 let mut tables = self.tables.write().await;

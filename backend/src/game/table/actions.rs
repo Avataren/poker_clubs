@@ -45,9 +45,11 @@ impl PokerTable {
                 let current_bet = self.players[self.current_player].current_bet;
                 let raise_to = self.current_bet + amount;
 
-                if amount < self.min_raise {
+                // Ensure min_raise is never below big_blind
+                let effective_min_raise = self.min_raise.max(self.big_blind);
+                if amount < effective_min_raise {
                     return Err(GameError::RaiseTooSmall {
-                        min_raise: self.min_raise,
+                        min_raise: effective_min_raise,
                         attempted: amount,
                     });
                 }
@@ -88,7 +90,8 @@ impl PokerTable {
                 self.pot.add_bet(self.current_player, actual);
 
                 self.current_bet = current_bet + actual;
-                self.min_raise = amount;
+                // min_raise is the raise size, but never below big_blind
+                self.min_raise = amount.max(self.big_blind);
                 self.raises_this_round += 1;
 
                 // Reset has_acted for all other players since there's a new bet
@@ -135,7 +138,8 @@ impl PokerTable {
 
                 let new_total = self.players[self.current_player].current_bet;
                 if new_total > self.current_bet {
-                    self.min_raise = new_total - self.current_bet;
+                    // min_raise is the raise size, but never below big_blind
+                    self.min_raise = (new_total - self.current_bet).max(self.big_blind);
                     self.current_bet = new_total;
                     self.raises_this_round += 1;
 

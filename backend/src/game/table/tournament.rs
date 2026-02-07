@@ -12,13 +12,12 @@ impl PokerTable {
     }
 
     /// Update blinds, ante, and minimum raise (called when tournament blind level advances)
-    /// Blinds are updated immediately but take effect at the start of the next hand
+    /// Blinds are updated immediately but take effect at the start of the next hand.
+    /// Note: min_raise is NOT reset here to avoid corrupting a hand in progress.
+    /// It is reset to big_blind in start_new_hand() via dealing.rs.
     pub fn update_blinds_and_ante(&mut self, small_blind: i64, big_blind: i64, ante: i64) {
-        // Simple snapshot approach: just update the blinds and ante
-        // They'll be used at the start of the next hand
         self.small_blind = small_blind;
         self.big_blind = big_blind;
-        self.min_raise = big_blind;
         self.ante = ante;
         tracing::info!(
             "Table {} blinds updated to {}/{} ante {} (will take effect at next hand)",
