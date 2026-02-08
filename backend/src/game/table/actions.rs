@@ -217,7 +217,11 @@ impl PokerTable {
         let player = self.players.iter_mut().find(|p| p.user_id == user_id);
         let player = match player {
             Some(p) => p,
-            None => return Err(GameError::PlayerNotFound { user_id: user_id.to_string() }),
+            None => {
+                return Err(GameError::PlayerNotFound {
+                    user_id: user_id.to_string(),
+                })
+            }
         };
 
         // Must be the winner
@@ -257,7 +261,8 @@ impl PokerTable {
                     tracing::info!("Auto-folding sitting out player: {}", current.username);
                     self.players[self.current_player].fold();
                     self.players[self.current_player].has_acted_this_round = true;
-                    self.players[self.current_player].last_action = Some("Auto-Fold (Sitting Out)".to_string());
+                    self.players[self.current_player].last_action =
+                        Some("Auto-Fold (Sitting Out)".to_string());
                     // Recursively advance to next player
                     self.advance_action();
                 }
@@ -270,7 +275,8 @@ impl PokerTable {
                     tracing::info!("Auto-folding disconnected player: {}", current.username);
                     self.players[self.current_player].fold();
                     self.players[self.current_player].has_acted_this_round = true;
-                    self.players[self.current_player].last_action = Some("Auto-Fold (Disconnected)".to_string());
+                    self.players[self.current_player].last_action =
+                        Some("Auto-Fold (Disconnected)".to_string());
                     self.advance_action();
                 }
             }

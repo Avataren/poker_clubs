@@ -64,7 +64,13 @@ impl PokerTable {
             .filter(|(_, p)| p.total_bet_this_hand > 0)
             .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
             .collect();
-        self.pot.calculate_side_pots(&player_bets);
+        let uncontested = self.pot.calculate_side_pots(&player_bets);
+
+        // Return uncontested amounts (e.g. uncalled overbets) immediately.
+        // These are not showdown wins and should not mark winners.
+        for (player_idx, amount) in uncontested {
+            self.players[player_idx].add_chips(amount);
+        }
 
         // Award pots -- hi-lo or standard
         let payouts = if is_hilo {
@@ -141,9 +147,10 @@ impl PokerTable {
                 );
 
                 for community_card in &mut self.community_cards {
-                    if best_cards.iter().any(|c| {
-                        c.rank == community_card.rank && c.suit == community_card.suit
-                    }) {
+                    if best_cards
+                        .iter()
+                        .any(|c| c.rank == community_card.rank && c.suit == community_card.suit)
+                    {
                         community_card.highlighted = true;
                     }
                 }

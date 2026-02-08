@@ -57,9 +57,7 @@ impl RegistrationService {
         let mut conn = self.ctx.pool.acquire().await?;
 
         // Use BEGIN IMMEDIATE to prevent double-registration race condition
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         // Check if already registered (inside transaction)
         let existing = sqlx::query_as::<_, TournamentRegistration>(
@@ -83,18 +81,17 @@ impl RegistrationService {
         }
 
         // Deduct buy-in from club balance (inline to keep on same connection)
-        let (is_bot,): (bool,) =
-            match sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
-                .bind(user_id)
-                .fetch_one(&mut *conn)
-                .await
-            {
-                Ok(row) => row,
-                Err(e) => {
-                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                    return Err(e.into());
-                }
-            };
+        let (is_bot,): (bool,) = match sqlx::query_as("SELECT is_bot FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&mut *conn)
+            .await
+        {
+            Ok(row) => row,
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                return Err(e.into());
+            }
+        };
 
         if !is_bot {
             let result = match sqlx::query(
@@ -162,9 +159,7 @@ impl RegistrationService {
             return Err(e.into());
         }
 
-        sqlx::query("COMMIT")
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query("COMMIT").execute(&mut *conn).await?;
 
         // Drop connection back to pool before proceeding
         drop(conn);
@@ -199,7 +194,8 @@ impl RegistrationService {
         // Check if SNG should auto-start
         if tournament.format_id == "sng" && tournament.registered_players >= tournament.max_players
         {
-            self.ctx.start_tournament_with_state(tournament_id, &mut tournament)
+            self.ctx
+                .start_tournament_with_state(tournament_id, &mut tournament)
                 .await?;
             self.ctx.start_sng_table(&tournament).await?;
         }

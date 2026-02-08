@@ -1,7 +1,4 @@
-use crate::{
-    db::models::Tournament,
-    error::Result,
-};
+use crate::{db::models::Tournament, error::Result};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -169,7 +166,10 @@ mod tests {
 
     impl Write for SharedWriterGuard {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.buffer.lock().expect("lock log buffer").extend_from_slice(buf);
+            self.buffer
+                .lock()
+                .expect("lock log buffer")
+                .extend_from_slice(buf);
             Ok(buf.len())
         }
 

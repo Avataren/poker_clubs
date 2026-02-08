@@ -27,6 +27,9 @@ class _GameScreenState extends State<GameScreen> {
   final _buyinController = TextEditingController(text: '5000');
   final _topUpController = TextEditingController(text: '5000');
   bool _isSeated = false;
+  bool _hasSeenPlayersAtTable = false;
+  bool _isTableClosed = false;
+  String _tableClosedMessage = 'Table closed';
 
   // Tournament info from live broadcast
   String? _tournamentId;
@@ -51,6 +54,7 @@ class _GameScreenState extends State<GameScreen> {
       setState(() {
         _previousGameState = _gameState;
         _gameState = gameState;
+        _updateTableClosedState(gameState);
         _updateStatusMessage();
         _checkIfSeated();
       });
@@ -87,6 +91,22 @@ class _GameScreenState extends State<GameScreen> {
           });
         };
     _wsService.onError = (error) {
+      final normalized = error.toLowerCase();
+      final tableGone =
+          normalized.contains('table not found') ||
+          normalized.contains('table disappeared');
+
+      final isTournamentContext =
+          _gameState?.tournamentId != null || _tournamentId != null;
+      if (tableGone && isTournamentContext) {
+        setState(() {
+          _isTableClosed = true;
+          _tableClosedMessage = 'Table closed';
+          _statusMessage = _tableClosedMessage;
+        });
+        return;
+      }
+
       setState(() => _statusMessage = 'Error: $error');
     };
     _wsService.onConnected = () {
@@ -104,8 +124,29 @@ class _GameScreenState extends State<GameScreen> {
     _isSeated = _gameState?.players.any((p) => p.userId == myUserId) ?? false;
   }
 
+  void _updateTableClosedState(GameState gameState) {
+    if (gameState.tournamentId == null) return;
+
+    final hasActivePlayers = gameState.players.any((p) => !p.isEliminated);
+    if (hasActivePlayers) {
+      _hasSeenPlayersAtTable = true;
+      _isTableClosed = false;
+      return;
+    }
+
+    if (_hasSeenPlayersAtTable) {
+      _isTableClosed = true;
+      _tableClosedMessage = 'Table closed';
+    }
+  }
+
   void _updateStatusMessage() {
     if (_gameState == null) return;
+
+    if (_isTableClosed) {
+      _statusMessage = _tableClosedMessage;
+      return;
+    }
 
     final myUserId = context.read<ApiService>().userId;
     final myPlayer = _gameState!.players
@@ -113,13 +154,13 @@ class _GameScreenState extends State<GameScreen> {
         .firstOrNull;
 
     if (myPlayer == null) {
-      setState(() => _statusMessage = '');
+      _statusMessage = '';
       return;
     }
 
     // Check if game is waiting for more players
     if (_gameState!.phase.toLowerCase() == 'waiting') {
-      setState(() => _statusMessage = 'Waiting for players...');
+      _statusMessage = 'Waiting for players...';
       return;
     }
 
@@ -137,9 +178,7 @@ class _GameScreenState extends State<GameScreen> {
     print('DEBUG: myPlayer=${myPlayer.username} userId=${myPlayer.userId}');
     print('DEBUG: isMyTurn=$isMyTurn');
 
-    setState(() {
-      _statusMessage = isMyTurn ? 'Your turn!' : 'Waiting for your turn...';
-    });
+    _statusMessage = isMyTurn ? 'Your turn!' : 'Waiting for your turn...';
   }
 
   void _playActionSounds(GameState newState) {
@@ -406,8 +445,8 @@ class _GameScreenState extends State<GameScreen> {
           players: _gameState!.players,
           currentPlayerSeat: _gameState!.currentPlayerSeat,
           myUserId: myUserId,
-          onTakeSeat: !_isSeated ? _takeSeat : null,
-          onRemoveBot: _removeBot,
+          onTakeSeat: (!_isSeated && !_isTableClosed) ? _takeSeat : null,
+          onRemoveBot: _isTableClosed ? null : _removeBot,
           showingDown: isShowdown,
           gamePhase: _gameState!.phase,
           winningHand: _gameState!.winningHand,
@@ -472,6 +511,46 @@ class _GameScreenState extends State<GameScreen> {
             ),
           ),
         ),
+
+        if (_isTableClosed)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black54,
+              alignment: Alignment.center,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 16,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.redAccent),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.info_outline, color: Colors.white),
+                    const SizedBox(height: 8),
+                    Text(
+                      _tableClosedMessage,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Players were moved to another tournament table.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -486,7 +565,8 @@ class _GameScreenState extends State<GameScreen> {
         myPlayer != null && _gameState?.currentPlayer?.userId == myUserId;
     final isShowdown = _gameState?.phase.toLowerCase() == 'showdown';
     final canTopUp = _gameState?.canTopUp ?? true;
-    final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
+    final isPortrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
 
     return Scaffold(
       appBar: AppBar(
@@ -495,6 +575,7 @@ class _GameScreenState extends State<GameScreen> {
         actions: [
           // Only show top-up button if format allows it
           if (_isSeated &&
+              !_isTableClosed &&
               canTopUp &&
               myPlayer != null &&
               myPlayer.stack < 10000)
@@ -503,17 +584,18 @@ class _GameScreenState extends State<GameScreen> {
               tooltip: 'Top Up',
               onPressed: _topUp,
             ),
-          if (_isSeated)
+          if (_isSeated && !_isTableClosed)
             IconButton(
               icon: const Icon(Icons.event_seat),
               tooltip: 'Stand Up',
               onPressed: _standUp,
             ),
-          IconButton(
-            icon: const Icon(Icons.smart_toy),
-            tooltip: 'Add Bot',
-            onPressed: _showAddBotDialog,
-          ),
+          if (!_isTableClosed)
+            IconButton(
+              icon: const Icon(Icons.smart_toy),
+              tooltip: 'Add Bot',
+              onPressed: _showAddBotDialog,
+            ),
           IconButton(
             icon: const Icon(Icons.exit_to_app),
             onPressed: () {
@@ -606,11 +688,15 @@ class _GameScreenState extends State<GameScreen> {
             if (_statusMessage.isNotEmpty)
               Container(
                 padding: const EdgeInsets.all(12),
-                color: isMyTurn ? Colors.amber[700] : Colors.black45,
+                color: _isTableClosed
+                    ? Colors.red[700]
+                    : (isMyTurn ? Colors.amber[700] : Colors.black45),
                 child: Text(
                   _statusMessage,
                   style: TextStyle(
-                    color: isMyTurn ? Colors.black : Colors.white,
+                    color: (_isTableClosed || !isMyTurn)
+                        ? Colors.white
+                        : Colors.black,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -620,6 +706,7 @@ class _GameScreenState extends State<GameScreen> {
 
             // Show Cards buttons (fold-win showdown: winner can reveal cards)
             if (_isSeated &&
+                !_isTableClosed &&
                 isShowdown &&
                 myPlayer != null &&
                 myPlayer.isWinner &&
@@ -649,7 +736,11 @@ class _GameScreenState extends State<GameScreen> {
                       ElevatedButton(
                         onPressed: () {
                           final indices = <int>[];
-                          for (int i = 0; i < myPlayer.shownCards!.length; i++) {
+                          for (
+                            int i = 0;
+                            i < myPlayer.shownCards!.length;
+                            i++
+                          ) {
                             if (!myPlayer.shownCards![i]) indices.add(i);
                           }
                           _wsService.showCards(indices);
@@ -664,7 +755,7 @@ class _GameScreenState extends State<GameScreen> {
               ),
 
             // Action buttons (only show if seated and it's my turn)
-            if (_isSeated && isMyTurn)
+            if (_isSeated && !_isTableClosed && isMyTurn)
               Container(
                 padding: const EdgeInsets.all(16),
                 child: Wrap(
@@ -731,7 +822,7 @@ class _GameScreenState extends State<GameScreen> {
                   ],
                 ),
               )
-            else if (_isSeated)
+            else if (_isSeated && !_isTableClosed)
               Container(
                 padding: const EdgeInsets.all(16),
                 child: const Text(
@@ -763,12 +854,14 @@ class _GameScreenState extends State<GameScreen> {
     final level =
         (_tournamentLevel ?? _gameState?.tournamentBlindLevel ?? 0) + 1;
     // Prioritize tournament blinds from either source, fallback to table blinds only if neither available
-    final smallBlind = _tournamentSmallBlind ?? 
-                      _gameState?.tournamentSmallBlind ?? 
-                      widget.table.smallBlind;
-    final bigBlind = _tournamentBigBlind ?? 
-                    _gameState?.tournamentBigBlind ?? 
-                    widget.table.bigBlind;
+    final smallBlind =
+        _tournamentSmallBlind ??
+        _gameState?.tournamentSmallBlind ??
+        widget.table.smallBlind;
+    final bigBlind =
+        _tournamentBigBlind ??
+        _gameState?.tournamentBigBlind ??
+        widget.table.bigBlind;
     final nextSmall = _nextSmallBlind ?? _gameState?.tournamentNextSmallBlind;
     final nextBig = _nextBigBlind ?? _gameState?.tournamentNextBigBlind;
 

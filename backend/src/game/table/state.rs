@@ -53,7 +53,7 @@ pub struct PublicPlayerState {
     pub hole_cards: Option<Vec<Card>>, // Only visible to the player themselves
     pub is_winner: bool,
     pub last_action: Option<String>,
-    pub pot_won: i64, // Amount won from pot (for animation)
+    pub pot_won: i64,                   // Amount won from pot (for animation)
     pub shown_cards: Option<Vec<bool>>, // Which cards the winner chose to show (fold-win only)
 }
 
@@ -103,12 +103,18 @@ impl PokerTable {
         let public_pots = match self.phase {
             GamePhase::Showdown => {
                 // During showdown, use already-calculated pots
-                self.pot.pots.iter().map(|p| PublicPot {
-                    amount: p.amount,
-                    eligible_player_seats: p.eligible_players.iter()
-                        .filter_map(|&idx| self.players.get(idx).map(|pl| pl.seat))
-                        .collect(),
-                }).collect()
+                self.pot
+                    .pots
+                    .iter()
+                    .map(|p| PublicPot {
+                        amount: p.amount,
+                        eligible_player_seats: p
+                            .eligible_players
+                            .iter()
+                            .filter_map(|&idx| self.players.get(idx).map(|pl| pl.seat))
+                            .collect(),
+                    })
+                    .collect()
             }
             GamePhase::Waiting => vec![],
             _ => {
@@ -128,12 +134,18 @@ impl PokerTable {
                     if player_bets.is_empty() {
                         vec![]
                     } else {
-                        self.pot.preview_side_pots(&player_bets).iter().map(|p| PublicPot {
-                            amount: p.amount,
-                            eligible_player_seats: p.eligible_players.iter()
-                                .filter_map(|&idx| self.players.get(idx).map(|pl| pl.seat))
-                                .collect(),
-                        }).collect()
+                        self.pot
+                            .preview_side_pots(&player_bets)
+                            .iter()
+                            .map(|p| PublicPot {
+                                amount: p.amount,
+                                eligible_player_seats: p
+                                    .eligible_players
+                                    .iter()
+                                    .filter_map(|&idx| self.players.get(idx).map(|pl| pl.seat))
+                                    .collect(),
+                            })
+                            .collect()
                     }
                 }
             }
@@ -158,30 +170,56 @@ impl PokerTable {
                     // Check if this is an all-in runout situation (fewer than 2 players can act)
                     // In this case, all active players' cards should be revealed like in real poker
                     let is_allin_runout = self.players.iter().filter(|pl| pl.can_act()).count() < 2
-                        && self.players.iter().filter(|pl| pl.is_active_in_hand()).count() >= 2;
+                        && self
+                            .players
+                            .iter()
+                            .filter(|pl| pl.is_active_in_hand())
+                            .count()
+                            >= 2;
 
                     let hole_cards = if Some(p.user_id.as_str()) == for_user_id {
                         // Show own cards face-up
                         Some(p.hole_cards.clone())
-                    } else if self.phase == GamePhase::Showdown && self.won_without_showdown && p.is_winner {
+                    } else if self.phase == GamePhase::Showdown
+                        && self.won_without_showdown
+                        && p.is_winner
+                    {
                         // Fold-win: only show cards the winner chose to reveal
                         if p.shown_cards.iter().any(|&s| s) {
-                            Some(p.hole_cards.iter().enumerate().map(|(i, card)| {
-                                if i < p.shown_cards.len() && p.shown_cards[i] {
-                                    card.clone()
-                                } else {
-                                    Card { rank: 0, suit: 0, highlighted: false, face_up: false }
-                                }
-                            }).collect())
+                            Some(
+                                p.hole_cards
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, card)| {
+                                        if i < p.shown_cards.len() && p.shown_cards[i] {
+                                            card.clone()
+                                        } else {
+                                            Card {
+                                                rank: 0,
+                                                suit: 0,
+                                                highlighted: false,
+                                                face_up: false,
+                                            }
+                                        }
+                                    })
+                                    .collect(),
+                            )
                         } else {
                             // No cards shown yet - send face-down placeholders
                             let num_cards = p.hole_cards.len();
                             Some(vec![
-                                Card { rank: 0, suit: 0, highlighted: false, face_up: false };
+                                Card {
+                                    rank: 0,
+                                    suit: 0,
+                                    highlighted: false,
+                                    face_up: false
+                                };
                                 num_cards
                             ])
                         }
-                    } else if (self.phase == GamePhase::Showdown || is_allin_runout) && p.is_active_in_hand() {
+                    } else if (self.phase == GamePhase::Showdown || is_allin_runout)
+                        && p.is_active_in_hand()
+                    {
                         // During normal showdown OR all-in runout, show all active players' cards face-up
                         Some(p.hole_cards.clone())
                     } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
@@ -202,11 +240,12 @@ impl PokerTable {
                         None
                     };
 
-                    let shown_cards_field = if self.won_without_showdown && p.is_winner && !p.shown_cards.is_empty() {
-                        Some(p.shown_cards.clone())
-                    } else {
-                        None
-                    };
+                    let shown_cards_field =
+                        if self.won_without_showdown && p.is_winner && !p.shown_cards.is_empty() {
+                            Some(p.shown_cards.clone())
+                        } else {
+                            None
+                        };
 
                     PublicPlayerState {
                         user_id: p.user_id.clone(),
@@ -253,7 +292,9 @@ impl PokerTable {
             // Show current tournament level blinds (always show what the tournament is at now)
             tournament_small_blind: tournament_info.as_ref().map(|_| self.small_blind),
             tournament_big_blind: tournament_info.as_ref().map(|_| self.big_blind),
-            tournament_level_start_time: tournament_info.as_ref().and_then(|t| t.level_start_time.clone()),
+            tournament_level_start_time: tournament_info
+                .as_ref()
+                .and_then(|t| t.level_start_time.clone()),
             tournament_level_duration_secs: tournament_info.as_ref().map(|t| t.level_duration_secs),
             tournament_ante: tournament_info.as_ref().map(|t| t.ante),
             tournament_next_small_blind: tournament_info.as_ref().and_then(|t| t.next_small_blind),

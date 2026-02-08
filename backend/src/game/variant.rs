@@ -461,7 +461,14 @@ pub fn variant_from_id(id: &str) -> Option<Box<dyn PokerVariant>> {
 
 /// Get all available variant IDs
 pub fn available_variants() -> Vec<&'static str> {
-    vec!["holdem", "omaha", "plo", "omaha_hilo", "short_deck", "fl_holdem"]
+    vec![
+        "holdem",
+        "omaha",
+        "plo",
+        "omaha_hilo",
+        "short_deck",
+        "fl_holdem",
+    ]
 }
 
 #[cfg(test)]

@@ -1,7 +1,4 @@
-use crate::{
-    db::models::Tournament,
-    error::Result,
-};
+use crate::{db::models::Tournament, error::Result};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -113,7 +110,12 @@ impl BlindsService {
         for (table_id,) in tournament_tables {
             self.ctx
                 .game_server
-                .update_table_blinds(&table_id, new_level.small_blind, new_level.big_blind, new_level.ante)
+                .update_table_blinds(
+                    &table_id,
+                    new_level.small_blind,
+                    new_level.big_blind,
+                    new_level.ante,
+                )
                 .await;
         }
 

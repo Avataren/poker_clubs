@@ -86,7 +86,11 @@ impl Player {
         self.shown_cards.clear();
 
         // Activate players who have chips and aren't voluntarily sitting out, eliminated, or disconnected
-        if self.stack > 0 && self.state != PlayerState::SittingOut && self.state != PlayerState::Eliminated && self.state != PlayerState::Disconnected {
+        if self.stack > 0
+            && self.state != PlayerState::SittingOut
+            && self.state != PlayerState::Eliminated
+            && self.state != PlayerState::Disconnected
+        {
             self.state = PlayerState::Active;
         }
         // Players with 0 stack will be handled by check_eliminations in tournament mode

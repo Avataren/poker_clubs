@@ -41,10 +41,7 @@ pub fn create_app_with_cors(
             .allow_methods(Any)
             .allow_headers(Any)
     } else {
-        let origins: Vec<_> = cors_origins
-            .iter()
-            .filter_map(|o| o.parse().ok())
-            .collect();
+        let origins: Vec<_> = cors_origins.iter().filter_map(|o| o.parse().ok()).collect();
         CorsLayer::new()
             .allow_origin(AllowOrigin::list(origins))
             .allow_methods(Any)

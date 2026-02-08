@@ -151,7 +151,10 @@ pub(super) async fn handle_client_message(
             let reconnecting = {
                 let tables = game_server.tables.read().await;
                 if let Some(table) = tables.get(&table_id) {
-                    table.players.iter().any(|p| p.user_id == user_id && p.state == PlayerState::Disconnected)
+                    table
+                        .players
+                        .iter()
+                        .any(|p| p.user_id == user_id && p.state == PlayerState::Disconnected)
                 } else {
                     false
                 }
@@ -165,7 +168,9 @@ pub(super) async fn handle_client_message(
                 {
                     let mut tables = game_server.tables.write().await;
                     if let Some(table) = tables.get_mut(&table_id) {
-                        if let Some(player) = table.players.iter_mut().find(|p| p.user_id == user_id) {
+                        if let Some(player) =
+                            table.players.iter_mut().find(|p| p.user_id == user_id)
+                        {
                             if table.phase == GamePhase::Waiting {
                                 player.state = PlayerState::Active;
                             } else {

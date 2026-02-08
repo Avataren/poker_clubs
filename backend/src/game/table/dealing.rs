@@ -33,9 +33,12 @@ impl PokerTable {
         self.min_raise = self.big_blind;
         self.raises_this_round = 0;
 
-        // Move dealer button to next eligible player (skip sitting out/broke players)
-        // For the first hand from Waiting phase, find the first eligible player (not the next one)
-        if self.phase == GamePhase::Waiting {
+        // Move dealer button to next eligible player (skip sitting out/broke players).
+        // Only pick "first eligible" on true table startup (no prior phase timestamps).
+        // Waiting between hands (e.g. MTT rebalance window) must still rotate dealer.
+        let is_initial_hand_start =
+            self.phase == GamePhase::Waiting && self.last_phase_change_time.is_none();
+        if is_initial_hand_start {
             self.dealer_seat = self.first_eligible_player_for_button();
         } else {
             self.dealer_seat = self.next_eligible_player_for_button(self.dealer_seat);

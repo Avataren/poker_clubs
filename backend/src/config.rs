@@ -39,9 +39,7 @@ impl Config {
                 if is_production {
                     panic!("JWT_SECRET environment variable must be set in production");
                 }
-                tracing::warn!(
-                    "WARNING: Using default JWT secret. Set JWT_SECRET in production!"
-                );
+                tracing::warn!("WARNING: Using default JWT secret. Set JWT_SECRET in production!");
                 "development_secret_key_change_in_production".to_string()
             }
         };

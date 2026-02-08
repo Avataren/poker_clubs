@@ -35,12 +35,17 @@ impl PotManager {
         }
     }
 
-    /// Build side pots from player bets, merging consecutive pots with identical eligible players.
-    fn build_side_pots(player_bets: &[(usize, i64, bool)]) -> Vec<Pot> {
+    /// Build contested side pots from player bets.
+    ///
+    /// Returns:
+    /// - Pots that have at least two eligible players (actually contested)
+    /// - Uncontested amounts to immediately return to a single eligible player
+    fn build_side_pots(player_bets: &[(usize, i64, bool)]) -> (Vec<Pot>, HashMap<usize, i64>) {
         let mut sorted: Vec<(usize, i64, bool)> = player_bets.to_vec();
         sorted.sort_by_key(|(_, bet, _)| *bet);
 
         let mut raw_pots = Vec::new();
+        let mut uncontested = HashMap::new();
         let mut prev_level = 0i64;
 
         for i in 0..sorted.len() {
@@ -63,10 +68,27 @@ impl PotManager {
                 .collect();
 
             if pot_amount > 0 {
-                raw_pots.push(Pot {
-                    amount: pot_amount,
-                    eligible_players: eligible,
-                });
+                // A "pot" with one (or zero) eligible players is uncontested.
+                // In real poker this amount is not a split pot; it is returned/pushed
+                // to the lone eligible player.
+                if eligible.len() <= 1 {
+                    if let Some(&player_idx) = eligible.first() {
+                        *uncontested.entry(player_idx).or_insert(0) += pot_amount;
+                    } else if contributors == 1 {
+                        // Safety fallback: if only one contributor exists and no eligible
+                        // player was marked active, return it to that contributor.
+                        if let Some((player_idx, _, _)) =
+                            sorted.iter().find(|(_, bet, _)| *bet > prev_level)
+                        {
+                            *uncontested.entry(*player_idx).or_insert(0) += pot_amount;
+                        }
+                    }
+                } else {
+                    raw_pots.push(Pot {
+                        amount: pot_amount,
+                        eligible_players: eligible,
+                    });
+                }
             }
 
             prev_level = bet_level;
@@ -87,21 +109,33 @@ impl PotManager {
             merged.push(pot);
         }
 
-        merged
+        (merged, uncontested)
     }
 
     /// Calculate side pots based on each player's total contribution to the hand.
     /// `player_bets` contains (player_idx, total_bet_this_hand, is_active_in_hand).
     /// All contributing players (including folded) affect pot sizes, but only
     /// active-in-hand players are eligible to win.
-    pub fn calculate_side_pots(&mut self, player_bets: &[(usize, i64, bool)]) {
+    ///
+    /// Returns uncontested amounts that should be immediately pushed back to
+    /// the sole eligible player (not treated as split pots).
+    pub fn calculate_side_pots(
+        &mut self,
+        player_bets: &[(usize, i64, bool)],
+    ) -> HashMap<usize, i64> {
         if player_bets.is_empty() {
-            return;
+            return HashMap::new();
         }
-        let new_pots = Self::build_side_pots(player_bets);
-        if !new_pots.is_empty() {
-            self.pots = new_pots;
-        }
+        let (new_pots, uncontested) = Self::build_side_pots(player_bets);
+        self.pots = if new_pots.is_empty() {
+            vec![Pot {
+                amount: 0,
+                eligible_players: vec![],
+            }]
+        } else {
+            new_pots
+        };
+        uncontested
     }
 
     /// End the current betting round
@@ -158,14 +192,8 @@ impl PotManager {
         let mut payouts = HashMap::new();
 
         for (pot_idx, pot) in self.pots.iter().enumerate() {
-            let hi_winners = hi_winners_by_pot
-                .get(pot_idx)
-                .cloned()
-                .unwrap_or_default();
-            let lo_winners = lo_winners_by_pot
-                .get(pot_idx)
-                .cloned()
-                .unwrap_or_default();
+            let hi_winners = hi_winners_by_pot.get(pot_idx).cloned().unwrap_or_default();
+            let lo_winners = lo_winners_by_pot.get(pot_idx).cloned().unwrap_or_default();
 
             if hi_winners.is_empty() {
                 continue;
@@ -215,12 +243,8 @@ impl PotManager {
         if player_bets.is_empty() {
             return self.pots.clone();
         }
-        let result = Self::build_side_pots(player_bets);
-        if result.is_empty() {
-            self.pots.clone()
-        } else {
-            result
-        }
+        let (result, _) = Self::build_side_pots(player_bets);
+        result
     }
 
     /// Reset for a new hand
@@ -267,7 +291,7 @@ mod tests {
 
         // (player_idx, total_bet, is_active_in_hand)
         let player_bets = vec![(0, 50, true), (1, 100, true), (2, 100, true)];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         // Should have 2 pots:
         // Main pot: 150 (50 from each of 3 players)
@@ -275,6 +299,7 @@ mod tests {
         assert_eq!(pot_mgr.pots.len(), 2);
         assert_eq!(pot_mgr.pots[0].amount, 150);
         assert_eq!(pot_mgr.pots[1].amount, 100);
+        assert!(uncontested.is_empty());
     }
 
     #[test]
@@ -287,22 +312,20 @@ mod tests {
         pot_mgr.add_bet(1, 10000);
 
         let player_bets = vec![(0, 5000, true), (1, 10000, true)];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         // Main pot: 10000 (5000 from each), eligible: [0, 1]
-        // Side pot: 5000 (remaining 5000 from player 1), eligible: [1] only
-        assert_eq!(pot_mgr.pots.len(), 2);
+        // Remaining 5000 from player 1 is uncontested and returned.
+        assert_eq!(pot_mgr.pots.len(), 1);
         assert_eq!(pot_mgr.pots[0].amount, 10000);
         assert!(pot_mgr.pots[0].eligible_players.contains(&0));
         assert!(pot_mgr.pots[0].eligible_players.contains(&1));
-        assert_eq!(pot_mgr.pots[1].amount, 5000);
-        assert!(!pot_mgr.pots[1].eligible_players.contains(&0));
-        assert!(pot_mgr.pots[1].eligible_players.contains(&1));
+        assert_eq!(uncontested.get(&1), Some(&5000));
 
-        // If player 0 wins: gets main pot (10000), player 1 gets side pot (5000) back
-        let payouts = pot_mgr.award_pots(vec![vec![0], vec![1]]);
+        // If player 0 wins: gets main pot (10000), player 1 gets uncontested 5000 back
+        let payouts = pot_mgr.award_pots(vec![vec![0]]);
         assert_eq!(payouts.get(&0), Some(&10000));
-        assert_eq!(payouts.get(&1), Some(&5000));
+        assert_eq!(payouts.get(&1), None);
     }
 
     #[test]
@@ -318,7 +341,7 @@ mod tests {
 
         // Player 0 folded (active=false), but their 100 is still in the pot
         let player_bets = vec![(0, 100, false), (1, 200, true), (2, 200, true)];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         // Both levels have the same eligible players [1, 2] (player 0 folded),
         // so they merge into a single pot: 300 + 200 = 500
@@ -327,6 +350,7 @@ mod tests {
         assert!(!pot_mgr.pots[0].eligible_players.contains(&0));
         assert!(pot_mgr.pots[0].eligible_players.contains(&1));
         assert!(pot_mgr.pots[0].eligible_players.contains(&2));
+        assert!(uncontested.is_empty());
     }
 
     #[test]
@@ -339,30 +363,29 @@ mod tests {
         pot_mgr.add_bet(2, 5000);
 
         let player_bets = vec![(0, 1000, true), (1, 3000, true), (2, 5000, true)];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         // Main pot: 1000*3 = 3000, eligible: [0, 1, 2]
         // Side pot 1: 2000*2 = 4000, eligible: [1, 2]
-        // Side pot 2: 2000*1 = 2000, eligible: [2]
-        assert_eq!(pot_mgr.pots.len(), 3);
+        // Remaining 2000 above the second stack is uncontested and returned to player 2.
+        assert_eq!(pot_mgr.pots.len(), 2);
         assert_eq!(pot_mgr.pots[0].amount, 3000);
         assert_eq!(pot_mgr.pots[1].amount, 4000);
-        assert_eq!(pot_mgr.pots[2].amount, 2000);
+        assert_eq!(uncontested.get(&2), Some(&2000));
 
         assert_eq!(pot_mgr.pots[0].eligible_players, vec![0, 1, 2]);
         assert_eq!(pot_mgr.pots[1].eligible_players, vec![1, 2]);
-        assert_eq!(pot_mgr.pots[2].eligible_players, vec![2]);
 
         // Total should be conserved
         let total: i64 = pot_mgr.pots.iter().map(|p| p.amount).sum();
-        assert_eq!(total, 9000);
+        assert_eq!(total + uncontested.values().sum::<i64>(), 9000);
 
         // If shortest stack (player 0) has best hand:
-        // P0 wins main pot (3000), P1 wins side pot 1 (4000 - next best), P2 gets side pot 2 (2000 - refund)
-        let payouts = pot_mgr.award_pots(vec![vec![0], vec![1], vec![2]]);
+        // P0 wins main pot (3000), P1 wins side pot 1 (4000), P2 gets 2000 back uncontested.
+        let payouts = pot_mgr.award_pots(vec![vec![0], vec![1]]);
         assert_eq!(payouts.get(&0), Some(&3000));
         assert_eq!(payouts.get(&1), Some(&4000));
-        assert_eq!(payouts.get(&2), Some(&2000));
+        assert_eq!(payouts.get(&2), None);
     }
 
     #[test]
@@ -374,12 +397,13 @@ mod tests {
         pot_mgr.add_bet(1, 5000);
 
         let player_bets = vec![(0, 5000, true), (1, 5000, true)];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         assert_eq!(pot_mgr.pots.len(), 1);
         assert_eq!(pot_mgr.pots[0].amount, 10000);
         assert!(pot_mgr.pots[0].eligible_players.contains(&0));
         assert!(pot_mgr.pots[0].eligible_players.contains(&1));
+        assert!(uncontested.is_empty());
     }
 
     #[test]
@@ -399,12 +423,17 @@ mod tests {
             (2, 2000, true),
             (3, 800, true),
         ];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         // Total of all pots must equal total of all bets
         let total_bets: i64 = 500 + 2000 + 2000 + 800;
         let total_pots: i64 = pot_mgr.pots.iter().map(|p| p.amount).sum();
-        assert_eq!(total_pots, total_bets, "Chips must be conserved");
+        let total_uncontested: i64 = uncontested.values().sum();
+        assert_eq!(
+            total_pots + total_uncontested,
+            total_bets,
+            "Chips must be conserved"
+        );
 
         // Folded player should not be eligible for any pot
         for pot in &pot_mgr.pots {
@@ -427,13 +456,13 @@ mod tests {
         pot_mgr.add_bet(4, 3000);
 
         let player_bets = vec![
-            (0, 200, false),  // folded
-            (1, 500, false),  // folded
-            (2, 1000, true),  // all-in
-            (3, 3000, true),  // active
-            (4, 3000, true),  // active
+            (0, 200, false), // folded
+            (1, 500, false), // folded
+            (2, 1000, true), // all-in
+            (3, 3000, true), // active
+            (4, 3000, true), // active
         ];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
         // Without consolidation we'd get 4 pots (at levels 200, 500, 1000, 3000).
         // Levels 200 and 500 both have eligible [2, 3, 4], same as level 1000.
@@ -454,6 +483,7 @@ mod tests {
         // Total conserved
         let total: i64 = pot_mgr.pots.iter().map(|p| p.amount).sum();
         assert_eq!(total, 7700);
+        assert!(uncontested.is_empty());
     }
 
     #[test]
@@ -466,12 +496,13 @@ mod tests {
         pot_mgr.add_bet(2, 300);
 
         let player_bets = vec![(0, 100, true), (1, 200, true), (2, 300, true)];
-        pot_mgr.calculate_side_pots(&player_bets);
+        let uncontested = pot_mgr.calculate_side_pots(&player_bets);
 
-        assert_eq!(pot_mgr.pots.len(), 3);
+        // Top level is uncontested and returned to player 2.
+        assert_eq!(pot_mgr.pots.len(), 2);
         assert_eq!(pot_mgr.pots[0].eligible_players, vec![0, 1, 2]);
         assert_eq!(pot_mgr.pots[1].eligible_players, vec![1, 2]);
-        assert_eq!(pot_mgr.pots[2].eligible_players, vec![2]);
+        assert_eq!(uncontested.get(&2), Some(&100));
     }
 
     #[test]
@@ -528,7 +559,7 @@ mod tests {
         let payouts = pot_mgr.award_pots_hilo(vec![vec![0]], vec![vec![1]]);
         assert_eq!(payouts.get(&0), Some(&151)); // hi gets odd chip
         assert_eq!(payouts.get(&1), Some(&150)); // lo gets remainder
-        // Total conserved
+                                                 // Total conserved
         let total: i64 = payouts.values().sum();
         assert_eq!(total, 301);
     }
@@ -571,12 +602,12 @@ mod tests {
         let player_bets = vec![(0, 1000, true), (1, 3000, true), (2, 5000, true)];
         let preview = pot_mgr.preview_side_pots(&player_bets);
 
-        assert_eq!(preview.len(), 3);
+        // Top level is uncontested and should not appear as a split pot.
+        assert_eq!(preview.len(), 2);
         assert_eq!(preview[0].amount, 3000);
         assert_eq!(preview[1].amount, 4000);
-        assert_eq!(preview[2].amount, 2000);
         let total: i64 = preview.iter().map(|p| p.amount).sum();
-        assert_eq!(total, 9000);
+        assert_eq!(total, 7000);
     }
 
     #[test]
@@ -627,10 +658,7 @@ mod tests {
 
         // Main pot: P0 wins hi, P1 wins lo
         // Side pot: P2 wins hi, P1 wins lo
-        let payouts = pot_mgr.award_pots_hilo(
-            vec![vec![0], vec![2]],
-            vec![vec![1], vec![1]],
-        );
+        let payouts = pot_mgr.award_pots_hilo(vec![vec![0], vec![2]], vec![vec![1], vec![1]]);
         // Main: P0 gets 150 (hi half), P1 gets 150 (lo half)
         // Side: P2 gets 100 (hi half), P1 gets 100 (lo half)
         assert_eq!(payouts.get(&0), Some(&150));

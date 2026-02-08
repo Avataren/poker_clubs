@@ -56,7 +56,11 @@ impl PokerTable {
             // 3+ players: normal blind posting
             // Small blind is the next player after dealer (includes sitting out in tournaments)
             let sb_seat = self.next_player_for_blind(self.dealer_seat);
-            tracing::info!("post_blinds: dealer_seat={}, sb_seat={}", self.dealer_seat, sb_seat);
+            tracing::info!(
+                "post_blinds: dealer_seat={}, sb_seat={}",
+                self.dealer_seat,
+                sb_seat
+            );
             let sb_amount = self.players[sb_seat].place_bet(self.small_blind);
             self.pot.add_bet(sb_seat, sb_amount);
             // Posting blind does NOT count as acting - player can still raise

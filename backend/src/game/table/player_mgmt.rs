@@ -50,7 +50,8 @@ impl PokerTable {
         // Tournaments (SNG/MTT): do NOT auto-start, wait for explicit start
         if self.players.len() >= MIN_PLAYERS_TO_START
             && self.phase == GamePhase::Waiting
-            && self.format.should_auto_start() {
+            && self.format.should_auto_start()
+        {
             self.start_new_hand();
         }
 
@@ -143,7 +144,8 @@ impl PokerTable {
         // Tournaments (SNG/MTT): do NOT auto-start, wait for explicit start
         if self.active_players_count() >= MIN_PLAYERS_TO_START
             && self.phase == GamePhase::Waiting
-            && self.format.should_auto_start() {
+            && self.format.should_auto_start()
+        {
             self.start_new_hand();
         }
 

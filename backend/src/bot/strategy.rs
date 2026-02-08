@@ -313,11 +313,12 @@ impl SimpleStrategy {
                 (target - view.current_bet).max(min_raise)
             } else {
                 // 3-bet: 3x-3.5x the raise
-                let multiplier = if view.position == BotPosition::Blind || view.position == BotPosition::Early {
-                    rng.gen_range(3.2..3.6) // OOP: bigger
-                } else {
-                    rng.gen_range(2.8..3.2) // IP: smaller
-                };
+                let multiplier =
+                    if view.position == BotPosition::Blind || view.position == BotPosition::Early {
+                        rng.gen_range(3.2..3.6) // OOP: bigger
+                    } else {
+                        rng.gen_range(2.8..3.2) // IP: smaller
+                    };
                 let target = (view.current_bet as f64 * multiplier) as i64;
                 (target - view.current_bet).max(min_raise)
             }
@@ -448,9 +449,9 @@ fn detect_draws(hole_cards: &[Card], community_cards: &[Card]) -> DrawInfo {
         ranks.push(card.rank);
     }
 
-    let has_flush_suit = hole_cards.iter().any(|card| {
-        suit_counts.get(card.suit as usize).copied().unwrap_or(0) == 4
-    });
+    let has_flush_suit = hole_cards
+        .iter()
+        .any(|card| suit_counts.get(card.suit as usize).copied().unwrap_or(0) == 4);
     let flush_draw = community_cards.len() < 5 && has_flush_suit;
 
     let straight_draw = if community_cards.len() >= 3 && community_cards.len() < 5 {
@@ -520,7 +521,11 @@ fn board_texture(community_cards: &[Card]) -> BoardTexture {
     }
 
     let has_flushy = suit_counts.iter().any(|&count| count >= 3);
-    let has_pair = ranks.iter().copied().collect::<std::collections::HashSet<_>>().len()
+    let has_pair = ranks
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
         < ranks.len();
 
     ranks.sort_unstable();
@@ -831,23 +836,9 @@ mod tests {
         // K9o is tier 6 — playable in Late but not in Early
         let k9o = vec![Card::new(13, 0), Card::new(9, 1)];
 
-        let early_view = make_preflop_view(
-            k9o.clone(),
-            75,
-            0,
-            0,
-            1000,
-            BotPosition::Early,
-        );
+        let early_view = make_preflop_view(k9o.clone(), 75, 0, 0, 1000, BotPosition::Early);
 
-        let late_view = make_preflop_view(
-            k9o,
-            75,
-            0,
-            0,
-            1000,
-            BotPosition::Late,
-        );
+        let late_view = make_preflop_view(k9o, 75, 0, 0, 1000, BotPosition::Late);
 
         let mut early_folds = 0;
         let mut late_folds = 0;

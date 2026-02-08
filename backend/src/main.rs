@@ -125,11 +125,11 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Spawn background task for tournament player eliminations (check every 5 seconds)
+    // Spawn background task for tournament player eliminations / balancing checks.
     let tournament_mgr_eliminations = tournament_manager.clone();
     let token = shutdown_token.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
         loop {
             tokio::select! {
                 _ = interval.tick() => {

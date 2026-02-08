@@ -48,7 +48,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/my", get(get_my_clubs))
         .route("/all", get(get_all_clubs))
         .route("/join", post(join_club))
-        .route("/:club_id/members/:user_id/balance", post(add_member_balance))
+        .route(
+            "/:club_id/members/:user_id/balance",
+            post(add_member_balance),
+        )
 }
 
 async fn create_club(
@@ -61,19 +64,19 @@ async fn create_club(
         .and_then(|h| h.to_str().ok())
         .ok_or(crate::error::AppError::Unauthorized)?;
     let auth_user = AuthUser::from_header(&state.jwt_manager, auth_header)?;
-    
+
     // Verify user exists in database (prevent FK constraint errors)
     let user_exists: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
         .bind(&auth_user.user_id)
         .fetch_optional(&state.pool)
         .await?;
-    
+
     if user_exists.is_none() {
         return Err(crate::error::AppError::Auth(
-            "User account no longer exists. Please log in again.".to_string()
+            "User account no longer exists. Please log in again.".to_string(),
         ));
     }
-    
+
     let club = Club::new(req.name, auth_user.user_id.clone());
 
     // Insert club
@@ -290,7 +293,13 @@ async fn add_member_balance(
             .fetch_one(&state.pool)
             .await?;
 
-    audit::log_balance_change(&club_id, &user_id, &auth_user.user_id, req.amount, new_balance);
+    audit::log_balance_change(
+        &club_id,
+        &user_id,
+        &auth_user.user_id,
+        req.amount,
+        new_balance,
+    );
 
     Ok(Json(BalanceResponse { new_balance }))
 }

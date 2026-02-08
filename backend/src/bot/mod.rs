@@ -130,7 +130,10 @@ impl BotManager {
         };
 
         if let Some(bot) = bot {
-            self.bots.entry(to_table_id.to_string()).or_default().push(bot);
+            self.bots
+                .entry(to_table_id.to_string())
+                .or_default()
+                .push(bot);
             true
         } else {
             false
@@ -289,7 +292,11 @@ fn compute_position(table: &PokerTable, player_idx: usize) -> BotPosition {
     match (my_pos, total) {
         (Some(pos), t) if t <= 3 => {
             // Short-handed (3-4 players): just Early and Late
-            if pos + 1 == t { BotPosition::Late } else { BotPosition::Early }
+            if pos + 1 == t {
+                BotPosition::Late
+            } else {
+                BotPosition::Early
+            }
         }
         (Some(pos), t) => {
             // Standard table: first ~1/3 Early, last ~1/3 Late, rest Middle

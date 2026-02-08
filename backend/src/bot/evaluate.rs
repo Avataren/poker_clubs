@@ -112,7 +112,11 @@ pub fn preflop_hand_strength(hole_cards: &[Card]) -> f64 {
         return preflop_hand_strength_formula(hole_cards);
     }
 
-    let tier = preflop_tier(hole_cards[0].rank, hole_cards[1].rank, hole_cards[0].suit == hole_cards[1].suit);
+    let tier = preflop_tier(
+        hole_cards[0].rank,
+        hole_cards[1].rank,
+        hole_cards[0].suit == hole_cards[1].suit,
+    );
     // Tier 0 = 0.95, tier 8 = 0.15
     (0.95 - tier as f64 * 0.10).clamp(0.0, 0.95)
 }
@@ -155,40 +159,40 @@ pub fn preflop_tier(rank1: u8, rank2: u8, suited: bool) -> u8 {
             (12, 11) => 2, // QJs
             // Tier 3
             (14, lo) if (2..=9).contains(&lo) => 3, // A9s-A2s
-            (13, 10) => 3, // KTs
-            (12, 10) => 3, // QTs
-            (11, 10) => 3, // JTs
-            (10, 9) => 3,  // T9s
+            (13, 10) => 3,                          // KTs
+            (12, 10) => 3,                          // QTs
+            (11, 10) => 3,                          // JTs
+            (10, 9) => 3,                           // T9s
             // Tier 4
             (13, lo) if (7..=9).contains(&lo) => 4, // K9s-K7s
-            (12, 9) => 4,  // Q9s
-            (11, 9) => 4,  // J9s
-            (10, 8) => 4,  // T8s
-            (9, 8) => 4,   // 98s
-            (8, 7) => 4,   // 87s
-            (7, 6) => 4,   // 76s
+            (12, 9) => 4,                           // Q9s
+            (11, 9) => 4,                           // J9s
+            (10, 8) => 4,                           // T8s
+            (9, 8) => 4,                            // 98s
+            (8, 7) => 4,                            // 87s
+            (7, 6) => 4,                            // 76s
             // Tier 5
             (13, lo) if (2..=6).contains(&lo) => 5, // K6s-K2s
             (12, lo) if (6..=8).contains(&lo) => 5, // Q8s-Q6s
-            (11, 8) => 5,  // J8s
-            (10, 7) => 5,  // T7s
-            (9, 7) => 5,   // 97s
-            (8, 6) => 5,   // 86s
-            (7, 5) => 5,   // 75s
-            (6, 5) => 5,   // 65s
-            (5, 4) => 5,   // 54s
+            (11, 8) => 5,                           // J8s
+            (10, 7) => 5,                           // T7s
+            (9, 7) => 5,                            // 97s
+            (8, 6) => 5,                            // 86s
+            (7, 5) => 5,                            // 75s
+            (6, 5) => 5,                            // 65s
+            (5, 4) => 5,                            // 54s
             // Tier 6
             (12, lo) if (2..=5).contains(&lo) => 6, // Q5s-Q2s
-            (11, 7) => 6,  // J7s
-            (10, 6) => 6,  // T6s
-            (9, 6) => 6,   // 96s
-            (8, 5) => 6,   // 85s
-            (7, 4) => 6,   // 74s
-            (6, 4) => 6,   // 64s
-            (5, 3) => 6,   // 53s
-            (4, 3) => 6,   // 43s
+            (11, 7) => 6,                           // J7s
+            (10, 6) => 6,                           // T6s
+            (9, 6) => 6,                            // 96s
+            (8, 5) => 6,                            // 85s
+            (7, 4) => 6,                            // 74s
+            (6, 4) => 6,                            // 64s
+            (5, 3) => 6,                            // 53s
+            (4, 3) => 6,                            // 43s
             // Tier 7
-            (_, _) => 7,   // remaining suited hands
+            (_, _) => 7, // remaining suited hands
         }
     } else {
         // Offsuit hands
@@ -209,22 +213,22 @@ pub fn preflop_tier(rank1: u8, rank2: u8, suited: bool) -> u8 {
             (12, 10) => 5, // QTo
             (11, 10) => 5, // JTo
             // Tier 6
-            (14, 9) => 6,  // A9o
-            (14, 8) => 6,  // A8o
-            (13, 9) => 6,  // K9o
-            (13, 8) => 6,  // K8o
-            (12, 9) => 6,  // Q9o
-            (11, 9) => 6,  // J9o
-            (10, 9) => 6,  // T9o
+            (14, 9) => 6, // A9o
+            (14, 8) => 6, // A8o
+            (13, 9) => 6, // K9o
+            (13, 8) => 6, // K8o
+            (12, 9) => 6, // Q9o
+            (11, 9) => 6, // J9o
+            (10, 9) => 6, // T9o
             // Tier 7
             (14, lo) if (2..=7).contains(&lo) => 7, // A7o-A2o
-            (13, 7) => 7,  // K7o
-            (12, 8) => 7,  // Q8o
-            (11, 8) => 7,  // J8o
-            (10, 8) => 7,  // T8o
-            (9, 8) => 7,   // 98o
+            (13, 7) => 7,                           // K7o
+            (12, 8) => 7,                           // Q8o
+            (11, 8) => 7,                           // J8o
+            (10, 8) => 7,                           // T8o
+            (9, 8) => 7,                            // 98o
             // Tier 8
-            (_, _) => 8,   // everything else
+            (_, _) => 8, // everything else
         }
     }
 }
@@ -307,12 +311,12 @@ mod tests {
         // Tier 0 hands should be strongest
         assert_eq!(preflop_tier(14, 14, false), 0); // AA
         assert_eq!(preflop_tier(13, 13, false), 0); // KK
-        assert_eq!(preflop_tier(14, 13, true), 0);  // AKs
+        assert_eq!(preflop_tier(14, 13, true), 0); // AKs
 
         // Tier 8 = trash
-        assert_eq!(preflop_tier(7, 2, false), 8);  // 72o
-        assert_eq!(preflop_tier(3, 2, false), 8);  // 32o
-        assert_eq!(preflop_tier(8, 2, false), 8);  // 82o
+        assert_eq!(preflop_tier(7, 2, false), 8); // 72o
+        assert_eq!(preflop_tier(3, 2, false), 8); // 32o
+        assert_eq!(preflop_tier(8, 2, false), 8); // 82o
 
         // Verify strength ordering maps correctly
         let aa = preflop_hand_strength(&[Card::new(14, 0), Card::new(14, 1)]);

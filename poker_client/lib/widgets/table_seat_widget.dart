@@ -52,7 +52,7 @@ class TableSeatWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isEmpty = player == null;
-    
+
     // Calculate responsive font sizes
     final usernameFontSize = (seatSize * 0.14).clamp(9.0, 13.0);
     final stackFontSize = (seatSize * 0.15).clamp(10.0, 14.0);
@@ -272,7 +272,10 @@ class TableSeatWidget extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('🏆', style: TextStyle(fontSize: seatSize * 0.2)),
+                          Text(
+                            '🏆',
+                            style: TextStyle(fontSize: seatSize * 0.2),
+                          ),
                           if (winningHand != null)
                             Text(
                               winningHand!,
@@ -386,7 +389,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   // Card dealing animation
   final Map<String, int> _dealingCardsTo =
       {}; // Map of player ID to card number (1 or 2) being dealt
-  final Map<String, bool> _cardAnimationStarted = {}; // Track if animation has started for player's current card
+  final Map<String, bool> _cardAnimationStarted =
+      {}; // Track if animation has started for player's current card
   String? _lastPhase;
 
   @override
@@ -493,7 +497,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               if (mounted) {
                 setState(() {
                   _dealingCardsTo[player.userId] = 2; // Second card
-                  _cardAnimationStarted[player.userId] = false; // Not started yet
+                  _cardAnimationStarted[player.userId] =
+                      false; // Not started yet
                 });
 
                 // Start the animation on next frame
@@ -506,14 +511,17 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                 });
 
                 // Remove from dealing set after animation completes
-                Future.delayed(Duration(milliseconds: cardAnimDuration + 10), () {
-                  if (mounted) {
-                    setState(() {
-                      _dealingCardsTo.remove(player.userId);
-                      _cardAnimationStarted.remove(player.userId);
-                    });
-                  }
-                });
+                Future.delayed(
+                  Duration(milliseconds: cardAnimDuration + 10),
+                  () {
+                    if (mounted) {
+                      setState(() {
+                        _dealingCardsTo.remove(player.userId);
+                        _cardAnimationStarted.remove(player.userId);
+                      });
+                    }
+                  },
+                );
               }
             },
           );
@@ -524,7 +532,17 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     _lastPhase = widget.gamePhase;
 
     // Don't trigger pot animation if one is already running
-    if (_animatingPot) return;
+    if (_animatingPot) {
+      // Table composition may change between frames (for example during
+      // tournament table consolidation), so drop stale winner entries.
+      _winnerPots.removeWhere(
+        (winnerId, _) => !widget.players.any((p) => p.userId == winnerId),
+      );
+      if (_winnerPots.isEmpty) {
+        _animatingPot = false;
+      }
+      return;
+    }
 
     // Detect all winners and their pot amounts
     final winners = widget.players
@@ -544,10 +562,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       if (newWinners.isNotEmpty) {
         print('Starting pot animation for ${newWinners.length} winner(s):');
         for (final entry in newWinners.entries) {
-          final winner = widget.players.firstWhere(
-            (p) => p.userId == entry.key,
-          );
-          print('  - ${winner.username}: \$${entry.value}');
+          final winner = widget.players
+              .where((p) => p.userId == entry.key)
+              .firstOrNull;
+          if (winner != null) {
+            print('  - ${winner.username}: \$${entry.value}');
+          }
         }
 
         // Schedule animation to start in next frame
@@ -588,12 +608,15 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         // Calculate pot center position - responsive to table size
         // Position pot above the center to avoid overlapping with community cards
         final potTopOffset = tableHeight * 0.25; // 25% from center
-        final centerOffset = Offset(tableWidth / 2, tableHeight / 2 - potTopOffset);
+        final centerOffset = Offset(
+          tableWidth / 2,
+          tableHeight / 2 - potTopOffset,
+        );
 
         // Track dimension changes to force animation update on significant resize
         final dimensionKey =
             '${(tableWidth / 10).round()}_${(tableHeight / 10).round()}';
-        
+
         // Calculate responsive border width
         final borderWidth = (tableWidth * 0.012).clamp(4.0, 10.0);
 
@@ -640,9 +663,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                 ..._winnerPots.entries.map((entry) {
                   final winnerId = entry.key;
                   final potAmount = entry.value;
-                  final winner = widget.players.firstWhere(
-                    (p) => p.userId == winnerId,
-                  );
+                  final winner = widget.players
+                      .where((p) => p.userId == winnerId)
+                      .firstOrNull;
+                  if (winner == null) {
+                    return const SizedBox.shrink();
+                  }
 
                   // Calculate winner seat position
                   final angle =
@@ -780,11 +806,16 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
     return Positioned(
       left: (tableWidth / 2) + x - (seatSize / 2),
-      top: (tableHeight / 2) + y - (seatSize + cardHeight + 8) / 2 - (tableHeight * 0.03),
+      top:
+          (tableHeight / 2) +
+          y -
+          (seatSize + cardHeight + 8) / 2 -
+          (tableHeight * 0.03),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: seatSize * 1.2,
-          maxHeight: seatSize + cardHeight + 50, // Extra space for badges and text
+          maxHeight:
+              seatSize + cardHeight + 50, // Extra space for badges and text
         ),
         child: TableSeatWidget(
           seatNumber: seatIndex,
@@ -804,7 +835,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           isSmallBlind: widget.smallBlindSeat == seatIndex,
           isBigBlind: widget.bigBlindSeat == seatIndex,
           smallBlind: widget.smallBlind,
-          isDealingCards: player != null && _dealingCardsTo.containsKey(player.userId),
+          isDealingCards:
+              player != null && _dealingCardsTo.containsKey(player.userId),
           seatSize: seatSize,
           cardWidth: cardWidth,
           cardHeight: cardHeight,
@@ -901,7 +933,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeOut,
       // Start from center, move to player position after animation starts
-      left: animationStarted 
+      left: animationStarted
           ? (tableWidth / 2) + targetX - (seatSize / 2) + cardOffset
           : (tableWidth / 2) - (cardWidth / 2),
       top: animationStarted

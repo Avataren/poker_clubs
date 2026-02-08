@@ -124,7 +124,13 @@ impl GameServer {
     }
 
     /// Update blinds on a table (for tournaments)
-    pub async fn update_table_blinds(&self, table_id: &str, small_blind: i64, big_blind: i64, ante: i64) {
+    pub async fn update_table_blinds(
+        &self,
+        table_id: &str,
+        small_blind: i64,
+        big_blind: i64,
+        ante: i64,
+    ) {
         let mut tables = self.tables.write().await;
         if let Some(table) = tables.get_mut(table_id) {
             table.update_blinds_and_ante(small_blind, big_blind, ante);
@@ -280,7 +286,9 @@ impl GameServer {
         table_ids
             .iter()
             .filter_map(|id| {
-                tables.get(id.as_str()).map(|t| (id.clone(), t.players.len()))
+                tables
+                    .get(id.as_str())
+                    .map(|t| (id.clone(), t.players.len()))
             })
             .collect()
     }

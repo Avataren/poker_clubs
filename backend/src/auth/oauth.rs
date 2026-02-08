@@ -123,10 +123,11 @@ pub async fn find_or_create_user(pool: &DbPool, profile: OAuthProfile) -> Result
         .map(|email| email.to_string());
 
     if let Some(email) = verified_email.as_ref() {
-        linked_user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE LOWER(email) = LOWER(?)")
-            .bind(email)
-            .fetch_optional(pool)
-            .await?;
+        linked_user =
+            sqlx::query_as::<_, User>("SELECT * FROM users WHERE LOWER(email) = LOWER(?)")
+                .bind(email)
+                .fetch_optional(pool)
+                .await?;
     }
 
     let user = match linked_user {
@@ -272,8 +273,8 @@ fn decode_with_jwks<T>(token: &str, jwks: &JwkSet) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let header = decode_header(token)
-        .map_err(|_| AppError::Auth("Invalid token header".to_string()))?;
+    let header =
+        decode_header(token).map_err(|_| AppError::Auth("Invalid token header".to_string()))?;
     let kid = header
         .kid
         .ok_or_else(|| AppError::Auth("Missing token key id".to_string()))?;
@@ -341,7 +342,11 @@ mod tests {
     async fn links_existing_user_by_verified_email() {
         let pool = crate::create_test_db().await;
         let password_hash = bcrypt::hash("Password1", bcrypt::DEFAULT_COST).unwrap();
-        let existing = User::new("player".to_string(), "linked@example.com".to_string(), password_hash);
+        let existing = User::new(
+            "player".to_string(),
+            "linked@example.com".to_string(),
+            password_hash,
+        );
         sqlx::query("INSERT INTO users (id, username, email, password_hash, created_at, is_bot, auth_provider) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(&existing.id)
             .bind(&existing.username)

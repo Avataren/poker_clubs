@@ -278,9 +278,7 @@ impl TournamentContext {
         }
 
         // Wrap refunds + status update in a transaction
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&*self.pool)
-            .await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&*self.pool).await?;
 
         // Refund all registered players first
         for registration in &registrations {
@@ -319,9 +317,7 @@ impl TournamentContext {
             return Err(e.into());
         }
 
-        sqlx::query("COMMIT")
-            .execute(&*self.pool)
-            .await?;
+        sqlx::query("COMMIT").execute(&*self.pool).await?;
 
         if let Some(state) = self.tournaments.write().await.get_mut(&tournament.id) {
             state.tournament = tournament.clone();
@@ -762,7 +758,8 @@ impl TournamentContext {
 
         // Get current blind level
         let blind_levels = self.load_blind_levels(&tournament.id).await?;
-        let level_idx = (tournament.current_blind_level as usize).min(blind_levels.len().saturating_sub(1));
+        let level_idx =
+            (tournament.current_blind_level as usize).min(blind_levels.len().saturating_sub(1));
         let current_level = blind_levels.get(level_idx).ok_or_else(|| {
             AppError::BadRequest(format!(
                 "No blind levels found for tournament {}",
@@ -937,7 +934,8 @@ impl TournamentContext {
 
         // Get current blind level
         let blind_levels = self.load_blind_levels(&tournament.id).await?;
-        let level_idx = (tournament.current_blind_level as usize).min(blind_levels.len().saturating_sub(1));
+        let level_idx =
+            (tournament.current_blind_level as usize).min(blind_levels.len().saturating_sub(1));
         let current_level = blind_levels.get(level_idx).ok_or_else(|| {
             AppError::BadRequest(format!(
                 "No blind levels found for tournament {}",
@@ -996,7 +994,11 @@ impl TournamentContext {
                 .await;
 
             // Seat players at this table (balanced: first `extra` tables get one more)
-            let seats_at_this_table = if table_num < extra { base_per_table + 1 } else { base_per_table };
+            let seats_at_this_table = if table_num < extra {
+                base_per_table + 1
+            } else {
+                base_per_table
+            };
             let mut seat = 0;
             while player_index < player_count && seat < seats_at_this_table {
                 let registration = &registrations[player_index];
@@ -1109,7 +1111,9 @@ impl TournamentContext {
             if status == "finished" || status == "cancelled" {
                 // Check finished_at timestamp
                 if let Some(ref finished_str) = state.tournament.finished_at {
-                    if let Ok(finished_at) = NaiveDateTime::parse_from_str(finished_str, "%Y-%m-%d %H:%M:%S") {
+                    if let Ok(finished_at) =
+                        NaiveDateTime::parse_from_str(finished_str, "%Y-%m-%d %H:%M:%S")
+                    {
                         let finished_utc = finished_at.and_utc();
                         if now - finished_utc > one_hour {
                             tracing::info!(

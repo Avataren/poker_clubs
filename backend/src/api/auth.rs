@@ -73,7 +73,8 @@ async fn register(
     // Prevent users from registering with bot-like usernames
     if req.username.starts_with("Bot_") || req.username.to_lowercase().starts_with("bot_") {
         return Err(AppError::Validation(
-            "Username cannot start with 'Bot_' - this prefix is reserved for system bots".to_string(),
+            "Username cannot start with 'Bot_' - this prefix is reserved for system bots"
+                .to_string(),
         ));
     }
 
@@ -135,11 +136,10 @@ async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>> {
     // Find user by username (case-insensitive)
-    let user: Option<User> =
-        sqlx::query_as("SELECT * FROM users WHERE LOWER(username) = LOWER(?)")
-            .bind(&req.username)
-            .fetch_optional(&state.pool)
-            .await?;
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE LOWER(username) = LOWER(?)")
+        .bind(&req.username)
+        .fetch_optional(&state.pool)
+        .await?;
 
     // Timing-safe: always perform bcrypt::verify even when user not found
     let (user, valid) = match user {
@@ -149,10 +149,9 @@ async fn login(
                     "Use Google/Apple login for this account".to_string(),
                 ));
             }
-            let ok = bcrypt::verify(req.password.as_bytes(), &u.password_hash)
-                .map_err(|e| {
-                    AppError::Internal(anyhow::anyhow!("Failed to verify password: {}", e))
-                })?;
+            let ok = bcrypt::verify(req.password.as_bytes(), &u.password_hash).map_err(|e| {
+                AppError::Internal(anyhow::anyhow!("Failed to verify password: {}", e))
+            })?;
             (Some(u), ok)
         }
         None => {
@@ -192,9 +191,7 @@ async fn google_login(
     Json(req): Json<OAuthLoginRequest>,
 ) -> Result<Json<AuthResponse>> {
     if !state.oauth_config.google_enabled() {
-        return Err(AppError::Auth(
-            "Google login is not configured".to_string(),
-        ));
+        return Err(AppError::Auth("Google login is not configured".to_string()));
     }
 
     let profile =
@@ -218,9 +215,7 @@ async fn apple_login(
     Json(req): Json<OAuthLoginRequest>,
 ) -> Result<Json<AuthResponse>> {
     if !state.oauth_config.apple_enabled() {
-        return Err(AppError::Auth(
-            "Apple login is not configured".to_string(),
-        ));
+        return Err(AppError::Auth("Apple login is not configured".to_string()));
     }
 
     let profile =

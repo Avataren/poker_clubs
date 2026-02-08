@@ -134,11 +134,7 @@ impl fmt::Display for GameError {
                 )
             }
             GameError::InvalidPhaseTransition { from, to } => {
-                write!(
-                    f,
-                    "Invalid phase transition from {} to {}",
-                    from, to
-                )
+                write!(f, "Invalid phase transition from {} to {}", from, to)
             }
             GameError::GameInProgress => {
                 write!(f, "Cannot perform action while game is in progress")

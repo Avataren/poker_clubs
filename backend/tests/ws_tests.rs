@@ -11,12 +11,11 @@ use poker_server::{
 use serde_json::json;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio::time::{sleep, Duration};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-type WsStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Read next text message from WebSocket, skipping Ping frames (auto-replies with Pong).
 async fn recv_text(ws: &mut WsStream) -> Message {
@@ -138,12 +137,10 @@ async fn spawn_server_with_two_users() -> (SocketAddr, String, String) {
     let base_url = format!("http://{}", addr);
 
     // Register first user
-    let token1 =
-        register_and_get_token(&client, &base_url, "player1", "player1@example.com").await;
+    let token1 = register_and_get_token(&client, &base_url, "player1", "player1@example.com").await;
 
     // Register second user
-    let token2 =
-        register_and_get_token(&client, &base_url, "player2", "player2@example.com").await;
+    let token2 = register_and_get_token(&client, &base_url, "player2", "player2@example.com").await;
 
     (addr, token1, token2)
 }
@@ -718,7 +715,9 @@ impl TwoPlayerGame {
         // Consume Connected (skip any Ping frames)
         loop {
             match ws1.next().await.unwrap().unwrap() {
-                Message::Ping(data) => { let _ = ws1_sink.send(Message::Pong(data)).await; }
+                Message::Ping(data) => {
+                    let _ = ws1_sink.send(Message::Pong(data)).await;
+                }
                 Message::Pong(_) => {}
                 _ => break,
             }
@@ -731,7 +730,9 @@ impl TwoPlayerGame {
         // Consume Connected (skip any Ping frames)
         loop {
             match ws2.next().await.unwrap().unwrap() {
-                Message::Ping(data) => { let _ = ws2_sink.send(Message::Pong(data)).await; }
+                Message::Ping(data) => {
+                    let _ = ws2_sink.send(Message::Pong(data)).await;
+                }
                 Message::Pong(_) => {}
                 _ => break,
             }
@@ -786,10 +787,15 @@ impl TwoPlayerGame {
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() { return None; }
+            if remaining.is_zero() {
+                return None;
+            }
             match tokio::time::timeout(remaining, self.ws1.next()).await {
                 Ok(Some(Ok(Message::Text(text)))) => return serde_json::from_str(&text).ok(),
-                Ok(Some(Ok(Message::Ping(data)))) => { let _ = self.ws1_sink.send(Message::Pong(data)).await; continue; }
+                Ok(Some(Ok(Message::Ping(data)))) => {
+                    let _ = self.ws1_sink.send(Message::Pong(data)).await;
+                    continue;
+                }
                 Ok(Some(Ok(Message::Pong(_)))) => continue,
                 _ => return None,
             }
@@ -800,10 +806,15 @@ impl TwoPlayerGame {
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() { return None; }
+            if remaining.is_zero() {
+                return None;
+            }
             match tokio::time::timeout(remaining, self.ws2.next()).await {
                 Ok(Some(Ok(Message::Text(text)))) => return serde_json::from_str(&text).ok(),
-                Ok(Some(Ok(Message::Ping(data)))) => { let _ = self.ws2_sink.send(Message::Pong(data)).await; continue; }
+                Ok(Some(Ok(Message::Ping(data)))) => {
+                    let _ = self.ws2_sink.send(Message::Pong(data)).await;
+                    continue;
+                }
                 Ok(Some(Ok(Message::Pong(_)))) => continue,
                 _ => return None,
             }
@@ -1425,7 +1436,9 @@ async fn test_ws_unequal_allin_side_pots_conserve_chips() {
     // Consume Connected (skip any Ping frames)
     loop {
         match ws1.next().await.unwrap().unwrap() {
-            Message::Ping(data) => { let _ = ws1_sink.send(Message::Pong(data)).await; }
+            Message::Ping(data) => {
+                let _ = ws1_sink.send(Message::Pong(data)).await;
+            }
             Message::Pong(_) => {}
             _ => break,
         }
@@ -1437,7 +1450,9 @@ async fn test_ws_unequal_allin_side_pots_conserve_chips() {
     // Consume Connected (skip any Ping frames)
     loop {
         match ws2.next().await.unwrap().unwrap() {
-            Message::Ping(data) => { let _ = ws2_sink.send(Message::Pong(data)).await; }
+            Message::Ping(data) => {
+                let _ = ws2_sink.send(Message::Pong(data)).await;
+            }
             Message::Pong(_) => {}
             _ => break,
         }
@@ -1529,15 +1544,14 @@ async fn test_ws_unequal_allin_side_pots_conserve_chips() {
 
     // Chips must be conserved regardless of who won
     let stack_total: i64 = state.players.iter().map(|p| p.stack).sum();
-    let final_total: i64 = if matches!(state.phase, GamePhase::Showdown)
-        || state.pot_total >= total_chips
-    {
-        // During showdown, payouts have already been applied to stacks while the pot
-        // remains visible for animation. Avoid double-counting the pot.
-        stack_total
-    } else {
-        stack_total + state.pot_total
-    };
+    let final_total: i64 =
+        if matches!(state.phase, GamePhase::Showdown) || state.pot_total >= total_chips {
+            // During showdown, payouts have already been applied to stacks while the pot
+            // remains visible for animation. Avoid double-counting the pot.
+            stack_total
+        } else {
+            stack_total + state.pot_total
+        };
     assert_eq!(
         final_total, total_chips,
         "Chips must be conserved with unequal all-ins: initial={}, final={}",

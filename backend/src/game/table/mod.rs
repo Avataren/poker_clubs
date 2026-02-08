@@ -1,13 +1,13 @@
-mod player_mgmt;
+mod actions;
 mod blinds;
 mod dealing;
-mod actions;
 mod phase;
+mod player_mgmt;
 mod showdown;
 mod state;
 mod tournament;
 
-pub use state::{PublicPot, PublicTableState, PublicPlayerState, TournamentInfo};
+pub use state::{PublicPlayerState, PublicPot, PublicTableState, TournamentInfo};
 
 use super::{
     constants::{
@@ -55,7 +55,9 @@ impl GamePhase {
         } else {
             tracing::error!(
                 "Invalid phase transition: {:?} -> {:?} (valid: {:?})",
-                self, target, self.valid_transitions()
+                self,
+                target,
+                self.valid_transitions()
             );
             Err(GameError::InvalidPhaseTransition {
                 from: format!("{:?}", self),
@@ -83,8 +85,8 @@ pub struct PokerTable {
     pub pot: PotManager,
     pub current_bet: i64,
     pub min_raise: i64,
-    pub ante: i64,  // Ante amount (0 if no ante)
-    pub raises_this_round: usize,  // Number of raises in the current betting round (for fixed-limit)
+    pub ante: i64,                // Ante amount (0 if no ante)
+    pub raises_this_round: usize, // Number of raises in the current betting round (for fixed-limit)
     pub last_phase_change_time: Option<u64>,
     pub street_delay_ms: u64,          // Delay between flop/turn/river
     pub showdown_delay_ms: u64,        // Delay to show results
@@ -393,7 +395,9 @@ impl PokerTable {
             );
             idx
         } else {
-            tracing::warn!("first_eligible_player_for_button: No eligible players found! Returning 0");
+            tracing::warn!(
+                "first_eligible_player_for_button: No eligible players found! Returning 0"
+            );
             0 // Fallback
         }
     }
@@ -604,9 +608,15 @@ mod tests {
         let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
 
         // Add 3 players
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
-        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000)
+            .unwrap();
 
         // Table should have started the hand automatically
         assert_eq!(table.phase, GamePhase::PreFlop);
@@ -635,14 +645,32 @@ mod tests {
 
         // Add 3 players at seats 0, 1, 2
         println!("Adding players...");
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
-        println!("After adding p1, phase={:?}, players.len()={}", table.phase, table.players.len());
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        println!(
+            "After adding p1, phase={:?}, players.len()={}",
+            table.phase,
+            table.players.len()
+        );
 
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
-        println!("After adding p2, phase={:?}, players.len()={}", table.phase, table.players.len());
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        println!(
+            "After adding p2, phase={:?}, players.len()={}",
+            table.phase,
+            table.players.len()
+        );
 
-        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
-        println!("After adding p3, phase={:?}, players.len()={}", table.phase, table.players.len());
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000)
+            .unwrap();
+        println!(
+            "After adding p3, phase={:?}, players.len()={}",
+            table.phase,
+            table.players.len()
+        );
 
         // Game should NOT have auto-started (SNG format)
         assert_eq!(table.phase, GamePhase::Waiting);
@@ -656,22 +684,42 @@ mod tests {
         // Debug: print all players and their bets
         println!("Dealer at array index: {}", table.dealer_seat);
         for (idx, player) in table.players.iter().enumerate() {
-            println!("Player[{}]: name={}, seat={}, bet={}, stack={}",
-                idx, player.username, player.seat, player.current_bet, player.stack);
+            println!(
+                "Player[{}]: name={}, seat={}, bet={}, stack={}",
+                idx, player.username, player.seat, player.current_bet, player.stack
+            );
         }
 
         // Dealer at array position 0, so:
         // - SB should be at array position 1 (Player 2)
         // - BB should be at array position 2 (Player 3)
         assert_eq!(table.dealer_seat, 0);
-        assert_eq!(table.players[1].current_bet, 50, "Player at index 1 should have posted SB");
-        assert_eq!(table.players[2].current_bet, 100, "Player at index 2 should have posted BB");
-        assert_eq!(table.players[0].current_bet, 0, "Dealer at index 0 should not have posted");
+        assert_eq!(
+            table.players[1].current_bet, 50,
+            "Player at index 1 should have posted SB"
+        );
+        assert_eq!(
+            table.players[2].current_bet, 100,
+            "Player at index 2 should have posted BB"
+        );
+        assert_eq!(
+            table.players[0].current_bet, 0,
+            "Dealer at index 0 should not have posted"
+        );
 
         // Verify stacks are reduced correctly
-        assert_eq!(table.players[0].stack, 1000, "Dealer stack should be unchanged");
-        assert_eq!(table.players[1].stack, 950, "SB stack should be reduced by 50");
-        assert_eq!(table.players[2].stack, 900, "BB stack should be reduced by 100");
+        assert_eq!(
+            table.players[0].stack, 1000,
+            "Dealer stack should be unchanged"
+        );
+        assert_eq!(
+            table.players[1].stack, 950,
+            "SB stack should be reduced by 50"
+        );
+        assert_eq!(
+            table.players[2].stack, 900,
+            "BB stack should be reduced by 100"
+        );
     }
 
     #[test]
@@ -691,10 +739,18 @@ mod tests {
         );
 
         // Add 4 players
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
-        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
-        table.take_seat("p4".to_string(), "Player 4".to_string(), 3, 1000).unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000)
+            .unwrap();
+        table
+            .take_seat("p4".to_string(), "Player 4".to_string(), 3, 1000)
+            .unwrap();
 
         // Force start
         table.force_start_hand();
@@ -713,12 +769,24 @@ mod tests {
 
         // Add exactly 2 players
         println!("Adding first player...");
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
-        println!("Phase after p1: {:?}, players.len()={}", table.phase, table.players.len());
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        println!(
+            "Phase after p1: {:?}, players.len()={}",
+            table.phase,
+            table.players.len()
+        );
 
         println!("Adding second player...");
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
-        println!("Phase after p2: {:?}, players.len()={}", table.phase, table.players.len());
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        println!(
+            "Phase after p2: {:?}, players.len()={}",
+            table.phase,
+            table.players.len()
+        );
 
         // Game should have started
         assert_eq!(table.phase, GamePhase::PreFlop);
@@ -726,8 +794,10 @@ mod tests {
 
         println!("Dealer at index: {}", table.dealer_seat);
         for (idx, p) in table.players.iter().enumerate() {
-            println!("Player[{}]: seat={}, name={}, bet={}, stack={}",
-                idx, p.seat, p.username, p.current_bet, p.stack);
+            println!(
+                "Player[{}]: seat={}, name={}, bet={}, stack={}",
+                idx, p.seat, p.username, p.current_bet, p.stack
+            );
         }
 
         // In heads-up: dealer posts SB, other player posts BB
@@ -736,8 +806,14 @@ mod tests {
 
         // Dealer (index 0) should post SB (50)
         // Non-dealer (index 1) should post BB (100)
-        assert_eq!(table.players[0].current_bet, 50, "Dealer should post SB in heads-up");
-        assert_eq!(table.players[1].current_bet, 100, "Non-dealer should post BB in heads-up");
+        assert_eq!(
+            table.players[0].current_bet, 50,
+            "Dealer should post SB in heads-up"
+        );
+        assert_eq!(
+            table.players[1].current_bet, 100,
+            "Non-dealer should post BB in heads-up"
+        );
     }
 
     #[test]
@@ -746,18 +822,31 @@ mod tests {
         let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
 
         // Add 2 players
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
 
         // Dealer at position 0
         assert_eq!(table.dealer_seat, 0);
 
         // In heads-up: dealer (pos 0) posts SB, other player (pos 1) posts BB
-        assert_eq!(table.players[0].current_bet, 50, "Dealer should post SB in heads-up");
-        assert_eq!(table.players[1].current_bet, 100, "Non-dealer should post BB in heads-up");
+        assert_eq!(
+            table.players[0].current_bet, 50,
+            "Dealer should post SB in heads-up"
+        );
+        assert_eq!(
+            table.players[1].current_bet, 100,
+            "Non-dealer should post BB in heads-up"
+        );
 
         // In heads-up, dealer acts first pre-flop (after posting SB)
-        assert_eq!(table.current_player, 0, "Dealer should act first in heads-up");
+        assert_eq!(
+            table.current_player, 0,
+            "Dealer should act first in heads-up"
+        );
     }
 
     #[test]
@@ -778,12 +867,9 @@ mod tests {
 
         // Add 9 players
         for i in 0..9 {
-            table.take_seat(
-                format!("p{}", i),
-                format!("Player {}", i + 1),
-                i,
-                1000
-            ).unwrap();
+            table
+                .take_seat(format!("p{}", i), format!("Player {}", i + 1), i, 1000)
+                .unwrap();
         }
 
         // Force start
@@ -793,13 +879,23 @@ mod tests {
         assert_eq!(table.dealer_seat, 0);
 
         // SB at position 1, BB at position 2
-        assert_eq!(table.players[1].current_bet, 50, "Position 1 should post SB");
-        assert_eq!(table.players[2].current_bet, 100, "Position 2 should post BB");
+        assert_eq!(
+            table.players[1].current_bet, 50,
+            "Position 1 should post SB"
+        );
+        assert_eq!(
+            table.players[2].current_bet, 100,
+            "Position 2 should post BB"
+        );
 
         // Verify only SB and BB have posted
         assert_eq!(table.players[0].current_bet, 0);
         for i in 3..9 {
-            assert_eq!(table.players[i].current_bet, 0, "Position {} should not have posted", i);
+            assert_eq!(
+                table.players[i].current_bet, 0,
+                "Position {} should not have posted",
+                i
+            );
         }
 
         // First to act should be position 3
@@ -807,7 +903,12 @@ mod tests {
 
         // All players should have cards
         for i in 0..9 {
-            assert_eq!(table.players[i].hole_cards.len(), 2, "Player {} should have 2 cards", i);
+            assert_eq!(
+                table.players[i].hole_cards.len(),
+                2,
+                "Player {} should have 2 cards",
+                i
+            );
         }
     }
 
@@ -828,17 +929,29 @@ mod tests {
         );
 
         // Add 3 players
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000).unwrap();
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000).unwrap();
-        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000).unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000)
+            .unwrap();
 
         // Force start first hand
         table.force_start_hand();
 
         // First hand - dealer at position 0
         assert_eq!(table.dealer_seat, 0);
-        assert_eq!(table.players[1].current_bet, 50, "First hand: Position 1 should post SB");
-        assert_eq!(table.players[2].current_bet, 100, "First hand: Position 2 should post BB");
+        assert_eq!(
+            table.players[1].current_bet, 50,
+            "First hand: Position 1 should post SB"
+        );
+        assert_eq!(
+            table.players[2].current_bet, 100,
+            "First hand: Position 2 should post BB"
+        );
 
         // Fast-forward to showdown and start new hand
         table.phase = GamePhase::Showdown;
@@ -846,8 +959,14 @@ mod tests {
 
         // Second hand - dealer should move to position 1
         assert_eq!(table.dealer_seat, 1);
-        assert_eq!(table.players[2].current_bet, 50, "Second hand: Position 2 should now post SB");
-        assert_eq!(table.players[0].current_bet, 100, "Second hand: Position 0 should now post BB");
+        assert_eq!(
+            table.players[2].current_bet, 50,
+            "Second hand: Position 2 should now post SB"
+        );
+        assert_eq!(
+            table.players[0].current_bet, 100,
+            "Second hand: Position 0 should now post BB"
+        );
     }
 
     #[test]
@@ -882,12 +1001,20 @@ mod tests {
         let dealer_seat_num = table.players[table.dealer_seat].seat;
         let sb_idx = table.next_player_for_blind(table.dealer_seat);
         let bb_idx = table.next_player_for_blind(sb_idx);
-        assert_eq!(dealer_seat_num, 1, "First dealer should be lowest eligible seat");
-        assert_eq!(table.players[sb_idx].seat, 5, "SB should be next clockwise seat");
-        assert_eq!(table.players[bb_idx].seat, 8, "BB should be next clockwise seat");
         assert_eq!(
-            table.players[table.current_player].seat,
-            1,
+            dealer_seat_num, 1,
+            "First dealer should be lowest eligible seat"
+        );
+        assert_eq!(
+            table.players[sb_idx].seat, 5,
+            "SB should be next clockwise seat"
+        );
+        assert_eq!(
+            table.players[bb_idx].seat, 8,
+            "BB should be next clockwise seat"
+        );
+        assert_eq!(
+            table.players[table.current_player].seat, 1,
             "First to act preflop should be seat after BB"
         );
 
@@ -911,6 +1038,46 @@ mod tests {
     }
 
     #[test]
+    fn test_waiting_between_hands_still_rotates_dealer_button() {
+        // Regression: MTT flow transitions Showdown -> Waiting -> start_new_hand.
+        // Dealer must rotate on this Waiting path, not reset to first seat each hand.
+        use crate::game::format::SitAndGo;
+
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000)
+            .unwrap();
+
+        table.force_start_hand();
+        assert_eq!(table.players[table.dealer_seat].seat, 0);
+
+        // Simulate showdown completion entering Waiting with a timestamp.
+        table.phase = GamePhase::Waiting;
+        table.last_phase_change_time = Some(1);
+
+        table.start_new_hand();
+
+        // Dealer should advance to next seat, not reset to seat 0.
+        assert_eq!(table.players[table.dealer_seat].seat, 1);
+    }
+
+    #[test]
     fn test_all_players_receive_hole_cards() {
         // Test that all players receive the correct number of hole cards
         use crate::game::format::SitAndGo;
@@ -928,12 +1095,9 @@ mod tests {
 
         // Add 5 players
         for i in 0..5 {
-            table.take_seat(
-                format!("p{}", i),
-                format!("Player {}", i + 1),
-                i,
-                1000
-            ).unwrap();
+            table
+                .take_seat(format!("p{}", i), format!("Player {}", i + 1), i, 1000)
+                .unwrap();
         }
 
         // Force start
@@ -953,7 +1117,11 @@ mod tests {
         let mut all_cards = Vec::new();
         for player in &table.players {
             for card in &player.hole_cards {
-                assert!(!all_cards.contains(card), "Duplicate card dealt: {:?}", card);
+                assert!(
+                    !all_cards.contains(card),
+                    "Duplicate card dealt: {:?}",
+                    card
+                );
                 all_cards.push(card.clone());
             }
         }
@@ -976,9 +1144,15 @@ mod tests {
             sng_format,
         );
 
-        table.take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000).unwrap();
-        table.take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000).unwrap();
-        table.take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000).unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000)
+            .unwrap();
         table.force_start_hand();
 
         assert_eq!(table.phase, GamePhase::PreFlop);
@@ -992,7 +1166,11 @@ mod tests {
         // current_player should be at position 0 (after BB)
         let current_user = table.players[table.current_player].user_id.clone();
         let result = table.handle_action(&current_user, PlayerAction::Raise(100));
-        assert!(result.is_ok(), "Raising exactly small_bet should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Raising exactly small_bet should succeed: {:?}",
+            result
+        );
         assert_eq!(table.raises_this_round, 1);
     }
 
@@ -1003,7 +1181,13 @@ mod tests {
         // Try raising 200 (big_bet) on PreFlop -- should fail, need small_bet=100
         let result = table.handle_action(&current_user, PlayerAction::Raise(200));
         assert!(
-            matches!(result, Err(GameError::RaiseNotExact { required: 100, attempted: 200 })),
+            matches!(
+                result,
+                Err(GameError::RaiseNotExact {
+                    required: 100,
+                    attempted: 200
+                })
+            ),
             "Wrong raise amount should fail: {:?}",
             result
         );
@@ -1016,7 +1200,12 @@ mod tests {
         for i in 0..4 {
             let current_user = table.players[table.current_player].user_id.clone();
             let result = table.handle_action(&current_user, PlayerAction::Raise(100));
-            assert!(result.is_ok(), "Raise {} should succeed: {:?}", i + 1, result);
+            assert!(
+                result.is_ok(),
+                "Raise {} should succeed: {:?}",
+                i + 1,
+                result
+            );
         }
         assert_eq!(table.raises_this_round, 4);
 
@@ -1035,7 +1224,9 @@ mod tests {
         let mut table = setup_fixed_limit_table();
         // Raise once on PreFlop
         let user = table.players[table.current_player].user_id.clone();
-        table.handle_action(&user, PlayerAction::Raise(100)).unwrap();
+        table
+            .handle_action(&user, PlayerAction::Raise(100))
+            .unwrap();
         assert_eq!(table.raises_this_round, 1);
 
         // Have remaining players call to advance to Flop
@@ -1081,12 +1272,22 @@ mod tests {
         // small_bet should fail
         let result = table.handle_action(&user, PlayerAction::Raise(100));
         assert!(
-            matches!(result, Err(GameError::RaiseNotExact { required: 200, attempted: 100 })),
+            matches!(
+                result,
+                Err(GameError::RaiseNotExact {
+                    required: 200,
+                    attempted: 100
+                })
+            ),
             "small_bet on turn should fail: {:?}",
             result
         );
         // big_bet should succeed
         let result = table.handle_action(&user, PlayerAction::Raise(200));
-        assert!(result.is_ok(), "big_bet on turn should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "big_bet on turn should succeed: {:?}",
+            result
+        );
     }
 }

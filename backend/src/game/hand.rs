@@ -929,7 +929,7 @@ mod tests {
         // Pairs don't qualify for low - need 5 unique ranks
         let hole_cards = vec![
             Card::new(2, 0),
-            Card::new(2, 1),  // Pair of 2s
+            Card::new(2, 1), // Pair of 2s
             Card::new(10, 2),
             Card::new(11, 3),
         ];

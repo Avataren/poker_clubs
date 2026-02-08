@@ -5,11 +5,7 @@ mod tournament_ops;
 
 pub use game_server::GameServer;
 
-use crate::{
-    game::player::PlayerState,
-    ws::messages::ServerMessage,
-    ws::rate_limit::RateLimiter,
-};
+use crate::{game::player::PlayerState, ws::messages::ServerMessage, ws::rate_limit::RateLimiter};
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -340,6 +336,8 @@ async fn handle_socket(
 mod tests {
     use super::GameServer;
     use crate::auth::JwtManager;
+    use crate::game::format::MultiTableTournament;
+    use crate::game::variant::TexasHoldem;
     use crate::ws::messages::ServerMessage;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -418,5 +416,89 @@ mod tests {
             }
             other => panic!("unexpected message: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn tournament_move_rejects_mid_hand_player_transfer() {
+        let pool = crate::create_test_db().await;
+        let jwt_manager = Arc::new(JwtManager::new("test-secret".to_string()));
+        let server = GameServer::new(jwt_manager, Arc::new(pool));
+        let source_table = format!("table-{}", Uuid::new_v4());
+        let dest_table = format!("table-{}", Uuid::new_v4());
+        let moved_user = Uuid::new_v4().to_string();
+
+        let table_format = || {
+            Box::new(MultiTableTournament::new(
+                "Move Test".to_string(),
+                100,
+                1500,
+                300,
+            ))
+        };
+        server
+            .create_table_with_options(
+                source_table.clone(),
+                "Source".to_string(),
+                50,
+                100,
+                Box::new(TexasHoldem),
+                table_format(),
+            )
+            .await;
+        server
+            .create_table_with_options(
+                dest_table.clone(),
+                "Destination".to_string(),
+                50,
+                100,
+                Box::new(TexasHoldem),
+                table_format(),
+            )
+            .await;
+
+        server
+            .add_player_to_table(
+                &source_table,
+                moved_user.clone(),
+                "moved".to_string(),
+                0,
+                1000,
+            )
+            .await
+            .unwrap();
+        server
+            .add_player_to_table(
+                &source_table,
+                Uuid::new_v4().to_string(),
+                "other".to_string(),
+                1,
+                1000,
+            )
+            .await
+            .unwrap();
+        server
+            .add_player_to_table(
+                &dest_table,
+                Uuid::new_v4().to_string(),
+                "dest".to_string(),
+                0,
+                1000,
+            )
+            .await
+            .unwrap();
+
+        server.force_start_table_hand(&source_table).await;
+        assert!(server.is_table_mid_hand(&source_table).await);
+
+        let err = server
+            .move_tournament_player(&source_table, &dest_table, &moved_user)
+            .await
+            .expect_err("move should be rejected while source table is mid-hand");
+        assert!(err.contains("hand is in progress"));
+
+        let source_players = server.get_all_player_ids_at_table(&source_table).await;
+        let dest_players = server.get_all_player_ids_at_table(&dest_table).await;
+        assert!(source_players.contains(&moved_user));
+        assert!(!dest_players.contains(&moved_user));
     }
 }

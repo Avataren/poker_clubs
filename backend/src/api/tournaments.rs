@@ -153,7 +153,10 @@ pub fn router() -> Router<Arc<TournamentAppState>> {
         .route("/sng", post(create_sng))
         .route("/mtt", post(create_mtt))
         .route("/club/:club_id", get(list_club_tournaments))
-        .route("/:id", get(get_tournament_details).delete(delete_tournament))
+        .route(
+            "/:id",
+            get(get_tournament_details).delete(delete_tournament),
+        )
         .route("/:id/cancel", delete(cancel_tournament))
         // Registration
         .route("/:id/register", post(register_for_tournament))
@@ -188,10 +191,14 @@ async fn create_sng(
 
     // Input validation
     if req.buy_in < 0 {
-        return Err(AppError::Validation("Buy-in must be non-negative".to_string()));
+        return Err(AppError::Validation(
+            "Buy-in must be non-negative".to_string(),
+        ));
     }
     if req.starting_stack <= 0 {
-        return Err(AppError::Validation("Starting stack must be positive".to_string()));
+        return Err(AppError::Validation(
+            "Starting stack must be positive".to_string(),
+        ));
     }
 
     let config = SngConfig {
@@ -245,18 +252,25 @@ async fn create_mtt(
 
     // Input validation
     if req.buy_in < 0 {
-        return Err(AppError::Validation("Buy-in must be non-negative".to_string()));
+        return Err(AppError::Validation(
+            "Buy-in must be non-negative".to_string(),
+        ));
     }
     if req.starting_stack <= 0 {
-        return Err(AppError::Validation("Starting stack must be positive".to_string()));
+        return Err(AppError::Validation(
+            "Starting stack must be positive".to_string(),
+        ));
     }
 
     // Validate scheduled_start is not in the past
     if let Some(ref scheduled_start) = req.scheduled_start {
-        let parsed = DateTime::parse_from_rfc3339(scheduled_start)
-            .map_err(|_| AppError::Validation("Invalid scheduled_start format (expected RFC3339)".to_string()))?;
+        let parsed = DateTime::parse_from_rfc3339(scheduled_start).map_err(|_| {
+            AppError::Validation("Invalid scheduled_start format (expected RFC3339)".to_string())
+        })?;
         if parsed.with_timezone(&Utc) < Utc::now() {
-            return Err(AppError::Validation("Scheduled start cannot be in the past".to_string()));
+            return Err(AppError::Validation(
+                "Scheduled start cannot be in the past".to_string(),
+            ));
         }
     }
 

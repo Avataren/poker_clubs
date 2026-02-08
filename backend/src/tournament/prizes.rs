@@ -235,9 +235,11 @@ mod tests {
             let prizes = structure.calculate_all_prizes(pool);
             let total: i64 = prizes.iter().sum();
             assert_eq!(
-                total, pool,
+                total,
+                pool,
                 "Prize pool {} should equal sum of prizes {} for {} positions",
-                pool, total,
+                pool,
+                total,
                 structure.paid_positions()
             );
 
@@ -247,9 +249,11 @@ mod tests {
                 sum_via_position += structure.prize_for_position(pos, pool);
             }
             assert_eq!(
-                sum_via_position, pool,
+                sum_via_position,
+                pool,
                 "Prize pool {} should equal sum via prize_for_position {} for {} positions",
-                pool, sum_via_position,
+                pool,
+                sum_via_position,
                 structure.paid_positions()
             );
         }

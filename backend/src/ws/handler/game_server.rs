@@ -33,7 +33,8 @@ pub struct GameServer {
     // Global broadcast - for new clubs, global events
     pub(super) global_broadcast: broadcast::Sender<GlobalBroadcast>,
     // Tournament broadcasts scoped by club
-    pub(super) tournament_broadcasts: Arc<RwLock<HashMap<String, broadcast::Sender<ServerMessage>>>>,
+    pub(super) tournament_broadcasts:
+        Arc<RwLock<HashMap<String, broadcast::Sender<ServerMessage>>>>,
     // Bot manager - tracks server-side bot players
     pub(super) bot_manager: Arc<RwLock<BotManager>>,
     // Track disconnected players awaiting reconnection
@@ -169,7 +170,10 @@ impl GameServer {
         }
     }
 
-    pub(super) async fn get_or_create_broadcast(&self, table_id: &str) -> broadcast::Receiver<TableBroadcast> {
+    pub(super) async fn get_or_create_broadcast(
+        &self,
+        table_id: &str,
+    ) -> broadcast::Receiver<TableBroadcast> {
         let mut broadcasts = self.table_broadcasts.write().await;
         let tx = broadcasts.entry(table_id.to_string()).or_insert_with(|| {
             let (tx, _rx) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
@@ -214,7 +218,13 @@ impl GameServer {
         .bind(tournament.current_blind_level)
         .fetch_optional(self.pool.as_ref())
         .await
-        .map_err(|e| tracing::warn!("Failed to fetch blind level for tournament {}: {}", tournament_id, e))
+        .map_err(|e| {
+            tracing::warn!(
+                "Failed to fetch blind level for tournament {}: {}",
+                tournament_id,
+                e
+            )
+        })
         .ok()
         .flatten();
 
@@ -226,7 +236,13 @@ impl GameServer {
         .bind(tournament.current_blind_level + 1)
         .fetch_optional(self.pool.as_ref())
         .await
-        .map_err(|e| tracing::warn!("Failed to fetch next blind level for tournament {}: {}", tournament_id, e))
+        .map_err(|e| {
+            tracing::warn!(
+                "Failed to fetch next blind level for tournament {}: {}",
+                tournament_id,
+                e
+            )
+        })
         .ok()
         .flatten();
 
@@ -308,7 +324,8 @@ impl GameServer {
                 .map_err(|e| format!("Failed to load blind levels: {}", e))?;
 
                 // Use the current blind level's values (not the stale table DB values)
-                let (actual_sb, actual_bb, actual_ante) = if current_level_idx < blind_levels.len() {
+                let (actual_sb, actual_bb, actual_ante) = if current_level_idx < blind_levels.len()
+                {
                     let level = &blind_levels[current_level_idx];
                     (level.small_blind, level.big_blind, level.ante)
                 } else {
@@ -378,7 +395,10 @@ impl GameServer {
     pub async fn clear_disconnected(&self, user_id: &str) {
         let mut disconnected = self.disconnected_players.write().await;
         if disconnected.remove(user_id).is_some() {
-            tracing::info!("Player {} reconnected, cleared disconnected status", user_id);
+            tracing::info!(
+                "Player {} reconnected, cleared disconnected status",
+                user_id
+            );
         }
     }
 

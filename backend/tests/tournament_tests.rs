@@ -263,11 +263,10 @@ async fn test_sng_unregister() {
 #[tokio::test]
 async fn test_prize_distribution_rolls_back_on_failure() {
     let pool = Arc::new(create_test_db().await);
-    let jwt_manager = Arc::new(poker_server::auth::JwtManager::new("test_secret_key".to_string()));
-    let game_server = Arc::new(poker_server::ws::GameServer::new(
-        jwt_manager,
-        pool.clone(),
+    let jwt_manager = Arc::new(poker_server::auth::JwtManager::new(
+        "test_secret_key".to_string(),
     ));
+    let game_server = Arc::new(poker_server::ws::GameServer::new(jwt_manager, pool.clone()));
     let manager = poker_server::tournament::TournamentManager::new(pool.clone(), game_server);
 
     let club_id = Uuid::new_v4().to_string();
@@ -276,36 +275,30 @@ async fn test_prize_distribution_rolls_back_on_failure() {
     let third_place_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    sqlx::query(
-        "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&admin_id)
-    .bind("admin_user")
-    .bind("admin@example.com")
-    .bind("password")
-    .execute(&*pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&runner_up_id)
-    .bind("runner_up")
-    .bind("runner_up@example.com")
-    .bind("password")
-    .execute(&*pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&third_place_id)
-    .bind("third_place")
-    .bind("third@example.com")
-    .bind("password")
-    .execute(&*pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)")
+        .bind(&admin_id)
+        .bind("admin_user")
+        .bind("admin@example.com")
+        .bind("password")
+        .execute(&*pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)")
+        .bind(&runner_up_id)
+        .bind("runner_up")
+        .bind("runner_up@example.com")
+        .bind("password")
+        .execute(&*pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)")
+        .bind(&third_place_id)
+        .bind("third_place")
+        .bind("third@example.com")
+        .bind("password")
+        .execute(&*pool)
+        .await
+        .unwrap();
 
     sqlx::query("INSERT INTO clubs (id, name, admin_id) VALUES (?, ?, ?)")
         .bind(&club_id)
@@ -397,10 +390,7 @@ async fn test_prize_distribution_rolls_back_on_failure() {
          END;",
         runner_up_id
     );
-    sqlx::query(&trigger_sql)
-        .execute(&*pool)
-        .await
-        .unwrap();
+    sqlx::query(&trigger_sql).execute(&*pool).await.unwrap();
 
     manager
         .eliminate_player(&tournament_id, &third_place_id)
@@ -411,16 +401,15 @@ async fn test_prize_distribution_rolls_back_on_failure() {
         .await;
     assert!(result.is_err());
 
-    let prize_amounts: Vec<i64> = sqlx::query(
-        "SELECT prize_amount FROM tournament_registrations WHERE tournament_id = ?",
-    )
-        .bind(&tournament_id)
-        .fetch_all(&*pool)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|row| row.get::<i64, _>("prize_amount"))
-        .collect();
+    let prize_amounts: Vec<i64> =
+        sqlx::query("SELECT prize_amount FROM tournament_registrations WHERE tournament_id = ?")
+            .bind(&tournament_id)
+            .fetch_all(&*pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<i64, _>("prize_amount"))
+            .collect();
     assert!(prize_amounts.iter().all(|amount| *amount == 0));
 
     let balances: Vec<i64> = sqlx::query("SELECT balance FROM club_members WHERE club_id = ?")
@@ -2646,8 +2635,15 @@ async fn test_elimination_only_happens_in_waiting_phase() {
     // start_new_hand calls check_eliminations internally — broke player is removed
     // before the new hand begins
     table.start_new_hand();
-    assert_eq!(table.players.len(), 2, "Broke player should be removed when starting new hand");
-    assert!(!table.players.iter().any(|p| p.user_id == "p2"), "p2 should be eliminated");
+    assert_eq!(
+        table.players.len(),
+        2,
+        "Broke player should be removed when starting new hand"
+    );
+    assert!(
+        !table.players.iter().any(|p| p.user_id == "p2"),
+        "p2 should be eliminated"
+    );
 
     // Eliminated IDs should be buffered for the lifecycle task to drain
     let pending = table.drain_pending_eliminations();
@@ -2694,9 +2690,16 @@ async fn test_showdown_delay_prevents_immediate_elimination() {
 
     // check_auto_advance should NOT advance yet (showdown delay not expired)
     let advanced = table.check_auto_advance();
-    assert!(!advanced, "Should not advance before showdown delay expires");
+    assert!(
+        !advanced,
+        "Should not advance before showdown delay expires"
+    );
     // Player is still visible at the table during the showdown display
-    assert_eq!(table.players.len(), 2, "Player should still be visible during showdown delay");
+    assert_eq!(
+        table.players.len(),
+        2,
+        "Player should still be visible during showdown delay"
+    );
 }
 
 #[tokio::test]
@@ -2733,7 +2736,10 @@ async fn test_mtt_showdown_enters_waiting_before_next_hand() {
     table.last_phase_change_time = Some(0);
 
     let advanced = table.check_auto_advance();
-    assert!(advanced, "Should advance out of Showdown once delay expires");
+    assert!(
+        advanced,
+        "Should advance out of Showdown once delay expires"
+    );
     assert_eq!(
         table.phase,
         GamePhase::Waiting,
@@ -2780,12 +2786,18 @@ async fn test_mtt_waiting_window_before_auto_starting_next_hand() {
     );
 
     let advanced = table.check_auto_advance();
-    assert!(!advanced, "Should respect tournament Waiting rebalance window");
+    assert!(
+        !advanced,
+        "Should respect tournament Waiting rebalance window"
+    );
     assert_eq!(table.phase, GamePhase::Waiting);
 
     table.last_phase_change_time = Some(0);
     let advanced = table.check_auto_advance();
-    assert!(advanced, "Should start next hand after Waiting window elapses");
+    assert!(
+        advanced,
+        "Should start next hand after Waiting window elapses"
+    );
     assert_eq!(table.phase, GamePhase::PreFlop);
 }
 
@@ -2878,7 +2890,11 @@ async fn test_elimination_happens_in_waiting_phase() {
     let eliminated = table.check_eliminations();
     assert_eq!(eliminated.len(), 1, "Should eliminate during Waiting phase");
     assert_eq!(eliminated[0], "p2");
-    assert_eq!(table.players.len(), 2, "Player should be removed in Waiting phase");
+    assert_eq!(
+        table.players.len(),
+        2,
+        "Player should be removed in Waiting phase"
+    );
 
     // Verify player 2 is gone
     assert!(!table.players.iter().any(|p| p.user_id == "p2"));
@@ -2933,7 +2949,11 @@ async fn test_all_in_showdown_players_see_results_before_elimination() {
 
     // During Showdown, the loser is still at the table (visible for results)
     assert_eq!(table.phase, GamePhase::Showdown);
-    assert_eq!(table.players.len(), 2, "Both players visible during showdown");
+    assert_eq!(
+        table.players.len(),
+        2,
+        "Both players visible during showdown"
+    );
 
     // Showdown delay has NOT expired yet — check_auto_advance should NOT advance
     table.last_phase_change_time = Some(
@@ -2943,8 +2963,15 @@ async fn test_all_in_showdown_players_see_results_before_elimination() {
             .as_millis() as u64,
     );
     let advanced = table.check_auto_advance();
-    assert!(!advanced, "Should not advance before showdown delay expires");
-    assert_eq!(table.players.len(), 2, "Both players still visible during delay");
+    assert!(
+        !advanced,
+        "Should not advance before showdown delay expires"
+    );
+    assert_eq!(
+        table.players.len(),
+        2,
+        "Both players still visible during delay"
+    );
 
     // Now expire the showdown delay — this triggers start_new_hand which
     // removes broke players before dealing
@@ -2957,7 +2984,11 @@ async fn test_all_in_showdown_players_see_results_before_elimination() {
         table.phase == GamePhase::Waiting,
         "Should be in Waiting (only 1 player with chips)"
     );
-    assert_eq!(table.players.len(), 1, "Loser should be removed after showdown");
+    assert_eq!(
+        table.players.len(),
+        1,
+        "Loser should be removed after showdown"
+    );
 
     // Buffered for the lifecycle task
     let pending = table.drain_pending_eliminations();

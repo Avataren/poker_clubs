@@ -120,7 +120,9 @@ impl TournamentManager {
 
     /// Cancel a tournament manually with a reason.
     pub async fn cancel_tournament(&self, tournament_id: &str, reason: Option<&str>) -> Result<()> {
-        self.lifecycle.cancel_tournament(tournament_id, reason).await
+        self.lifecycle
+            .cancel_tournament(tournament_id, reason)
+            .await
     }
 
     /// Rebuy into a running tournament (if enabled)
@@ -151,7 +153,9 @@ impl TournamentManager {
         tournament_id: &str,
         user_id: &str,
     ) -> Result<Option<Vec<crate::tournament::prizes::PrizeWinner>>> {
-        self.lifecycle.eliminate_player(tournament_id, user_id).await
+        self.lifecycle
+            .eliminate_player(tournament_id, user_id)
+            .await
     }
 
     /// Check all running tournaments for blind level advancement

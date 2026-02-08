@@ -63,7 +63,12 @@ impl GameServer {
                     match table.handle_action(&user_id, action) {
                         Ok(()) => true,
                         Err(e) => {
-                            tracing::warn!("Bot {} action failed on table {}: {}", user_id, table_id, e);
+                            tracing::warn!(
+                                "Bot {} action failed on table {}: {}",
+                                user_id,
+                                table_id,
+                                e
+                            );
                             false
                         }
                     }
