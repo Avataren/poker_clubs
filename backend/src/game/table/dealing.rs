@@ -55,6 +55,9 @@ impl PokerTable {
 
     pub(crate) fn deal_hole_cards(&mut self) {
         let hole_cards_count = self.variant.hole_cards_count();
+        if self.players.is_empty() {
+            return;
+        }
 
         // Calculate where dealing starts: small blind (first player after dealer)
         let sb_seat = self.next_eligible_player_for_button(self.dealer_seat);
@@ -69,7 +72,9 @@ impl PokerTable {
                         self.players[current_seat].deal_cards(vec![card]);
                     }
                 }
-                current_seat = (current_seat + 1) % self.players.len();
+                current_seat = self
+                    .next_player_index_by_seat(current_seat, |_| true)
+                    .unwrap_or(current_seat);
             }
             tracing::debug!(
                 "Dealt card round {} of {}, starting from seat {}",

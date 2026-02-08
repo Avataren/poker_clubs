@@ -2700,6 +2700,96 @@ async fn test_showdown_delay_prevents_immediate_elimination() {
 }
 
 #[tokio::test]
+async fn test_mtt_showdown_enters_waiting_before_next_hand() {
+    use poker_server::game::format::MultiTableTournament;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(MultiTableTournament::new(
+        "Test MTT".to_string(),
+        100,
+        1000,
+        300,
+    ));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+
+    table.phase = GamePhase::Showdown;
+    table.last_phase_change_time = Some(0);
+
+    let advanced = table.check_auto_advance();
+    assert!(advanced, "Should advance out of Showdown once delay expires");
+    assert_eq!(
+        table.phase,
+        GamePhase::Waiting,
+        "MTT tables must enter Waiting before starting a new hand"
+    );
+}
+
+#[tokio::test]
+async fn test_mtt_waiting_window_before_auto_starting_next_hand() {
+    use poker_server::game::format::MultiTableTournament;
+    use poker_server::game::table::{GamePhase, PokerTable};
+    use poker_server::game::variant::TexasHoldem;
+
+    let format = Box::new(MultiTableTournament::new(
+        "Test MTT".to_string(),
+        100,
+        1000,
+        300,
+    ));
+    let mut table = PokerTable::with_variant_and_format(
+        "t1".to_string(),
+        "Test".to_string(),
+        50,
+        100,
+        9,
+        Box::new(TexasHoldem),
+        format,
+    );
+    table.set_tournament_id(Some("tour1".to_string()));
+
+    table
+        .add_player("p1".to_string(), "Player1".to_string(), 1000)
+        .unwrap();
+    table
+        .add_player("p2".to_string(), "Player2".to_string(), 1000)
+        .unwrap();
+
+    table.phase = GamePhase::Waiting;
+    table.last_phase_change_time = Some(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    );
+
+    let advanced = table.check_auto_advance();
+    assert!(!advanced, "Should respect tournament Waiting rebalance window");
+    assert_eq!(table.phase, GamePhase::Waiting);
+
+    table.last_phase_change_time = Some(0);
+    let advanced = table.check_auto_advance();
+    assert!(advanced, "Should start next hand after Waiting window elapses");
+    assert_eq!(table.phase, GamePhase::PreFlop);
+}
+
+#[tokio::test]
 async fn test_check_eliminations_removes_broke_players() {
     use poker_server::game::format::SitAndGo;
     use poker_server::game::table::{GamePhase, PokerTable};

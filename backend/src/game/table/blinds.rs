@@ -94,33 +94,25 @@ impl PokerTable {
     /// In tournaments: sitting out players still pay blinds
     /// In cash games: sitting out players don't pay blinds
     pub(crate) fn next_player_for_blind(&self, after: usize) -> usize {
-        let mut idx = (after + 1) % self.players.len();
-        let start = idx;
+        if self.players.is_empty() {
+            tracing::warn!("next_player_for_blind called with no players");
+            return 0;
+        }
 
-        loop {
-            let player = &self.players[idx];
-            // In tournaments, sitting out players still pay blinds
-            // Only skip eliminated players
-            let is_eligible = if self.format.eliminates_players() {
+        let next = self.next_player_index_by_seat(after, |player| {
+            // In tournaments, sitting out players still pay blinds.
+            // Only skip eliminated players.
+            if self.format.eliminates_players() {
                 player.stack > 0 && player.state != PlayerState::Eliminated
             } else {
-                // In cash games, skip sitting out, eliminated, and disconnected
+                // In cash games, skip sitting out, eliminated, and disconnected.
                 player.stack > 0
                     && player.state != PlayerState::SittingOut
                     && player.state != PlayerState::Eliminated
                     && player.state != PlayerState::Disconnected
-            };
-
-            if is_eligible {
-                return idx;
             }
+        });
 
-            idx = (idx + 1) % self.players.len();
-            if idx == start {
-                break;
-            }
-        }
-
-        after // Fallback
+        next.unwrap_or_else(|| after.min(self.players.len() - 1))
     }
 }

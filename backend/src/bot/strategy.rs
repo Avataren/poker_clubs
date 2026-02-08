@@ -32,6 +32,7 @@ pub struct BotGameView {
     pub num_active_opponents: usize,
     pub position: BotPosition,
     pub was_preflop_raiser: bool,
+    pub is_big_blind: bool,
 }
 
 /// Trait for bot decision-making.
@@ -194,7 +195,7 @@ impl SimpleStrategy {
             BotPosition::Late => 6,   // wide range
             BotPosition::Blind => {
                 // BB defends wider vs small raises, SB plays tighter
-                let to_call = view.current_bet - view.my_current_bet;
+                let to_call = (view.current_bet - view.my_current_bet).max(0);
                 if to_call <= view.big_blind * 2 {
                     5 // BB defend range
                 } else {
@@ -203,9 +204,22 @@ impl SimpleStrategy {
             }
         };
 
-        let to_call = view.current_bet - view.my_current_bet;
-        let can_check = to_call <= 0;
+        let to_call = (view.current_bet - view.my_current_bet).max(0);
+        let can_check = to_call == 0;
         let bb = view.big_blind.max(1);
+
+        // Big blind preflop option: if nobody raised, never fold.
+        // Normal flow checks (to_call == 0); fallback for inconsistent blind
+        // tracking is to call the blind instead of folding.
+        if view.is_big_blind && view.current_bet <= bb {
+            return if can_check {
+                PlayerAction::Check
+            } else if to_call >= view.my_stack {
+                PlayerAction::AllIn
+            } else {
+                PlayerAction::Call
+            };
+        }
 
         // Fold if hand is outside our playable range
         if effective_tier > max_tier {
@@ -572,6 +586,7 @@ mod tests {
             num_active_opponents: 1,
             position: BotPosition::Middle,
             was_preflop_raiser: false,
+            is_big_blind: false,
         }
     }
 
@@ -596,6 +611,7 @@ mod tests {
             num_active_opponents: 3,
             position,
             was_preflop_raiser: false,
+            is_big_blind: false,
         }
     }
 
@@ -708,6 +724,7 @@ mod tests {
             num_active_opponents: 1,
             position: BotPosition::Middle,
             was_preflop_raiser: false,
+            is_big_blind: false,
         };
 
         let no_draw_view = BotGameView {
@@ -723,6 +740,7 @@ mod tests {
             num_active_opponents: 1,
             position: BotPosition::Middle,
             was_preflop_raiser: false,
+            is_big_blind: false,
         };
 
         let mut draw_folds = 0;
@@ -760,6 +778,7 @@ mod tests {
             num_active_opponents: 2,
             position: BotPosition::Late,
             was_preflop_raiser: false,
+            is_big_blind: false,
         };
 
         let mut saw_raise = false;
@@ -850,6 +869,54 @@ mod tests {
     }
 
     #[test]
+    fn test_big_blind_never_folds_unraised_preflop() {
+        let strategy = SimpleStrategy::tight();
+        let view = BotGameView {
+            hole_cards: vec![Card::new(7, 0), Card::new(2, 1)],
+            community_cards: vec![],
+            pot_total: 75,
+            current_bet: 50,
+            my_current_bet: 50,
+            my_stack: 1000,
+            phase: GamePhase::PreFlop,
+            big_blind: 50,
+            min_raise: 50,
+            num_active_opponents: 3,
+            position: BotPosition::Blind,
+            was_preflop_raiser: false,
+            is_big_blind: true,
+        };
+
+        for _ in 0..20 {
+            assert!(matches!(strategy.decide(&view), PlayerAction::Check));
+        }
+    }
+
+    #[test]
+    fn test_big_blind_unraised_fallback_calls_instead_of_folding() {
+        let strategy = SimpleStrategy::tight();
+        let view = BotGameView {
+            hole_cards: vec![Card::new(7, 0), Card::new(2, 1)],
+            community_cards: vec![],
+            pot_total: 75,
+            current_bet: 50,
+            my_current_bet: 0,
+            my_stack: 1000,
+            phase: GamePhase::PreFlop,
+            big_blind: 50,
+            min_raise: 50,
+            num_active_opponents: 3,
+            position: BotPosition::Blind,
+            was_preflop_raiser: false,
+            is_big_blind: true,
+        };
+
+        for _ in 0..20 {
+            assert!(matches!(strategy.decide(&view), PlayerAction::Call));
+        }
+    }
+
+    #[test]
     fn test_cbet_on_flop() {
         let strategy = SimpleStrategy::balanced();
         // Bot was preflop raiser, weak hand on flop, it checks to them
@@ -866,6 +933,7 @@ mod tests {
             num_active_opponents: 1,
             position: BotPosition::Late,
             was_preflop_raiser: true,
+            is_big_blind: false,
         };
 
         let mut bet_count = 0;
@@ -925,6 +993,7 @@ mod tests {
                     num_active_opponents: strategies.len() - 1,
                     position: positions[idx % positions.len()],
                     was_preflop_raiser: false,
+                    is_big_blind: false,
                 };
 
                 let action = strategy.decide(&view);

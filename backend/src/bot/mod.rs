@@ -216,6 +216,13 @@ fn build_bot_view(table: &PokerTable, player_idx: usize) -> BotGameView {
         .count();
 
     let position = compute_position(table, player_idx);
+    let is_big_blind = if table.players.len() == 2 {
+        player_idx == (table.dealer_seat + 1) % 2
+    } else {
+        let sb_idx = table.next_player_for_blind(table.dealer_seat);
+        let bb_idx = table.next_player_for_blind(sb_idx);
+        player_idx == bb_idx
+    };
 
     // Heuristic: if my current bet > big blind, I was likely the preflop raiser
     let was_preflop_raiser = player.current_bet > table.big_blind;
@@ -233,6 +240,7 @@ fn build_bot_view(table: &PokerTable, player_idx: usize) -> BotGameView {
         num_active_opponents,
         position,
         was_preflop_raiser,
+        is_big_blind,
     }
 }
 

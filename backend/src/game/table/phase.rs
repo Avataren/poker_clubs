@@ -104,6 +104,40 @@ impl PokerTable {
 
     // Check if enough time has passed to auto-advance to next phase
     pub fn check_auto_advance(&mut self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // MTT tables need a deterministic Waiting window so periodic balancing
+        // can move players between hands.
+        if self.phase == GamePhase::Waiting && self.format.format_id() == "mtt" {
+            let playable_count = self.players.iter().filter(|p| p.stack > 0).count();
+            if playable_count < MIN_PLAYERS_TO_START {
+                return false;
+            }
+
+            let waiting_since = match self.last_phase_change_time {
+                Some(ts) => ts,
+                None => {
+                    self.last_phase_change_time = Some(now);
+                    return false;
+                }
+            };
+
+            let elapsed = now.saturating_sub(waiting_since);
+            if elapsed < MTT_WAITING_REBALANCE_MS {
+                return false;
+            }
+
+            tracing::info!(
+                "Tournament Waiting window elapsed ({}ms), starting next hand",
+                elapsed
+            );
+            self.start_new_hand();
+            return true;
+        }
+
         // During Showdown, always allow auto-advance (start new hand after delay).
         // For other phases, auto-advance only if fewer than 2 players can act
         // (everyone all-in or folded, no meaningful betting possible).
@@ -127,12 +161,7 @@ impl PokerTable {
 
         // Check if enough time has passed
         if let Some(last_change) = self.last_phase_change_time {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64;
-
-            let elapsed = now - last_change;
+            let elapsed = now.saturating_sub(last_change);
 
             if elapsed >= delay_ms {
                 tracing::info!(
@@ -142,9 +171,20 @@ impl PokerTable {
                 );
 
                 if self.phase == GamePhase::Showdown {
-                    // After showdown, start new hand if we have enough players
-                    // Check total players (not just active, since they might be in AllIn state)
-                    if self.players.len() >= MIN_PLAYERS_TO_START {
+                    if self.format.format_id() == "mtt" {
+                        // MTT tables must pass through Waiting so balancing can run.
+                        tracing::info!(
+                            "Showdown delay complete on tournament table, transitioning to Waiting"
+                        );
+                        if let Ok(next) = self.phase.transition_to(GamePhase::Waiting) {
+                            self.phase = next;
+                        }
+
+                        // Remove busted players once showdown has been visible long enough.
+                        self.check_eliminations();
+                        self.last_phase_change_time = Some(now);
+                    } else if self.players.len() >= MIN_PLAYERS_TO_START {
+                        // Cash games continue immediately between hands.
                         tracing::info!("Starting new hand after showdown delay");
                         self.start_new_hand();
                     } else {
@@ -152,6 +192,7 @@ impl PokerTable {
                         if let Ok(next) = self.phase.transition_to(GamePhase::Waiting) {
                             self.phase = next;
                         }
+                        self.last_phase_change_time = Some(now);
                     }
                 } else {
                     // Advance to next street

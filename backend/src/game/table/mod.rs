@@ -11,7 +11,8 @@ pub use state::{PublicPot, PublicTableState, PublicPlayerState, TournamentInfo};
 
 use super::{
     constants::{
-        DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS, MIN_PLAYERS_TO_START,
+        DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS,
+        MIN_PLAYERS_TO_START, MTT_WAITING_REBALANCE_MS,
     },
     deck::{Card, Deck},
     error::{GameError, GameResult},
@@ -277,125 +278,165 @@ impl PokerTable {
             .count()
     }
 
+    fn first_player_index_by_seat<F>(&self, mut eligible: F) -> Option<usize>
+    where
+        F: FnMut(&Player) -> bool,
+    {
+        if self.players.is_empty() || self.max_seats == 0 {
+            return None;
+        }
+
+        for seat in 0..self.max_seats {
+            if let Some((idx, player)) = self
+                .players
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.seat == seat)
+            {
+                if eligible(player) {
+                    return Some(idx);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn next_player_index_by_seat<F>(&self, after: usize, mut eligible: F) -> Option<usize>
+    where
+        F: FnMut(&Player) -> bool,
+    {
+        if self.players.is_empty() || self.max_seats == 0 {
+            return None;
+        }
+
+        let start_idx = after.min(self.players.len() - 1);
+        let start_seat = self.players[start_idx].seat;
+
+        for offset in 1..=self.max_seats {
+            let seat = (start_seat + offset) % self.max_seats;
+            if let Some((idx, player)) = self
+                .players
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.seat == seat)
+            {
+                if eligible(player) {
+                    return Some(idx);
+                }
+            }
+        }
+
+        None
+    }
+
     pub(crate) fn next_active_player(&self, after: usize) -> usize {
         if self.players.is_empty() {
             tracing::warn!("next_active_player called with no players");
             return 0;
         }
-        let mut idx = (after + 1) % self.players.len();
-        let start = idx;
 
         tracing::debug!(
-            "next_active_player: after={}, num_players={}",
+            "next_active_player: after_idx={}, after_seat={}, num_players={}",
             after,
+            self.players[after.min(self.players.len() - 1)].seat,
             self.players.len()
         );
 
-        loop {
-            let player = &self.players[idx];
-            tracing::debug!(
-                "  Checking idx={}: username={}, can_act={}, state={:?}",
-                idx,
-                player.username,
-                player.can_act(),
-                player.state
-            );
-
-            // In tournaments, include sitting out players so they can be auto-folded
-            // In all game types, include disconnected players so they can be auto-folded
-            let is_eligible = if self.format.eliminates_players() {
-                player.can_act() || player.state == PlayerState::SittingOut || player.state == PlayerState::Disconnected
+        // In tournaments, include sitting out players so they can be auto-folded.
+        // In all game types, include disconnected players so they can be auto-folded.
+        let next = self.next_player_index_by_seat(after, |player| {
+            if self.format.eliminates_players() {
+                player.can_act()
+                    || player.state == PlayerState::SittingOut
+                    || player.state == PlayerState::Disconnected
             } else {
                 player.can_act() || player.state == PlayerState::Disconnected
-            };
+            }
+        });
 
-            if is_eligible {
-                tracing::info!(
-                    "next_active_player: returning idx={} ({})",
-                    idx,
-                    player.username
-                );
-                return idx;
-            }
-            idx = (idx + 1) % self.players.len();
-            if idx == start {
-                tracing::warn!(
-                    "next_active_player: No active players found! Returning fallback {}",
-                    after
-                );
-                break; // No active players found
-            }
+        if let Some(idx) = next {
+            tracing::info!(
+                "next_active_player: returning idx={} (seat {}, {})",
+                idx,
+                self.players[idx].seat,
+                self.players[idx].username
+            );
+            idx
+        } else {
+            tracing::warn!(
+                "next_active_player: No active players found! Returning fallback {}",
+                after
+            );
+            after.min(self.players.len() - 1)
         }
-
-        after // Fallback
     }
 
     /// Find the first player eligible for dealer button starting from seat 0
     /// Dealer button: must have chips and not be sitting out, eliminated, or disconnected
     pub(crate) fn first_eligible_player_for_button(&self) -> usize {
-        for (idx, player) in self.players.iter().enumerate() {
-            // Player is eligible for dealer if they have chips and aren't sitting out, eliminated, or disconnected
-            if player.stack > 0
+        let next = self.first_player_index_by_seat(|player| {
+            // Player is eligible for dealer if they have chips and aren't
+            // sitting out, eliminated, or disconnected.
+            player.stack > 0
                 && player.state != PlayerState::SittingOut
                 && player.state != PlayerState::Eliminated
                 && player.state != PlayerState::Disconnected
-            {
-                tracing::info!(
-                    "first_eligible_player_for_button: returning idx={} (seat {}, {})",
-                    idx,
-                    player.seat,
-                    player.username
-                );
-                return idx;
-            }
+        });
+
+        if let Some(idx) = next {
+            tracing::info!(
+                "first_eligible_player_for_button: returning idx={} (seat {}, {})",
+                idx,
+                self.players[idx].seat,
+                self.players[idx].username
+            );
+            idx
+        } else {
+            tracing::warn!("first_eligible_player_for_button: No eligible players found! Returning 0");
+            0 // Fallback
         }
-        tracing::warn!("first_eligible_player_for_button: No eligible players found! Returning 0");
-        0 // Fallback
     }
 
     /// Find the next player eligible for dealer button
     /// Dealer button: must have chips and not be sitting out, eliminated, or disconnected
     pub(crate) fn next_eligible_player_for_button(&self, after: usize) -> usize {
-        let mut idx = (after + 1) % self.players.len();
-        let start = idx;
+        if self.players.is_empty() {
+            tracing::warn!("next_eligible_player_for_button: No players, returning 0");
+            return 0;
+        }
 
         tracing::debug!(
-            "next_eligible_player_for_button: after={}, num_players={}",
+            "next_eligible_player_for_button: after_idx={}, after_seat={}, num_players={}",
             after,
+            self.players[after.min(self.players.len() - 1)].seat,
             self.players.len()
         );
 
-        loop {
-            let player = &self.players[idx];
-            // Player is eligible for dealer if they have chips and aren't sitting out, eliminated, or disconnected
-            if player.stack > 0
+        let next = self.next_player_index_by_seat(after, |player| {
+            // Player is eligible for dealer if they have chips and aren't
+            // sitting out, eliminated, or disconnected.
+            player.stack > 0
                 && player.state != PlayerState::SittingOut
                 && player.state != PlayerState::Eliminated
                 && player.state != PlayerState::Disconnected
-            {
-                tracing::info!(
-                    "next_eligible_player_for_button: returning idx={} (seat {}, {})",
-                    idx,
-                    player.seat,
-                    player.username
-                );
-                return idx;
-            }
-            tracing::debug!(
-                "  Skipping idx={}: username={}, stack={}, state={:?}",
-                idx,
-                player.username,
-                player.stack,
-                player.state
-            );
-            idx = (idx + 1) % self.players.len();
-            if idx == start {
-                tracing::warn!("next_eligible_player_for_button: No eligible players found! Returning fallback {}", after);
-                break; // No eligible players found
-            }
-        }
+        });
 
-        after // Fallback
+        if let Some(idx) = next {
+            tracing::info!(
+                "next_eligible_player_for_button: returning idx={} (seat {}, {})",
+                idx,
+                self.players[idx].seat,
+                self.players[idx].username
+            );
+            idx
+        } else {
+            tracing::warn!(
+                "next_eligible_player_for_button: No eligible players found! Returning fallback {}",
+                after
+            );
+            after.min(self.players.len() - 1)
+        }
     }
 }
 
@@ -807,6 +848,66 @@ mod tests {
         assert_eq!(table.dealer_seat, 1);
         assert_eq!(table.players[2].current_bet, 50, "Second hand: Position 2 should now post SB");
         assert_eq!(table.players[0].current_bet, 100, "Second hand: Position 0 should now post BB");
+    }
+
+    #[test]
+    fn test_tournament_button_and_blinds_rotate_by_physical_seat_order() {
+        // Regression: player vec order can differ from seat order (e.g. table balancing moves).
+        // Button/SB/BB must rotate by physical seats, not insertion order.
+        use crate::game::format::SitAndGo;
+
+        let sng_format = Box::new(SitAndGo::new(100, 1000, 9, 300));
+        let mut table = PokerTable::with_variant_and_format(
+            "test".to_string(),
+            "Test Table".to_string(),
+            50,
+            100,
+            9,
+            Box::new(TexasHoldem),
+            sng_format,
+        );
+
+        // Intentionally seat players in non-sorted insertion order.
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 5, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 8, 1000)
+            .unwrap();
+
+        table.force_start_hand();
+        let dealer_seat_num = table.players[table.dealer_seat].seat;
+        let sb_idx = table.next_player_for_blind(table.dealer_seat);
+        let bb_idx = table.next_player_for_blind(sb_idx);
+        assert_eq!(dealer_seat_num, 1, "First dealer should be lowest eligible seat");
+        assert_eq!(table.players[sb_idx].seat, 5, "SB should be next clockwise seat");
+        assert_eq!(table.players[bb_idx].seat, 8, "BB should be next clockwise seat");
+        assert_eq!(
+            table.players[table.current_player].seat,
+            1,
+            "First to act preflop should be seat after BB"
+        );
+
+        table.phase = GamePhase::Showdown;
+        table.start_new_hand();
+        let dealer_seat_num = table.players[table.dealer_seat].seat;
+        let sb_idx = table.next_player_for_blind(table.dealer_seat);
+        let bb_idx = table.next_player_for_blind(sb_idx);
+        assert_eq!(dealer_seat_num, 5, "Dealer should rotate clockwise");
+        assert_eq!(table.players[sb_idx].seat, 8, "SB should rotate clockwise");
+        assert_eq!(table.players[bb_idx].seat, 1, "BB should rotate clockwise");
+
+        table.phase = GamePhase::Showdown;
+        table.start_new_hand();
+        let dealer_seat_num = table.players[table.dealer_seat].seat;
+        let sb_idx = table.next_player_for_blind(table.dealer_seat);
+        let bb_idx = table.next_player_for_blind(sb_idx);
+        assert_eq!(dealer_seat_num, 8, "Dealer should continue rotating");
+        assert_eq!(table.players[sb_idx].seat, 1, "SB should continue rotating");
+        assert_eq!(table.players[bb_idx].seat, 5, "BB should continue rotating");
     }
 
     #[test]

@@ -5,6 +5,7 @@ use crate::{
     tournament::prizes::{PrizeStructure, PrizeWinner},
 };
 use chrono::Utc;
+use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -557,10 +558,14 @@ impl LifecycleService {
             counts.sort_by_key(|(_, c)| *c);
 
             // The tables to close are the first `tables_to_close` entries (smallest)
-            let closing: Vec<String> = counts[..tables_to_close]
+            let mut closing: Vec<String> = counts[..tables_to_close]
                 .iter()
                 .map(|(id, _)| id.clone())
                 .collect();
+            {
+                let mut rng = rand::thread_rng();
+                closing.shuffle(&mut rng);
+            }
 
             // The tables that stay open are the rest
             let remaining: Vec<String> = counts[tables_to_close..]
@@ -578,26 +583,42 @@ impl LifecycleService {
                     continue;
                 }
 
-                let player_ids = self
+                let mut player_ids = self
                     .ctx
                     .game_server
                     .get_all_player_ids_at_table(source_table_id)
                     .await;
+                {
+                    let mut rng = rand::thread_rng();
+                    player_ids.shuffle(&mut rng);
+                }
 
                 for player_id in &player_ids {
-                    // Find the remaining table with the fewest players
+                    // Find the least-populated destination tables and pick one at random.
                     let dest_counts = self
                         .ctx
                         .game_server
                         .get_table_player_counts(&remaining)
                         .await;
-                    let dest_table_id = dest_counts
+                    let min_dest_count = match dest_counts
                         .iter()
-                        .min_by_key(|(_, c)| *c)
-                        .map(|(id, _)| id.clone());
-                    let dest_table_id = match dest_table_id {
-                        Some(id) => id,
+                        .map(|(_, c)| *c)
+                        .min()
+                    {
+                        Some(count) => count,
                         None => break,
+                    };
+                    let dest_candidates: Vec<String> = dest_counts
+                        .iter()
+                        .filter(|(_, c)| *c == min_dest_count)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    let dest_table_id = {
+                        let mut rng = rand::thread_rng();
+                        match dest_candidates.choose(&mut rng) {
+                            Some(id) => id.clone(),
+                            None => break,
+                        }
                     };
 
                     if let Err(e) = self
@@ -671,15 +692,12 @@ impl LifecycleService {
 
         // Rebalance loop: while max - min >= 2, move one player from max to min
         loop {
-            let max_entry = counts.iter().max_by_key(|(_, c)| *c).cloned();
-            let min_entry = counts.iter().min_by_key(|(_, c)| *c).cloned();
-
-            let (max_id, max_count) = match max_entry {
-                Some(e) => e,
+            let max_count = match counts.iter().map(|(_, c)| *c).max() {
+                Some(c) => c,
                 None => break,
             };
-            let (min_id, min_count) = match min_entry {
-                Some(e) => e,
+            let min_count = match counts.iter().map(|(_, c)| *c).min() {
+                Some(c) => c,
                 None => break,
             };
 
@@ -687,20 +705,47 @@ impl LifecycleService {
                 break;
             }
 
-            // Skip if the source table is mid-hand — will rebalance on next check
-            if self.ctx.game_server.is_table_mid_hand(&max_id).await {
-                break;
+            // Pick a random donor from all most-populated eligible tables.
+            let mut donor_candidates = Vec::new();
+            for (table_id, count) in &counts {
+                if *count == max_count && !self.ctx.game_server.is_table_mid_hand(table_id).await {
+                    donor_candidates.push(table_id.clone());
+                }
             }
+            let max_id = {
+                let mut rng = rand::thread_rng();
+                match donor_candidates.choose(&mut rng) {
+                    Some(id) => id.clone(),
+                    None => break,
+                }
+            };
 
-            // Pick the last player from the most populated table
-            let player_id = match self
+            // Pick a random recipient from all least-populated tables.
+            let recipient_candidates: Vec<String> = counts
+                .iter()
+                .filter(|(id, c)| *c == min_count && id.as_str() != max_id.as_str())
+                .map(|(id, _)| id.clone())
+                .collect();
+            let min_id = {
+                let mut rng = rand::thread_rng();
+                match recipient_candidates.choose(&mut rng) {
+                    Some(id) => id.clone(),
+                    None => break,
+                }
+            };
+
+            // Pick a random player from the donor table.
+            let player_ids = self
                 .ctx
                 .game_server
-                .get_last_player_at_table(&max_id)
-                .await
-            {
-                Some(id) => id,
-                None => break,
+                .get_all_player_ids_at_table(&max_id)
+                .await;
+            let player_id = {
+                let mut rng = rand::thread_rng();
+                match player_ids.choose(&mut rng) {
+                    Some(id) => id.clone(),
+                    None => break,
+                }
             };
 
             if let Err(e) = self
