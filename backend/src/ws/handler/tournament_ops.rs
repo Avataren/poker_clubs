@@ -186,6 +186,7 @@ impl GameServer {
 
     /// Move a tournament player from one table to another.
     /// Handles bot re-registration and notifies both tables.
+    /// Refuses to move a player if the source table is mid-hand.
     pub async fn move_tournament_player(
         &self,
         from_table_id: &str,
@@ -198,6 +199,12 @@ impl GameServer {
             let from_table = tables
                 .get(from_table_id)
                 .ok_or_else(|| "Source table not found".to_string())?;
+
+            // Only move players between hands (Waiting phase),
+            // so they see the full showdown before being moved
+            if from_table.phase != crate::game::GamePhase::Waiting {
+                return Err("Cannot move player while hand is in progress".to_string());
+            }
             let player = from_table
                 .players
                 .iter()
@@ -255,6 +262,16 @@ impl GameServer {
         );
 
         Ok(())
+    }
+
+    /// Check if a table is currently in a hand (any phase other than Waiting).
+    /// Players should only be moved during Waiting so they see the full showdown.
+    pub async fn is_table_mid_hand(&self, table_id: &str) -> bool {
+        let tables = self.tables.read().await;
+        tables
+            .get(table_id)
+            .map(|t| t.phase != crate::game::GamePhase::Waiting)
+            .unwrap_or(false)
     }
 
     /// Get player counts for a set of tournament tables.

@@ -35,37 +35,27 @@ impl PotManager {
         }
     }
 
-    /// Calculate side pots based on each player's total contribution to the hand.
-    /// `player_bets` contains (player_idx, total_bet_this_hand, is_active_in_hand).
-    /// All contributing players (including folded) affect pot sizes, but only
-    /// active-in-hand players are eligible to win.
-    pub fn calculate_side_pots(&mut self, player_bets: &[(usize, i64, bool)]) {
-        if player_bets.is_empty() {
-            return;
-        }
-
-        // Sort by total bet amount
+    /// Build side pots from player bets, merging consecutive pots with identical eligible players.
+    fn build_side_pots(player_bets: &[(usize, i64, bool)]) -> Vec<Pot> {
         let mut sorted: Vec<(usize, i64, bool)> = player_bets.to_vec();
         sorted.sort_by_key(|(_, bet, _)| *bet);
 
-        let mut new_pots = Vec::new();
+        let mut raw_pots = Vec::new();
         let mut prev_level = 0i64;
 
         for i in 0..sorted.len() {
             let (_, bet_level, _) = sorted[i];
             if bet_level <= prev_level {
-                continue; // Skip duplicate bet levels
+                continue;
             }
 
             let level_contribution = bet_level - prev_level;
-            // All players who bet more than prev_level contribute to this pot
             let contributors = sorted
                 .iter()
                 .filter(|(_, bet, _)| *bet > prev_level)
                 .count();
             let pot_amount = level_contribution * contributors as i64;
 
-            // Only active-in-hand players who bet at least this level can win this pot
             let eligible: Vec<usize> = sorted
                 .iter()
                 .filter(|(_, bet, active)| *bet >= bet_level && *active)
@@ -73,7 +63,7 @@ impl PotManager {
                 .collect();
 
             if pot_amount > 0 {
-                new_pots.push(Pot {
+                raw_pots.push(Pot {
                     amount: pot_amount,
                     eligible_players: eligible,
                 });
@@ -82,6 +72,33 @@ impl PotManager {
             prev_level = bet_level;
         }
 
+        // Merge consecutive pots that have the same eligible players.
+        // Folded players create bet levels that split pots unnecessarily
+        // since they can't win — merge those back together.
+        let mut merged = Vec::new();
+        for pot in raw_pots {
+            if let Some(last) = merged.last_mut() {
+                let last: &mut Pot = last;
+                if last.eligible_players == pot.eligible_players {
+                    last.amount += pot.amount;
+                    continue;
+                }
+            }
+            merged.push(pot);
+        }
+
+        merged
+    }
+
+    /// Calculate side pots based on each player's total contribution to the hand.
+    /// `player_bets` contains (player_idx, total_bet_this_hand, is_active_in_hand).
+    /// All contributing players (including folded) affect pot sizes, but only
+    /// active-in-hand players are eligible to win.
+    pub fn calculate_side_pots(&mut self, player_bets: &[(usize, i64, bool)]) {
+        if player_bets.is_empty() {
+            return;
+        }
+        let new_pots = Self::build_side_pots(player_bets);
         if !new_pots.is_empty() {
             self.pots = new_pots;
         }
@@ -198,42 +215,7 @@ impl PotManager {
         if player_bets.is_empty() {
             return self.pots.clone();
         }
-
-        let mut sorted: Vec<(usize, i64, bool)> = player_bets.to_vec();
-        sorted.sort_by_key(|(_, bet, _)| *bet);
-
-        let mut result = Vec::new();
-        let mut prev_level = 0i64;
-
-        for i in 0..sorted.len() {
-            let (_, bet_level, _) = sorted[i];
-            if bet_level <= prev_level {
-                continue;
-            }
-
-            let level_contribution = bet_level - prev_level;
-            let contributors = sorted
-                .iter()
-                .filter(|(_, bet, _)| *bet > prev_level)
-                .count();
-            let pot_amount = level_contribution * contributors as i64;
-
-            let eligible: Vec<usize> = sorted
-                .iter()
-                .filter(|(_, bet, active)| *bet >= bet_level && *active)
-                .map(|(idx, _, _)| *idx)
-                .collect();
-
-            if pot_amount > 0 {
-                result.push(Pot {
-                    amount: pot_amount,
-                    eligible_players: eligible,
-                });
-            }
-
-            prev_level = bet_level;
-        }
-
+        let result = Self::build_side_pots(player_bets);
         if result.is_empty() {
             self.pots.clone()
         } else {
@@ -338,14 +320,13 @@ mod tests {
         let player_bets = vec![(0, 100, false), (1, 200, true), (2, 200, true)];
         pot_mgr.calculate_side_pots(&player_bets);
 
-        // Pot at level 100: 100*3 = 300, eligible: [1, 2] (player 0 folded)
-        // Pot at level 200: 100*2 = 200, eligible: [1, 2]
-        assert_eq!(pot_mgr.pots.len(), 2);
-        assert_eq!(pot_mgr.pots[0].amount, 300);
-        assert_eq!(pot_mgr.pots[1].amount, 200);
-        // Folded player 0 is not eligible for any pot
+        // Both levels have the same eligible players [1, 2] (player 0 folded),
+        // so they merge into a single pot: 300 + 200 = 500
+        assert_eq!(pot_mgr.pots.len(), 1);
+        assert_eq!(pot_mgr.pots[0].amount, 500);
         assert!(!pot_mgr.pots[0].eligible_players.contains(&0));
-        assert!(!pot_mgr.pots[1].eligible_players.contains(&0));
+        assert!(pot_mgr.pots[0].eligible_players.contains(&1));
+        assert!(pot_mgr.pots[0].eligible_players.contains(&2));
     }
 
     #[test]
@@ -432,6 +413,65 @@ mod tests {
                 "Folded player should not be eligible"
             );
         }
+    }
+
+    #[test]
+    fn test_pots_consolidated_when_multiple_folds() {
+        let mut pot_mgr = PotManager::new();
+
+        // P0 folds at 200, P1 folds at 500, P2 all-in 1000, P3 calls 3000, P4 calls 3000
+        pot_mgr.add_bet(0, 200);
+        pot_mgr.add_bet(1, 500);
+        pot_mgr.add_bet(2, 1000);
+        pot_mgr.add_bet(3, 3000);
+        pot_mgr.add_bet(4, 3000);
+
+        let player_bets = vec![
+            (0, 200, false),  // folded
+            (1, 500, false),  // folded
+            (2, 1000, true),  // all-in
+            (3, 3000, true),  // active
+            (4, 3000, true),  // active
+        ];
+        pot_mgr.calculate_side_pots(&player_bets);
+
+        // Without consolidation we'd get 4 pots (at levels 200, 500, 1000, 3000).
+        // Levels 200 and 500 both have eligible [2, 3, 4], same as level 1000.
+        // So those three merge into one pot. Level 3000 has eligible [3, 4].
+        // Result: 2 pots.
+        assert_eq!(pot_mgr.pots.len(), 2);
+
+        // First pot: all bets up to 1000 level (eligible: [2, 3, 4])
+        // 200*5 + 300*4 + 500*3 = 1000 + 1200 + 1500 = 3700
+        assert_eq!(pot_mgr.pots[0].amount, 3700);
+        assert_eq!(pot_mgr.pots[0].eligible_players, vec![2, 3, 4]);
+
+        // Second pot: bets above 1000 (eligible: [3, 4])
+        // 2000*2 = 4000
+        assert_eq!(pot_mgr.pots[1].amount, 4000);
+        assert_eq!(pot_mgr.pots[1].eligible_players, vec![3, 4]);
+
+        // Total conserved
+        let total: i64 = pot_mgr.pots.iter().map(|p| p.amount).sum();
+        assert_eq!(total, 7700);
+    }
+
+    #[test]
+    fn test_pots_not_merged_when_different_eligible() {
+        let mut pot_mgr = PotManager::new();
+
+        // Three all-in at different levels — each has different eligible set, no merging
+        pot_mgr.add_bet(0, 100);
+        pot_mgr.add_bet(1, 200);
+        pot_mgr.add_bet(2, 300);
+
+        let player_bets = vec![(0, 100, true), (1, 200, true), (2, 300, true)];
+        pot_mgr.calculate_side_pots(&player_bets);
+
+        assert_eq!(pot_mgr.pots.len(), 3);
+        assert_eq!(pot_mgr.pots[0].eligible_players, vec![0, 1, 2]);
+        assert_eq!(pot_mgr.pots[1].eligible_players, vec![1, 2]);
+        assert_eq!(pot_mgr.pots[2].eligible_players, vec![2]);
     }
 
     #[test]

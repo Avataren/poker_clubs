@@ -569,6 +569,15 @@ impl LifecycleService {
                 .collect();
 
             for source_table_id in &closing {
+                // Skip tables that are mid-hand — players will be moved after the hand completes
+                if self.ctx.game_server.is_table_mid_hand(source_table_id).await {
+                    tracing::info!(
+                        "Skipping consolidation of table {} — hand in progress",
+                        source_table_id
+                    );
+                    continue;
+                }
+
                 let player_ids = self
                     .ctx
                     .game_server
@@ -675,6 +684,11 @@ impl LifecycleService {
             };
 
             if (max_count as i64) - (min_count as i64) < 2 {
+                break;
+            }
+
+            // Skip if the source table is mid-hand — will rebalance on next check
+            if self.ctx.game_server.is_table_mid_hand(&max_id).await {
                 break;
             }
 
