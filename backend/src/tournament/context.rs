@@ -740,9 +740,9 @@ impl TournamentContext {
         use crate::game::{format::SitAndGo, variant::variant_from_id};
         use uuid::Uuid;
 
-        // Get all registered players (exclude any previously eliminated, e.g. from a prior run)
-        let registrations: Vec<TournamentRegistration> = sqlx::query_as(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL ORDER BY registered_at",
+        // Get all registered players and shuffle for random seating
+        let mut registrations: Vec<TournamentRegistration> = sqlx::query_as(
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
@@ -751,6 +751,10 @@ impl TournamentContext {
         if registrations.is_empty() {
             return Err(AppError::BadRequest("No players registered".to_string()));
         }
+
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+        registrations.shuffle(&mut thread_rng());
 
         // Create table ID and name
         let table_id = Uuid::new_v4().to_string();
@@ -906,9 +910,9 @@ impl TournamentContext {
         };
         use uuid::Uuid;
 
-        // Get all registered players (exclude any previously eliminated, e.g. from a prior run)
-        let registrations: Vec<TournamentRegistration> = sqlx::query_as(
-            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL ORDER BY registered_at",
+        // Get all registered players and shuffle for random seating
+        let mut registrations: Vec<TournamentRegistration> = sqlx::query_as(
+            "SELECT * FROM tournament_registrations WHERE tournament_id = ? AND eliminated_at IS NULL",
         )
         .bind(&tournament.id)
         .fetch_all(&*self.pool)
@@ -917,6 +921,10 @@ impl TournamentContext {
         if registrations.is_empty() {
             return Err(AppError::BadRequest("No players registered".to_string()));
         }
+
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+        registrations.shuffle(&mut thread_rng());
 
         let player_count = registrations.len();
 

@@ -739,7 +739,7 @@ class _GameScreenState extends State<GameScreen> {
                   style: TextStyle(color: Colors.white70, fontSize: 14),
                 ),
               )
-            else
+            else if (_gameState?.tournamentId == null)
               Container(
                 padding: const EdgeInsets.all(16),
                 child: const Text(
