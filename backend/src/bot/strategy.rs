@@ -3,11 +3,20 @@
 //! Each strategy implements the `BotStrategy` trait to decide what action
 //! to take given the current game state visible to the bot.
 
-use crate::bot::evaluate::{estimate_hand_strength, preflop_hand_strength};
+use crate::bot::evaluate::{estimate_hand_strength, preflop_hand_strength, preflop_tier};
 use crate::game::deck::Card;
 use crate::game::hand::evaluate_hand;
 use crate::game::{GamePhase, PlayerAction};
 use rand::Rng;
+
+/// Position categories for bot decision-making.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BotPosition {
+    Early,
+    Middle,
+    Late,
+    Blind,
+}
 
 /// Everything the bot can see about the current game state.
 pub struct BotGameView {
@@ -21,6 +30,8 @@ pub struct BotGameView {
     pub big_blind: i64,
     pub min_raise: i64,
     pub num_active_opponents: usize,
+    pub position: BotPosition,
+    pub was_preflop_raiser: bool,
 }
 
 /// Trait for bot decision-making.
@@ -65,48 +76,41 @@ impl BotStrategy for SimpleStrategy {
     fn decide(&self, view: &BotGameView) -> PlayerAction {
         let mut rng = rand::thread_rng();
 
-        let strength = if view.community_cards.is_empty() {
-            // Preflop: use quick heuristic
-            preflop_hand_strength(&view.hole_cards)
-        } else {
-            // Postflop: Monte Carlo with adaptive iteration counts
-            let iterations = match view.phase {
-                GamePhase::Flop => 160,
-                GamePhase::Turn => 200,
-                GamePhase::River => 240,
-                _ => 180,
-            };
-            estimate_hand_strength(
-                &view.hole_cards,
-                &view.community_cards,
-                view.num_active_opponents.max(1),
-                iterations,
-            )
+        // --- Preflop: chart + position-based decisions ---
+        if view.community_cards.is_empty() && view.hole_cards.len() == 2 {
+            return self.decide_preflop(view, &mut rng);
+        }
+
+        // --- Postflop ---
+        let iterations = match view.phase {
+            GamePhase::Flop => 160,
+            GamePhase::Turn => 200,
+            GamePhase::River => 240,
+            _ => 180,
         };
+        let strength = estimate_hand_strength(
+            &view.hole_cards,
+            &view.community_cards,
+            view.num_active_opponents.max(1),
+            iterations,
+        );
 
         let adjusted_strength = adjust_for_draws_and_board(strength, view).clamp(0.0, 1.0);
 
-        // Aggression adjusts thresholds:
-        // Higher aggression = plays more hands and raises more
         let raise_threshold = 0.70 - self.aggression * 0.20; // 0.50..0.70
 
         let to_call = view.current_bet - view.my_current_bet;
         let can_check = to_call <= 0;
 
-        // Pot odds: ratio of call amount to total pot
         let pot_odds = if to_call > 0 && view.pot_total > 0 {
             to_call as f64 / (view.pot_total + to_call) as f64
         } else {
             0.0
         };
 
-        // Required strength to call: pot_odds + a margin based on tightness
-        // Tight (0.2): need strength > pot_odds + 0.12
-        // Aggressive (0.8): need strength > pot_odds - 0.06
-        let call_margin = 0.15 - self.aggression * 0.22; // -0.07..0.13
+        let call_margin = 0.15 - self.aggression * 0.22;
         let min_call_strength = (pot_odds + call_margin).max(0.0);
 
-        // Add some randomness (bluff or slowplay ~10% of the time)
         let bluff_roll: f64 = rng.gen();
         let is_bluffing = bluff_roll < 0.05 + self.aggression * 0.08;
         let is_slowplaying = bluff_roll > 0.95 - self.aggression * 0.05;
@@ -116,63 +120,211 @@ impl BotStrategy for SimpleStrategy {
             10.0
         };
 
+        // Continuation bet: if we were the preflop raiser and it checks to us on the flop
+        let should_cbet = view.was_preflop_raiser
+            && view.phase == GamePhase::Flop
+            && can_check
+            && rng.gen_bool(0.65);
+
         if can_check {
-            // No bet to face
             if adjusted_strength > raise_threshold && !is_slowplaying {
-                // Strong hand: raise (or occasional all-in with nuts)
-                if adjusted_strength >= 0.95 && rng.gen_bool(0.15 + self.aggression * 0.15) {
-                    // Very strong hand: sometimes go all-in
-                    PlayerAction::AllIn
-                } else if spr <= 2.0 && adjusted_strength > 0.65 {
+                if (adjusted_strength >= 0.95 && rng.gen_bool(0.15 + self.aggression * 0.15))
+                    || (spr <= 2.0 && adjusted_strength > 0.65)
+                {
                     PlayerAction::AllIn
                 } else {
                     let raise_size = self.calculate_raise(view, adjusted_strength, &mut rng);
                     self.raise_action(view, raise_size)
                 }
-            } else if is_bluffing && view.phase != GamePhase::PreFlop {
-                // Occasional bluff bet
+            } else if should_cbet {
+                // C-bet with standard sizing regardless of hand strength
+                let raise_size = self.calculate_raise(view, 0.55, &mut rng);
+                self.raise_action(view, raise_size)
+            } else if is_bluffing {
                 let raise_size = self.calculate_raise(view, 0.5, &mut rng);
                 self.raise_action(view, raise_size)
             } else {
                 PlayerAction::Check
             }
+        } else if adjusted_strength > raise_threshold && !is_slowplaying {
+            if (adjusted_strength >= 0.95 && rng.gen_bool(0.20 + self.aggression * 0.20))
+                || (spr <= 2.0 && adjusted_strength > 0.65)
+                || to_call >= view.my_stack / 2
+            {
+                PlayerAction::AllIn
+            } else {
+                let raise_size = self.calculate_raise(view, adjusted_strength, &mut rng);
+                self.raise_action(view, raise_size)
+            }
+        } else if is_bluffing {
+            if to_call >= view.my_stack / 2 {
+                PlayerAction::AllIn
+            } else {
+                let raise_size = self.calculate_raise(view, 0.5, &mut rng);
+                self.raise_action(view, raise_size)
+            }
+        } else if adjusted_strength >= min_call_strength
+            || (to_call <= view.big_blind && adjusted_strength > 0.25)
+        {
+            PlayerAction::Call
         } else {
-            // Facing a bet — use pot odds to decide
-            if adjusted_strength > raise_threshold && !is_slowplaying {
-                // Strong hand: raise or re-raise
-                if adjusted_strength >= 0.95 && rng.gen_bool(0.20 + self.aggression * 0.20) {
-                    // Very strong hand (nuts): go all-in more often
-                    PlayerAction::AllIn
-                } else if spr <= 2.0 && adjusted_strength > 0.65 {
-                    PlayerAction::AllIn
-                } else if to_call >= view.my_stack / 2 {
-                    PlayerAction::AllIn
+            PlayerAction::Fold
+        }
+    }
+}
+
+impl SimpleStrategy {
+    /// Position-aware preflop decision using chart tiers.
+    fn decide_preflop(&self, view: &BotGameView, rng: &mut impl Rng) -> PlayerAction {
+        let tier = preflop_tier(
+            view.hole_cards[0].rank,
+            view.hole_cards[1].rank,
+            view.hole_cards[0].suit == view.hole_cards[1].suit,
+        );
+
+        // Aggression widens range by ~1 tier, tightness narrows by ~1 tier
+        // aggression=0.2 -> adjust=+0.6 (tighter), aggression=0.8 -> adjust=-0.6 (looser)
+        let tier_adjust = ((0.5 - self.aggression) * 2.0).round() as i8;
+        let effective_tier = (tier as i8 + tier_adjust).max(0) as u8;
+
+        // Max playable tier depends on position
+        let max_tier = match view.position {
+            BotPosition::Early => 2,  // tight: only premium/strong
+            BotPosition::Middle => 4, // standard range
+            BotPosition::Late => 6,   // wide range
+            BotPosition::Blind => {
+                // BB defends wider vs small raises, SB plays tighter
+                let to_call = view.current_bet - view.my_current_bet;
+                if to_call <= view.big_blind * 2 {
+                    5 // BB defend range
                 } else {
-                    let raise_size = self.calculate_raise(view, adjusted_strength, &mut rng);
-                    self.raise_action(view, raise_size)
+                    3 // SB or facing big raise
                 }
-            } else if is_bluffing {
-                // Bluff raise
-                if to_call >= view.my_stack / 2 {
-                    PlayerAction::AllIn
-                } else {
-                    let raise_size = self.calculate_raise(view, 0.5, &mut rng);
-                    self.raise_action(view, raise_size)
-                }
-            } else if adjusted_strength >= min_call_strength {
-                // Decent hand: call
+            }
+        };
+
+        let to_call = view.current_bet - view.my_current_bet;
+        let can_check = to_call <= 0;
+        let bb = view.big_blind.max(1);
+
+        // Fold if hand is outside our playable range
+        if effective_tier > max_tier {
+            return if can_check {
+                PlayerAction::Check
+            } else {
+                PlayerAction::Fold
+            };
+        }
+
+        // Steal attempt: in late position, if folded to us, open wider
+        let folded_to_us = can_check || (to_call <= bb && view.position == BotPosition::Late);
+        let is_steal = view.position == BotPosition::Late && folded_to_us && effective_tier <= 7;
+
+        // Determine if we're facing a raise (someone raised above BB)
+        let facing_raise = to_call > bb;
+        let facing_3bet = to_call > bb * 5; // rough heuristic: >5BB means 3-bet
+
+        if can_check || (to_call <= bb && !facing_raise) {
+            // No raise to face — open raise or check
+            if effective_tier <= 1 {
+                // Premium: always raise
+                let raise_size = self.calculate_preflop_raise(view, false, rng);
+                self.raise_action(view, raise_size)
+            } else if effective_tier <= max_tier || is_steal {
+                // Playable hand: raise
+                let raise_size = self.calculate_preflop_raise(view, false, rng);
+                self.raise_action(view, raise_size)
+            } else {
+                PlayerAction::Check
+            }
+        } else if facing_3bet {
+            // Facing a 3-bet: only continue with strong hands
+            if effective_tier <= 1 {
+                // 4-bet with premium
+                let raise_size = self.calculate_preflop_raise(view, true, rng);
+                self.raise_action(view, raise_size)
+            } else if effective_tier <= 3 {
+                // Call with good hands
                 PlayerAction::Call
-            } else if to_call <= view.big_blind && adjusted_strength > 0.25 {
-                // Cheap call: worth it with marginal hand
+            } else {
+                PlayerAction::Fold
+            }
+        } else if facing_raise {
+            // Facing a single raise
+            if effective_tier <= 1 {
+                // 3-bet with premium
+                let raise_size = self.calculate_preflop_raise(view, true, rng);
+                self.raise_action(view, raise_size)
+            } else if effective_tier <= 2 && rng.gen_bool(0.4 + self.aggression * 0.2) {
+                // Sometimes 3-bet with strong hands
+                let raise_size = self.calculate_preflop_raise(view, true, rng);
+                self.raise_action(view, raise_size)
+            } else if effective_tier <= max_tier {
+                // Call with playable hands
+                PlayerAction::Call
+            } else if to_call <= bb * 2 && effective_tier <= max_tier + 1 {
+                // Cheap call with marginal hand
+                PlayerAction::Call
+            } else {
+                PlayerAction::Fold
+            }
+        } else {
+            // Default: use strength-based logic
+            let strength = preflop_hand_strength(&view.hole_cards);
+            if strength > 0.60 {
                 PlayerAction::Call
             } else {
                 PlayerAction::Fold
             }
         }
     }
-}
 
-impl SimpleStrategy {
+    /// Calculate preflop raise size with standard poker sizing.
+    fn calculate_preflop_raise(
+        &self,
+        view: &BotGameView,
+        is_reraise: bool,
+        rng: &mut impl Rng,
+    ) -> i64 {
+        let bb = view.big_blind.max(1);
+        let to_call = (view.current_bet - view.my_current_bet).max(0);
+        let min_raise = view.min_raise.max(bb);
+        let stack_after_call = (view.my_stack - to_call).max(0);
+
+        let raise = if is_reraise {
+            if view.current_bet > bb * 8 {
+                // Facing a 3-bet, 4-bet: 2.2-2.5x the current bet
+                let multiplier = rng.gen_range(2.2..2.5);
+                let target = (view.current_bet as f64 * multiplier) as i64;
+                (target - view.current_bet).max(min_raise)
+            } else {
+                // 3-bet: 3x-3.5x the raise
+                let multiplier = if view.position == BotPosition::Blind || view.position == BotPosition::Early {
+                    rng.gen_range(3.2..3.6) // OOP: bigger
+                } else {
+                    rng.gen_range(2.8..3.2) // IP: smaller
+                };
+                let target = (view.current_bet as f64 * multiplier) as i64;
+                (target - view.current_bet).max(min_raise)
+            }
+        } else {
+            // Open raise: 2.5-3x BB + 1BB per limper
+            let base_multiplier = rng.gen_range(2.5..3.0);
+            // Count limpers: excess in pot beyond blinds
+            let expected_blind_pot = bb + bb / 2; // BB + SB
+            let limper_money = (view.pot_total - expected_blind_pot).max(0);
+            let limper_extra = (limper_money / bb).min(4); // cap at 4 extra BB
+            let target = (bb as f64 * base_multiplier) as i64 + limper_extra * bb;
+            (target - view.current_bet).max(min_raise)
+        };
+
+        // Add ±10% variance
+        let variance: f64 = rng.gen_range(0.9..1.1);
+        let raise = (raise as f64 * variance) as i64;
+        raise.max(min_raise).min(stack_after_call)
+    }
+
+    /// Calculate postflop raise with street-dependent sizing.
     fn calculate_raise(&self, view: &BotGameView, strength: f64, rng: &mut impl Rng) -> i64 {
         let bb = view.big_blind.max(1);
         let to_call = (view.current_bet - view.my_current_bet).max(0);
@@ -180,58 +332,41 @@ impl SimpleStrategy {
         let min_raise = view.min_raise.max(bb);
         let stack_after_call = (view.my_stack - to_call).max(0);
 
-        // Preflop: use BB-based sizing (2.5-4x BB)
+        // Preflop: delegate to preflop raise calculator
         if view.community_cards.is_empty() {
-            let opponent_modifier = if view.num_active_opponents >= 4 {
-                -0.2
-            } else {
-                0.1
-            };
-            let multiplier = 2.5 + strength * 1.5 + self.aggression * 0.5 + opponent_modifier;
-            let target_total = (bb as f64 * multiplier) as i64;
-            let raise = (target_total - view.current_bet).max(min_raise);
-            return raise.min(stack_after_call);
+            return self.calculate_preflop_raise(view, view.current_bet > bb, rng);
         }
 
-        // Postflop: use pot-based sizing like real players
-        // Choose bet size based on hand strength and aggression
-        let base_percentage = if strength >= 0.85 {
-            // Very strong hands: vary between 50% pot to overbet
-            if rng.gen_bool(0.3) {
-                1.0 + self.aggression * 0.5 // pot or overbet (for value)
-            } else if rng.gen_bool(0.5) {
-                0.75 // 75% pot
-            } else {
-                0.5 // 50% pot
-            }
-        } else if strength >= 0.70 {
-            // Strong hands: 50-75% pot
-            if rng.gen_bool(0.6) {
-                0.75
-            } else {
-                0.5
-            }
-        } else if strength >= 0.55 {
-            // Medium hands: 33-50% pot
-            if rng.gen_bool(0.5) {
-                0.5
-            } else {
-                0.33
-            }
-        } else {
-            // Bluff or weak: 33-50% pot (smaller for bluffs)
-            if rng.gen_bool(0.7) {
-                0.33
-            } else {
-                0.5
-            }
+        // Street-dependent base sizing
+        let street_base = match view.phase {
+            GamePhase::Flop => rng.gen_range(0.50..0.66),
+            GamePhase::Turn => rng.gen_range(0.66..0.75),
+            GamePhase::River => rng.gen_range(0.75..1.00),
+            _ => 0.60,
         };
 
-        // Add small variance (0.9x to 1.15x)
-        let variance: f64 = rng.gen_range(0.9..1.15);
+        let base_percentage = if strength >= 0.85 {
+            // Very strong: use street sizing, occasionally overbet on river
+            if view.phase == GamePhase::River && rng.gen_bool(0.25) {
+                rng.gen_range(1.2..1.5) // overbet for value
+            } else {
+                street_base
+            }
+        } else if strength >= 0.70 {
+            // Strong: standard street sizing
+            street_base
+        } else if strength >= 0.55 {
+            // Medium: slightly smaller than street standard
+            street_base * 0.8
+        } else {
+            // Bluff/weak: use same sizing as value bets (balanced)
+            street_base * 0.9
+        };
+
+        // Add small variance (±10%)
+        let variance: f64 = rng.gen_range(0.9..1.1);
         let raise = (pot as f64 * base_percentage * variance) as i64;
 
-        // Ensure minimum bet is at least 1 BB, and don't exceed stack-after-call
         let min_bet = min_raise.max(bb);
         raise.max(min_bet).min(stack_after_call)
     }
@@ -435,13 +570,39 @@ mod tests {
             big_blind: 50,
             min_raise: 50,
             num_active_opponents: 1,
+            position: BotPosition::Middle,
+            was_preflop_raiser: false,
+        }
+    }
+
+    fn make_preflop_view(
+        hole: Vec<Card>,
+        pot: i64,
+        current_bet: i64,
+        my_bet: i64,
+        my_stack: i64,
+        position: BotPosition,
+    ) -> BotGameView {
+        BotGameView {
+            hole_cards: hole,
+            community_cards: vec![],
+            pot_total: pot,
+            current_bet,
+            my_current_bet: my_bet,
+            my_stack,
+            phase: GamePhase::PreFlop,
+            big_blind: 50,
+            min_raise: 50,
+            num_active_opponents: 3,
+            position,
+            was_preflop_raiser: false,
         }
     }
 
     #[test]
     fn test_simple_strategy_checks_with_weak_hand_no_bet() {
         let strategy = SimpleStrategy::tight();
-        // Weak hand, no bet to face
+        // Weak hand, no bet to face — postflop
         let view = make_view(
             vec![Card::new(2, 0), Card::new(7, 3)],
             vec![Card::new(3, 1), Card::new(9, 2), Card::new(13, 0)],
@@ -451,9 +612,7 @@ mod tests {
             1000,
             GamePhase::Flop,
         );
-        // With a weak hand and no bet, a tight player should check
         let action = strategy.decide(&view);
-        // Could be Check or a rare bluff — just verify it's not Fold
         assert!(
             !matches!(action, PlayerAction::Fold),
             "Should not fold when can check"
@@ -463,7 +622,7 @@ mod tests {
     #[test]
     fn test_simple_strategy_folds_junk_facing_raise() {
         let strategy = SimpleStrategy::tight();
-        // Very weak hand (2-3o) on A-K-Q board — virtually no chance to win
+        // Very weak hand (2-3o) on A-K-Q board — postflop
         let view = make_view(
             vec![Card::new(2, 0), Card::new(3, 3)],
             vec![Card::new(14, 1), Card::new(13, 2), Card::new(12, 0)],
@@ -473,7 +632,6 @@ mod tests {
             1000,
             GamePhase::Flop,
         );
-        // Run multiple times — tight strategy should usually fold junk vs big raise
         let mut fold_count = 0;
         for _ in 0..20 {
             if matches!(strategy.decide(&view), PlayerAction::Fold) {
@@ -511,25 +669,25 @@ mod tests {
     #[test]
     fn test_simple_strategy_raises_strong_hand() {
         let strategy = SimpleStrategy::aggressive();
-        // Pocket aces preflop, no bet
-        let view = make_view(
+        // Pocket aces preflop, late position, no bet
+        let view = make_preflop_view(
             vec![Card::new(14, 0), Card::new(14, 1)],
-            vec![],
             75,
             0,
             0,
             1000,
-            GamePhase::PreFlop,
+            BotPosition::Late,
         );
         let mut raise_count = 0;
         for _ in 0..20 {
-            if matches!(strategy.decide(&view), PlayerAction::Raise(_)) {
+            let action = strategy.decide(&view);
+            if matches!(action, PlayerAction::Raise(_) | PlayerAction::AllIn) {
                 raise_count += 1;
             }
         }
         assert!(
-            raise_count >= 6,
-            "Aggressive bot should often raise AA, raised {}/20",
+            raise_count >= 15,
+            "Aggressive bot should always raise AA, raised {}/20",
             raise_count
         );
     }
@@ -548,6 +706,8 @@ mod tests {
             big_blind: 50,
             min_raise: 50,
             num_active_opponents: 1,
+            position: BotPosition::Middle,
+            was_preflop_raiser: false,
         };
 
         let no_draw_view = BotGameView {
@@ -561,6 +721,8 @@ mod tests {
             big_blind: 50,
             min_raise: 50,
             num_active_opponents: 1,
+            position: BotPosition::Middle,
+            was_preflop_raiser: false,
         };
 
         let mut draw_folds = 0;
@@ -596,6 +758,8 @@ mod tests {
             big_blind: 50,
             min_raise: 150,
             num_active_opponents: 2,
+            position: BotPosition::Late,
+            was_preflop_raiser: false,
         };
 
         let mut saw_raise = false;
@@ -614,10 +778,117 @@ mod tests {
     }
 
     #[test]
+    fn test_preflop_chart_tiers() {
+        use crate::bot::evaluate::preflop_tier;
+
+        // AA is tier 0 (premium)
+        assert_eq!(preflop_tier(14, 14, false), 0);
+        // KK is tier 0
+        assert_eq!(preflop_tier(13, 13, false), 0);
+        // AKs is tier 0
+        assert_eq!(preflop_tier(14, 13, true), 0);
+        // AKo is tier 1
+        assert_eq!(preflop_tier(14, 13, false), 1);
+        // JJ is tier 1
+        assert_eq!(preflop_tier(11, 11, false), 1);
+        // 72o is tier 8 (trash)
+        assert_eq!(preflop_tier(7, 2, false), 8);
+        // 32o is tier 8 (trash)
+        assert_eq!(preflop_tier(3, 2, false), 8);
+        // Tier ordering: AA <= AKs < JJ < 99 < 72o
+        assert!(preflop_tier(14, 14, false) <= preflop_tier(14, 13, true));
+        assert!(preflop_tier(14, 13, true) <= preflop_tier(11, 11, false));
+        assert!(preflop_tier(11, 11, false) < preflop_tier(9, 9, false));
+        assert!(preflop_tier(9, 9, false) < preflop_tier(7, 2, false));
+
+        // Suited > offsuit for same ranks
+        assert!(preflop_tier(14, 12, true) < preflop_tier(14, 12, false));
+        assert!(preflop_tier(13, 11, true) < preflop_tier(13, 11, false));
+    }
+
+    #[test]
+    fn test_position_affects_decisions() {
+        let strategy = SimpleStrategy::balanced();
+        // K9o is tier 6 — playable in Late but not in Early
+        let k9o = vec![Card::new(13, 0), Card::new(9, 1)];
+
+        let early_view = make_preflop_view(
+            k9o.clone(),
+            75,
+            0,
+            0,
+            1000,
+            BotPosition::Early,
+        );
+
+        let late_view = make_preflop_view(
+            k9o,
+            75,
+            0,
+            0,
+            1000,
+            BotPosition::Late,
+        );
+
+        let mut early_folds = 0;
+        let mut late_folds = 0;
+        for _ in 0..30 {
+            if matches!(strategy.decide(&early_view), PlayerAction::Check) {
+                early_folds += 1;
+            }
+            if matches!(strategy.decide(&late_view), PlayerAction::Check) {
+                late_folds += 1;
+            }
+        }
+        // In early position, K9o (tier 6) should be checked/folded more than in late
+        assert!(
+            early_folds > late_folds,
+            "Should play tighter in early position (early checks: {}, late checks: {})",
+            early_folds,
+            late_folds
+        );
+    }
+
+    #[test]
+    fn test_cbet_on_flop() {
+        let strategy = SimpleStrategy::balanced();
+        // Bot was preflop raiser, weak hand on flop, it checks to them
+        let view = BotGameView {
+            hole_cards: vec![Card::new(14, 0), Card::new(9, 1)],
+            community_cards: vec![Card::new(3, 2), Card::new(7, 3), Card::new(5, 0)],
+            pot_total: 300,
+            current_bet: 0,
+            my_current_bet: 0,
+            my_stack: 1500,
+            phase: GamePhase::Flop,
+            big_blind: 50,
+            min_raise: 50,
+            num_active_opponents: 1,
+            position: BotPosition::Late,
+            was_preflop_raiser: true,
+        };
+
+        let mut bet_count = 0;
+        for _ in 0..40 {
+            let action = strategy.decide(&view);
+            if matches!(action, PlayerAction::Raise(_) | PlayerAction::AllIn) {
+                bet_count += 1;
+            }
+        }
+        // Should c-bet a significant portion of the time (~65% + bluff %)
+        assert!(
+            bet_count >= 15,
+            "Preflop raiser should c-bet frequently on flop, bet {}/40",
+            bet_count
+        );
+    }
+
+    #[test]
     fn test_simulated_tournament_battle() {
         use rand::SeedableRng;
         use rand_chacha::ChaCha20Rng;
 
+        let positions = [BotPosition::Early, BotPosition::Middle, BotPosition::Late];
         let strategies: Vec<Box<dyn BotStrategy>> = vec![
             Box::new(SimpleStrategy::tight()),
             Box::new(SimpleStrategy::balanced()),
@@ -652,6 +923,8 @@ mod tests {
                     big_blind: 50,
                     min_raise: 100,
                     num_active_opponents: strategies.len() - 1,
+                    position: positions[idx % positions.len()],
+                    was_preflop_raiser: false,
                 };
 
                 let action = strategy.decide(&view);

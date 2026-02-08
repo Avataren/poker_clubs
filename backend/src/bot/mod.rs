@@ -10,7 +10,7 @@ pub mod strategy;
 use crate::game::table::PokerTable;
 use crate::game::{GamePhase, PlayerAction};
 use std::collections::HashMap;
-use strategy::{BotGameView, BotStrategy, SimpleStrategy};
+use strategy::{BotGameView, BotPosition, BotStrategy, SimpleStrategy};
 use uuid::Uuid;
 
 /// A bot player with its decision-making strategy.
@@ -215,6 +215,11 @@ fn build_bot_view(table: &PokerTable, player_idx: usize) -> BotGameView {
         .filter(|(i, p)| *i != player_idx && p.is_active_in_hand())
         .count();
 
+    let position = compute_position(table, player_idx);
+
+    // Heuristic: if my current bet > big blind, I was likely the preflop raiser
+    let was_preflop_raiser = player.current_bet > table.big_blind;
+
     BotGameView {
         hole_cards: player.hole_cards.clone(),
         community_cards: table.community_cards.clone(),
@@ -226,6 +231,71 @@ fn build_bot_view(table: &PokerTable, player_idx: usize) -> BotGameView {
         big_blind: table.big_blind,
         min_raise: table.min_raise,
         num_active_opponents,
+        position,
+        was_preflop_raiser,
+    }
+}
+
+/// Compute the bot's position category from dealer_seat and player arrangement.
+fn compute_position(table: &PokerTable, player_idx: usize) -> BotPosition {
+    let num_players = table.players.len();
+    if num_players <= 2 {
+        // Heads-up: dealer is Late (button), other is Blind
+        return if player_idx == table.dealer_seat {
+            BotPosition::Late
+        } else {
+            BotPosition::Blind
+        };
+    }
+
+    // Find SB and BB indices
+    let sb_idx = table.next_player_for_blind(table.dealer_seat);
+    let bb_idx = table.next_player_for_blind(sb_idx);
+
+    if player_idx == sb_idx || player_idx == bb_idx {
+        return BotPosition::Blind;
+    }
+
+    if player_idx == table.dealer_seat {
+        return BotPosition::Late;
+    }
+
+    // Build the preflop acting order: UTG (after BB) ... to dealer (button)
+    // and find where we sit in that order
+    let mut positions = Vec::new();
+    let mut idx = bb_idx;
+    loop {
+        idx = (idx + 1) % num_players;
+        if idx == sb_idx {
+            break; // full circle
+        }
+        positions.push(idx);
+        if idx == table.dealer_seat {
+            break;
+        }
+    }
+
+    let my_pos = positions.iter().position(|&i| i == player_idx);
+    let total = positions.len();
+
+    match (my_pos, total) {
+        (Some(pos), t) if t <= 3 => {
+            // Short-handed (3-4 players): just Early and Late
+            if pos + 1 == t { BotPosition::Late } else { BotPosition::Early }
+        }
+        (Some(pos), t) => {
+            // Standard table: first ~1/3 Early, last ~1/3 Late, rest Middle
+            let early_cutoff = t.div_ceil(3);
+            let late_start = t - t.div_ceil(3);
+            if pos < early_cutoff {
+                BotPosition::Early
+            } else if pos >= late_start {
+                BotPosition::Late
+            } else {
+                BotPosition::Middle
+            }
+        }
+        _ => BotPosition::Middle, // fallback
     }
 }
 
