@@ -54,6 +54,7 @@ pub struct PublicPlayerState {
     pub is_winner: bool,
     pub last_action: Option<String>,
     pub pot_won: i64,                   // Amount won from pot (for animation)
+    pub winning_hand: Option<String>,   // Per-player winning hand description
     pub shown_cards: Option<Vec<bool>>, // Which cards the winner chose to show (fold-win only)
 }
 
@@ -258,6 +259,7 @@ impl PokerTable {
                         is_winner: p.is_winner,
                         last_action: p.last_action.clone(),
                         pot_won: p.pot_won,
+                        winning_hand: p.winning_hand.clone(),
                         shown_cards: shown_cards_field,
                     }
                 })

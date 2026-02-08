@@ -449,7 +449,6 @@ class _GameScreenState extends State<GameScreen> {
           onRemoveBot: _isTableClosed ? null : _removeBot,
           showingDown: isShowdown,
           gamePhase: _gameState!.phase,
-          winningHand: _gameState!.winningHand,
           dealerSeat: _gameState!.dealerSeat,
           smallBlindSeat: _gameState!.smallBlindSeat,
           bigBlindSeat: _gameState!.bigBlindSeat,

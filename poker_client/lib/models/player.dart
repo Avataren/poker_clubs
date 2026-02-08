@@ -11,6 +11,7 @@ class Player {
   final bool isWinner;
   final String? lastAction;
   final int potWon;
+  final String? winningHand;
   final List<bool>? shownCards;
 
   Player({
@@ -24,6 +25,7 @@ class Player {
     this.isWinner = false,
     this.lastAction,
     this.potWon = 0,
+    this.winningHand,
     this.shownCards,
   });
 
@@ -51,6 +53,7 @@ class Player {
       isWinner: json['is_winner'] as bool? ?? false,
       lastAction: json['last_action'] as String?,
       potWon: json['pot_won'] as int? ?? 0,
+      winningHand: json['winning_hand'] as String?,
       shownCards: shownCards,
     );
   }

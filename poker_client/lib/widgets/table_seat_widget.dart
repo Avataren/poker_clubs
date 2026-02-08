@@ -13,7 +13,6 @@ class TableSeatWidget extends StatelessWidget {
   final VoidCallback? onTakeSeat;
   final VoidCallback? onRemoveBot;
   final bool showingDown;
-  final String? winningHand;
   final bool isDealer;
   final bool isSmallBlind;
   final bool isBigBlind;
@@ -32,7 +31,6 @@ class TableSeatWidget extends StatelessWidget {
     this.onTakeSeat,
     this.onRemoveBot,
     this.showingDown = false,
-    this.winningHand,
     this.isDealer = false,
     this.isSmallBlind = false,
     this.isBigBlind = false,
@@ -276,9 +274,9 @@ class TableSeatWidget extends StatelessWidget {
                             '🏆',
                             style: TextStyle(fontSize: seatSize * 0.2),
                           ),
-                          if (winningHand != null)
+                          if (player!.winningHand != null)
                             Text(
-                              winningHand!,
+                              player!.winningHand!,
                               style: TextStyle(
                                 color: Colors.black,
                                 fontSize: badgeFontSize,
@@ -348,7 +346,6 @@ class PokerTableWidget extends StatefulWidget {
   final Function(String)? onRemoveBot;
   final bool showingDown;
   final String gamePhase;
-  final String? winningHand;
   final int? dealerSeat;
   final int? smallBlindSeat;
   final int? bigBlindSeat;
@@ -366,7 +363,6 @@ class PokerTableWidget extends StatefulWidget {
     this.onRemoveBot,
     this.showingDown = false,
     this.gamePhase = 'waiting',
-    this.winningHand,
     this.dealerSeat,
     this.smallBlindSeat,
     this.bigBlindSeat,
@@ -830,7 +826,6 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               ? () => widget.onRemoveBot!(player.userId)
               : null,
           showingDown: widget.showingDown,
-          winningHand: widget.winningHand,
           isDealer: widget.dealerSeat == seatIndex,
           isSmallBlind: widget.smallBlindSeat == seatIndex,
           isBigBlind: widget.bigBlindSeat == seatIndex,

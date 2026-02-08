@@ -11,6 +11,7 @@ impl PokerTable {
                 card.highlighted = false;
             }
             player.is_winner = false;
+            player.winning_hand = None;
         }
 
         // Evaluate hi hands for active players
@@ -138,6 +139,12 @@ impl PokerTable {
             // Highlight the best 5-card hand for this winner
             if let Some((_, hand_rank)) = hands.iter().find(|(idx, _)| *idx == *player_idx) {
                 let best_cards = &hand_rank.best_cards;
+                // In non-hi-lo games, each payout recipient can safely display their
+                // own made hand. Hi-lo requires separate hi/lo labeling and is omitted
+                // here to avoid showing inaccurate labels.
+                if !is_hilo {
+                    self.players[*player_idx].winning_hand = Some(hand_rank.description.clone());
+                }
 
                 tracing::info!(
                     "Winner {} ({}) best cards: {:?}",

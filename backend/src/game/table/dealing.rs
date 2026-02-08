@@ -21,6 +21,9 @@ impl PokerTable {
             // Force to Waiting regardless of current phase (may be called from Showdown)
             self.phase = GamePhase::Waiting;
             self.community_cards.clear();
+            self.pot.reset();
+            self.current_bet = 0;
+            self.raises_this_round = 0;
             tracing::info!("Not enough players with chips to start hand, going to Waiting phase");
             return;
         }
