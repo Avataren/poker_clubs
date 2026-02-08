@@ -243,7 +243,7 @@ class TableSeatWidget extends StatelessWidget {
                     ),
                   ),
 
-                // Winner badge overlay (on top of circle)
+                // Winner badge overlay
                 if (player != null && player!.isWinner && showingDown)
                   Positioned(
                     child: Container(
@@ -274,7 +274,8 @@ class TableSeatWidget extends StatelessWidget {
                             '🏆',
                             style: TextStyle(fontSize: seatSize * 0.2),
                           ),
-                          if (player!.winningHand != null)
+                          if (player!.winningHand != null &&
+                              player!.winningHand!.isNotEmpty)
                             Text(
                               player!.winningHand!,
                               style: TextStyle(
@@ -292,44 +293,6 @@ class TableSeatWidget extends StatelessWidget {
                   ),
               ],
             ),
-
-            // Player state indicator
-            if (!isEmpty && (player!.isFolded || !player!.isActive))
-              Padding(
-                padding: EdgeInsets.only(top: seatSize * 0.05),
-                child: Text(
-                  player!.state,
-                  style: TextStyle(
-                    color: Colors.white54,
-                    fontSize: betFontSize,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-
-            // Last action indicator
-            if (!isEmpty && player!.lastAction != null)
-              Padding(
-                padding: EdgeInsets.only(top: seatSize * 0.025),
-                child: Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: seatSize * 0.075,
-                    vertical: seatSize * 0.025,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(seatSize * 0.1),
-                  ),
-                  child: Text(
-                    player!.lastAction!,
-                    style: TextStyle(
-                      color: Colors.amber,
-                      fontSize: betFontSize,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ],

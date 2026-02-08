@@ -130,11 +130,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   }
 
   void _showSnackBar(String message) {
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    }
+    debugPrint('Tournament detail notice: $message');
   }
 
   Future<void> _loadDetail() async {
@@ -630,10 +626,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ElevatedButton.icon(
           onPressed: _isProcessing ? null : _startTournament,
           icon: const Icon(Icons.play_arrow, size: 18),
-          label: const Text(
-            'Start Now',
-            style: TextStyle(fontSize: 13),
-          ),
+          label: const Text('Start Now', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.green.shade700,
             foregroundColor: Colors.white,
@@ -646,10 +639,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ElevatedButton.icon(
           onPressed: _isProcessing ? null : _cancelTournament,
           icon: const Icon(Icons.cancel, size: 18),
-          label: const Text(
-            'Cancel',
-            style: TextStyle(fontSize: 13),
-          ),
+          label: const Text('Cancel', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade700,
             foregroundColor: Colors.white,
@@ -660,10 +650,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         ElevatedButton.icon(
           onPressed: _isProcessing ? null : _deleteTournament,
           icon: const Icon(Icons.delete_forever, size: 18),
-          label: const Text(
-            'Delete',
-            style: TextStyle(fontSize: 13),
-          ),
+          label: const Text('Delete', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade900,
             foregroundColor: Colors.white,
@@ -671,11 +658,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           ),
         ),
       if (tournament.status != 'finished' && tournament.status != 'cancelled')
-        _buildActionButton(
-          tournament,
-          isRegistered,
-          canRegister,
-        ),
+        _buildActionButton(tournament, isRegistered, canRegister),
     ];
 
     if (actionButtons.isEmpty) return null;
@@ -710,8 +693,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
                 children: [
                   for (final button in actionButtons) ...[
                     Expanded(child: button),
-                    if (button != actionButtons.last)
-                      const SizedBox(width: 8),
+                    if (button != actionButtons.last) const SizedBox(width: 8),
                   ],
                 ],
               ),
@@ -729,10 +711,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         return ElevatedButton.icon(
           onPressed: _isProcessing ? null : _unregister,
           icon: const Icon(Icons.exit_to_app, size: 18),
-          label: const Text(
-            'Unregister',
-            style: TextStyle(fontSize: 13),
-          ),
+          label: const Text('Unregister', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red,
             foregroundColor: Colors.white,
@@ -757,10 +736,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         return ElevatedButton.icon(
           onPressed: null,
           icon: const Icon(Icons.block, size: 18),
-          label: const Text(
-            'Full',
-            style: TextStyle(fontSize: 13),
-          ),
+          label: const Text('Full', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
@@ -770,10 +746,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
       return ElevatedButton.icon(
         onPressed: null,
         icon: const Icon(Icons.play_arrow, size: 18),
-        label: const Text(
-          'In Progress',
-          style: TextStyle(fontSize: 13),
-        ),
+        label: const Text('In Progress', style: TextStyle(fontSize: 13)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.orange,
           foregroundColor: Colors.white,

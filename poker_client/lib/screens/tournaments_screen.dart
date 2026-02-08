@@ -57,11 +57,7 @@ class _TournamentsScreenState extends State<TournamentsScreen> {
   }
 
   void _showSnackBar(String message) {
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    }
+    debugPrint('Tournaments notice: $message');
   }
 
   Future<void> _loadTournaments() async {
@@ -353,15 +349,11 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
       if (mounted) {
         Navigator.pop(context);
         widget.onCreated();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Tournament created successfully')),
-        );
+        debugPrint('Tournament created successfully');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        debugPrint('Tournament create error: $e');
       }
     } finally {
       if (mounted) {
@@ -436,10 +428,7 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
                         _scheduledStart != null
                             ? 'Start: ${_scheduledStart!.year}-${_scheduledStart!.month.toString().padLeft(2, '0')}-${_scheduledStart!.day.toString().padLeft(2, '0')} ${_scheduledStart!.hour.toString().padLeft(2, '0')}:${_scheduledStart!.minute.toString().padLeft(2, '0')}'
                             : 'No scheduled start',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[700],
-                        ),
+                        style: TextStyle(fontSize: 14, color: Colors.grey[700]),
                       ),
                     ),
                     IconButton(
@@ -450,8 +439,7 @@ class _CreateTournamentDialogState extends State<_CreateTournamentDialog> {
                     if (_scheduledStart != null)
                       IconButton(
                         icon: const Icon(Icons.clear),
-                        onPressed: () =>
-                            setState(() => _scheduledStart = null),
+                        onPressed: () => setState(() => _scheduledStart = null),
                         tooltip: 'Clear',
                       ),
                   ],

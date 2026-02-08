@@ -63,9 +63,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        debugPrint('Load clubs error: $e');
       }
     }
   }
@@ -75,15 +73,11 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
       await context.read<ApiService>().joinClub(clubId);
       _loadClubs();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Joined club successfully!')),
-        );
+        debugPrint('Joined club successfully');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        debugPrint('Join club error: $e');
       }
     }
   }
@@ -102,21 +96,14 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
         if (errorMsg.contains('no longer exists') ||
             errorMsg.contains('Unauthorized') ||
             errorMsg.contains('401')) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Session expired. Please log in again.'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          debugPrint('Session expired. Redirecting to login.');
           // Log out and return to login screen
           context.read<ApiService>().logout();
           if (mounted) {
             Navigator.of(context).pushReplacementNamed('/login');
           }
         } else {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+          debugPrint('Create club error: $e');
         }
       }
     }

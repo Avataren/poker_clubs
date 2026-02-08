@@ -18,18 +18,20 @@ class GameScreen extends StatefulWidget {
 }
 
 class _GameScreenState extends State<GameScreen> {
+  static const int _maxFeedEntries = 10;
+
   late WebSocketService _wsService;
   final _soundService = SoundService();
   GameState? _gameState;
   GameState? _previousGameState;
-  String _statusMessage = 'Connecting...';
   final _raiseController = TextEditingController(text: '200');
   final _buyinController = TextEditingController(text: '5000');
   final _topUpController = TextEditingController(text: '5000');
+  final List<_TableFeedEntry> _eventFeed = <_TableFeedEntry>[];
+  int _unreadFeedCount = 0;
   bool _isSeated = false;
   bool _hasSeenPlayersAtTable = false;
   bool _isTableClosed = false;
-  String _tableClosedMessage = 'Table closed';
 
   // Tournament info from live broadcast
   String? _tournamentId;
@@ -50,13 +52,26 @@ class _GameScreenState extends State<GameScreen> {
     _wsService = WebSocketService();
     _wsService.onGameStateUpdate = (gameState) {
       _playActionSounds(gameState);
+      final feedEvents = _collectStateFeedEvents(gameState);
       print('DEBUG: GameState tournamentId = ${gameState.tournamentId}');
       setState(() {
+        final wasSeated = _isSeated;
+        final wasTableClosed = _isTableClosed;
         _previousGameState = _gameState;
         _gameState = gameState;
         _updateTableClosedState(gameState);
-        _updateStatusMessage();
         _checkIfSeated();
+        if (!wasSeated && _isSeated) {
+          _appendFeedEvent('You are now seated.');
+        } else if (wasSeated && !_isSeated) {
+          _appendFeedEvent('You left your seat.');
+        }
+        if (!wasTableClosed && _isTableClosed) {
+          _appendFeedEvent('Table closed. Waiting for table move.');
+        }
+        for (final event in feedEvents) {
+          _appendFeedEvent(event);
+        }
       });
     };
     _wsService.onTournamentInfo =
@@ -101,18 +116,18 @@ class _GameScreenState extends State<GameScreen> {
       if (tableGone && isTournamentContext) {
         setState(() {
           _isTableClosed = true;
-          _tableClosedMessage = 'Table closed';
-          _statusMessage = _tableClosedMessage;
+          _appendFeedEvent('Table closed. Waiting for table move.');
         });
         return;
       }
 
-      setState(() => _statusMessage = 'Error: $error');
+      _recordFeedEvent('Error: $error');
     };
     _wsService.onConnected = () {
-      setState(() => _statusMessage = 'Connected - Choose a seat');
+      _recordFeedEvent('Connected to server.');
       // Join table as observer (without seat)
       _wsService.joinTable(widget.table.id, 0);
+      _recordFeedEvent('Joined table as observer.');
     };
 
     final token = context.read<ApiService>().token!;
@@ -136,49 +151,7 @@ class _GameScreenState extends State<GameScreen> {
 
     if (_hasSeenPlayersAtTable) {
       _isTableClosed = true;
-      _tableClosedMessage = 'Table closed';
     }
-  }
-
-  void _updateStatusMessage() {
-    if (_gameState == null) return;
-
-    if (_isTableClosed) {
-      _statusMessage = _tableClosedMessage;
-      return;
-    }
-
-    final myUserId = context.read<ApiService>().userId;
-    final myPlayer = _gameState!.players
-        .where((p) => p.userId == myUserId)
-        .firstOrNull;
-
-    if (myPlayer == null) {
-      _statusMessage = '';
-      return;
-    }
-
-    // Check if game is waiting for more players
-    if (_gameState!.phase.toLowerCase() == 'waiting') {
-      _statusMessage = 'Waiting for players...';
-      return;
-    }
-
-    final isMyTurn = _gameState!.currentPlayer?.userId == myPlayer.userId;
-
-    // Debug logging
-    print('DEBUG: currentPlayerSeat=${_gameState!.currentPlayerSeat}');
-    print('DEBUG: players.length=${_gameState!.players.length}');
-    for (var p in _gameState!.players) {
-      print('DEBUG: player ${p.username} seat=${p.seat} userId=${p.userId}');
-    }
-    print(
-      'DEBUG: currentPlayer=${_gameState!.currentPlayer?.username ?? "NULL"}',
-    );
-    print('DEBUG: myPlayer=${myPlayer.username} userId=${myPlayer.userId}');
-    print('DEBUG: isMyTurn=$isMyTurn');
-
-    _statusMessage = isMyTurn ? 'Your turn!' : 'Waiting for your turn...';
   }
 
   void _playActionSounds(GameState newState) {
@@ -403,10 +376,199 @@ class _GameScreenState extends State<GameScreen> {
     try {
       _wsService.playerAction(action, amount: amount);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      print('Action error: $e');
+      _recordFeedEvent('Action failed: $e');
     }
+  }
+
+  ButtonStyle _actionButtonStyle(Color color) {
+    return ElevatedButton.styleFrom(
+      backgroundColor: color,
+      foregroundColor: Colors.white,
+      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    );
+  }
+
+  List<String> _collectStateFeedEvents(GameState newState) {
+    final events = <String>[];
+    final previousState = _gameState;
+    if (previousState == null) return events;
+
+    if (previousState.phase != newState.phase) {
+      events.add('Phase: ${newState.phase}');
+    }
+
+    final winnerMessage = newState.lastWinnerMessage?.trim();
+    if (winnerMessage != null &&
+        winnerMessage.isNotEmpty &&
+        winnerMessage != previousState.lastWinnerMessage?.trim()) {
+      events.add(winnerMessage);
+    }
+
+    final previousPlayersById = {
+      for (final player in previousState.players) player.userId: player,
+    };
+    for (final player in newState.players) {
+      final previousPlayer = previousPlayersById[player.userId];
+      if (previousPlayer == null) continue;
+      if (player.lastAction != null &&
+          player.lastAction!.isNotEmpty &&
+          player.lastAction != previousPlayer.lastAction) {
+        events.add('${player.username}: ${player.lastAction}');
+      }
+    }
+
+    final myUserId = context.read<ApiService>().userId;
+    final wasMyTurn = previousState.currentPlayer?.userId == myUserId;
+    final isMyTurn = newState.currentPlayer?.userId == myUserId;
+    if (!wasMyTurn && isMyTurn) {
+      events.add('Your turn.');
+    }
+
+    return events;
+  }
+
+  void _recordFeedEvent(String message) {
+    if (!mounted) return;
+    setState(() {
+      _appendFeedEvent(message);
+    });
+  }
+
+  void _appendFeedEvent(String message) {
+    final text = message.trim();
+    if (text.isEmpty) return;
+
+    _eventFeed.insert(0, _TableFeedEntry(time: DateTime.now(), message: text));
+    if (_eventFeed.length > _maxFeedEntries) {
+      _eventFeed.removeRange(_maxFeedEntries, _eventFeed.length);
+    }
+    _unreadFeedCount = (_unreadFeedCount + 1).clamp(0, 99);
+  }
+
+  String _formatFeedTime(DateTime time) {
+    final h = time.hour.toString().padLeft(2, '0');
+    final m = time.minute.toString().padLeft(2, '0');
+    final s = time.second.toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+
+  Widget _buildFeedIcon() {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        const Icon(Icons.feed_outlined),
+        if (_unreadFeedCount > 0)
+          Positioned(
+            right: -6,
+            top: -6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+              decoration: BoxDecoration(
+                color: Colors.redAccent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                _unreadFeedCount > 9 ? '9+' : '$_unreadFeedCount',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _openFeedSheet() {
+    setState(() {
+      _unreadFeedCount = 0;
+    });
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF121b2e),
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.45,
+            child: Column(
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Table Feed',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Divider(color: Colors.white24, height: 1),
+                Expanded(
+                  child: _eventFeed.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No messages yet',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                          itemCount: _eventFeed.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final event = _eventFeed[index];
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _formatFeedTime(event.time),
+                                  style: const TextStyle(
+                                    color: Colors.white54,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    event.message,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildTableStack({
@@ -510,46 +672,6 @@ class _GameScreenState extends State<GameScreen> {
             ),
           ),
         ),
-
-        if (_isTableClosed)
-          Positioned.fill(
-            child: Container(
-              color: Colors.black54,
-              alignment: Alignment.center,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 16,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black87,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.redAccent),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.info_outline, color: Colors.white),
-                    const SizedBox(height: 8),
-                    Text(
-                      _tableClosedMessage,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Players were moved to another tournament table.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white70),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -595,6 +717,11 @@ class _GameScreenState extends State<GameScreen> {
               tooltip: 'Add Bot',
               onPressed: _showAddBotDialog,
             ),
+          IconButton(
+            icon: _buildFeedIcon(),
+            tooltip: 'Table Feed',
+            onPressed: _openFeedSheet,
+          ),
           IconButton(
             icon: const Icon(Icons.exit_to_app),
             onPressed: () {
@@ -683,26 +810,6 @@ class _GameScreenState extends State<GameScreen> {
               ),
             ),
 
-            // Status message - only show if there's a message
-            if (_statusMessage.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.all(12),
-                color: _isTableClosed
-                    ? Colors.red[700]
-                    : (isMyTurn ? Colors.amber[700] : Colors.black45),
-                child: Text(
-                  _statusMessage,
-                  style: TextStyle(
-                    color: (_isTableClosed || !isMyTurn)
-                        ? Colors.white
-                        : Colors.black,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-
             // Show Cards buttons (fold-win showdown: winner can reveal cards)
             if (_isSeated &&
                 !_isTableClosed &&
@@ -764,23 +871,17 @@ class _GameScreenState extends State<GameScreen> {
                   children: [
                     ElevatedButton(
                       onPressed: () => _playerAction('Fold'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                      ),
+                      style: _actionButtonStyle(Colors.red),
                       child: const Text('Fold'),
                     ),
                     ElevatedButton(
                       onPressed: () => _playerAction('Check'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                      ),
+                      style: _actionButtonStyle(Colors.blue),
                       child: const Text('Check'),
                     ),
                     ElevatedButton(
                       onPressed: () => _playerAction('Call'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.orange,
-                      ),
+                      style: _actionButtonStyle(Colors.orange),
                       child: const Text('Call'),
                     ),
                     SizedBox(
@@ -806,37 +907,19 @@ class _GameScreenState extends State<GameScreen> {
                         'Raise',
                         amount: int.tryParse(_raiseController.text),
                       ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                      ),
+                      style: _actionButtonStyle(Colors.green),
                       child: const Text('Raise'),
                     ),
                     ElevatedButton(
                       onPressed: () => _playerAction('AllIn'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.purple,
-                      ),
+                      style: _actionButtonStyle(Colors.purple),
                       child: const Text('All In'),
                     ),
                   ],
                 ),
               )
-            else if (_isSeated && !_isTableClosed)
-              Container(
-                padding: const EdgeInsets.all(16),
-                child: const Text(
-                  'Waiting for your turn...',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-              )
-            else if (_gameState?.tournamentId == null)
-              Container(
-                padding: const EdgeInsets.all(16),
-                child: const Text(
-                  'Click on an empty seat to join the game',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-              ),
+            else
+              const SizedBox.shrink(),
           ],
         ),
       ),
@@ -954,4 +1037,11 @@ class _GameScreenState extends State<GameScreen> {
     _topUpController.dispose();
     super.dispose();
   }
+}
+
+class _TableFeedEntry {
+  final DateTime time;
+  final String message;
+
+  const _TableFeedEntry({required this.time, required this.message});
 }

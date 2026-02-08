@@ -103,17 +103,13 @@ class _TablesScreenState extends State<TablesScreen>
       _tableNameController.clear();
       await _loadTables();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Table "${table.name}" created!')),
-        );
+        debugPrint('Table "${table.name}" created');
       }
     } catch (e, stackTrace) {
       print('Error creating table: $e');
       print('Stack trace: $stackTrace');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        debugPrint('Create table error: $e');
       }
     }
   }

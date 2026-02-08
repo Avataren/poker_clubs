@@ -109,9 +109,13 @@ impl PokerTable {
             .unwrap()
             .as_millis() as u64;
 
-        // MTT tables need a deterministic Waiting window so periodic balancing
+        // SNG and MTT should share tournament table behavior.
+        // SNG differs only in how the tournament starts (auto-start when full).
+        let is_tournament_table = self.tournament_id.is_some() && self.format.eliminates_players();
+
+        // Tournament tables need a deterministic Waiting window so periodic balancing
         // can move players between hands.
-        if self.phase == GamePhase::Waiting && self.format.format_id() == "mtt" {
+        if self.phase == GamePhase::Waiting && is_tournament_table {
             let playable_count = self.players.iter().filter(|p| p.stack > 0).count();
             if playable_count < MIN_PLAYERS_TO_START {
                 return false;
@@ -171,8 +175,8 @@ impl PokerTable {
                 );
 
                 if self.phase == GamePhase::Showdown {
-                    if self.format.format_id() == "mtt" {
-                        // MTT tables must pass through Waiting so balancing can run.
+                    if is_tournament_table {
+                        // Tournament tables must pass through Waiting so balancing can run.
                         tracing::info!(
                             "Showdown delay complete on tournament table, transitioning to Waiting"
                         );
