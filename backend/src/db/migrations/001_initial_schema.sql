@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS tables (
     big_blind INTEGER NOT NULL,
     min_buyin INTEGER NOT NULL,
     max_buyin INTEGER NOT NULL,
-    max_players INTEGER NOT NULL CHECK (max_players >= 2 AND max_players <= 9),
+    max_players INTEGER NOT NULL CHECK (max_players >= 2),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
 );

@@ -1058,6 +1058,73 @@ async fn test_start_sng_creates_table() {
 }
 
 #[tokio::test]
+async fn test_start_large_sng_creates_multiple_nine_max_tables_and_seats_all_players() {
+    let server = setup().await;
+    let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;
+
+    // Create a large SNG (> 9 players)
+    let response = server
+        .post("/api/tournaments/sng")
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .json(&json!({
+            "club_id": club_id,
+            "name": "Large SNG",
+            "variant_id": "holdem",
+            "buy_in": 100,
+            "starting_stack": 1500,
+            "max_players": 20,
+            "min_players": 2,
+            "level_duration_mins": 5
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let tournament_id = body["tournament"]["id"].as_str().unwrap().to_string();
+
+    // Fill all remaining seats with bots
+    let fill_response = server
+        .post(&format!("/api/tournaments/{}/fill-bots", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+    fill_response.assert_status_ok();
+
+    // SNG auto-starts when full; explicit start endpoint should still be safe/idempotent.
+    let start_response = server
+        .post(&format!("/api/tournaments/{}/start", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+    start_response.assert_status_ok();
+    let start_body: Value = start_response.json();
+    assert_eq!(start_body["status"], "running");
+
+    // Verify large SNG is spread across 9-max tables and all players are seated.
+    let tables_response = server
+        .get(&format!("/api/tournaments/{}/tables", tournament_id))
+        .add_header(AUTHORIZATION, format!("Bearer {}", owner_token))
+        .await;
+    tables_response.assert_status_ok();
+    let tables_body: Value = tables_response.json();
+    let tables = tables_body["tables"].as_array().unwrap();
+
+    assert_eq!(tables.len(), 3, "Expected 3 SNG tables, got: {:?}", tables_body);
+
+    let mut total_players = 0_i64;
+    for table in tables {
+        let player_count = table["player_count"].as_i64().unwrap_or_default();
+        assert!(
+            player_count <= 9,
+            "Expected at most 9 players per table, got {} in {:?}",
+            player_count,
+            table
+        );
+        total_players += player_count;
+    }
+
+    assert_eq!(total_players, 20, "Expected all players seated");
+}
+
+#[tokio::test]
 async fn test_start_mtt_creates_multiple_tables() {
     let server = setup().await;
     let (club_id, owner_token, _owner_id) = create_club(&server, "owner").await;

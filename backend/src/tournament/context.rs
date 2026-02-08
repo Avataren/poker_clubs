@@ -733,7 +733,11 @@ impl TournamentContext {
     }
 
     pub(crate) async fn start_sng_table(&self, tournament: &Tournament) -> Result<()> {
-        use crate::game::{format::SitAndGo, variant::variant_from_id};
+        use crate::game::{
+            constants::DEFAULT_MAX_SEATS, format::SitAndGo, variant::variant_from_id,
+        };
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
         use uuid::Uuid;
 
         // Get all registered players and shuffle for random seating
@@ -748,13 +752,16 @@ impl TournamentContext {
             return Err(AppError::BadRequest("No players registered".to_string()));
         }
 
-        use rand::seq::SliceRandom;
-        use rand::thread_rng;
         registrations.shuffle(&mut thread_rng());
 
-        // Create table ID and name
-        let table_id = Uuid::new_v4().to_string();
-        let table_name = format!("{} - Table 1", tournament.name);
+        let player_count = registrations.len();
+        let tournament_max_players =
+            usize::try_from(tournament.max_players).unwrap_or(DEFAULT_MAX_SEATS);
+        // Never seat more than 9 players at a table.
+        let table_capacity = tournament_max_players.clamp(2, DEFAULT_MAX_SEATS);
+        let table_count = (player_count + table_capacity - 1) / table_capacity;
+        let base_per_table = player_count / table_count;
+        let extra = player_count % table_count; // first `extra` tables get base+1
 
         // Get current blind level
         let blind_levels = self.load_blind_levels(&tournament.id).await?;
@@ -767,116 +774,143 @@ impl TournamentContext {
             ))
         })?;
 
-        // Create variant
-        let variant = variant_from_id(&tournament.variant_id).ok_or_else(|| {
-            AppError::BadRequest(format!("Invalid variant: {}", tournament.variant_id))
-        })?;
+        let variant_id = tournament.variant_id.clone();
+        let mut player_index = 0;
+        let mut created_table_ids = Vec::with_capacity(table_count);
 
-        // Create SNG format
-        let format = SitAndGo::new(
-            tournament.buy_in,
-            tournament.starting_stack,
-            tournament.max_players as usize,
-            tournament.level_duration_secs as u64,
-        );
+        for table_num in 0..table_count {
+            let table_id = Uuid::new_v4().to_string();
+            let table_name = format!("{} - Table {}", tournament.name, table_num + 1);
 
-        // Insert table into database first
-        sqlx::query(
-            "INSERT INTO tables (id, club_id, name, small_blind, big_blind, min_buyin, max_buyin, max_players, variant_id, format_id, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&table_id)
-        .bind(&tournament.club_id)
-        .bind(&table_name)
-        .bind(current_level.small_blind)
-        .bind(current_level.big_blind)
-        .bind(tournament.starting_stack)
-        .bind(tournament.starting_stack)
-        .bind(tournament.max_players)
-        .bind(&tournament.variant_id)
-        .bind(&tournament.format_id)
-        .bind(chrono::Utc::now().to_rfc3339())
-        .execute(&*self.pool)
-        .await?;
+            // Even for large SNGs, each individual table is capped at 9 seats.
+            let format = SitAndGo::new(
+                tournament.buy_in,
+                tournament.starting_stack,
+                table_capacity,
+                tournament.level_duration_secs as u64,
+            );
 
-        // Create the table in-memory
-        self.game_server
-            .create_table_with_options(
-                table_id.clone(),
-                table_name,
-                current_level.small_blind,
-                current_level.big_blind,
-                variant,
-                Box::new(format),
-            )
-            .await;
-
-        // Add all registered players to the table
-        for (seat, registration) in registrations.iter().enumerate() {
-            let username = self.get_username(&registration.user_id).await?;
-
-            // Check if this user is a bot
-            let is_bot: bool = sqlx::query_scalar("SELECT is_bot FROM users WHERE id = ?")
-                .bind(&registration.user_id)
-                .fetch_one(&*self.pool)
-                .await
-                .unwrap_or(false);
-
-            // Add player to table via game server
-            if let Err(e) = self
-                .game_server
-                .add_player_to_table(
-                    &table_id,
-                    registration.user_id.clone(),
-                    username.clone(),
-                    seat,
-                    tournament.starting_stack,
-                )
-                .await
-            {
-                tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
-            }
-
-            // Register bots with the bot manager
-            if is_bot {
-                tracing::info!(
-                    "Registering bot {} for tournament table {}",
-                    username,
-                    table_id
-                );
-                self.game_server
-                    .register_bot(&table_id, registration.user_id.clone(), username, None)
-                    .await;
-            }
-
-            // Update registration with table assignment
+            // Insert table into database first
             sqlx::query(
-                "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?",
+                "INSERT INTO tables (id, club_id, name, small_blind, big_blind, min_buyin, max_buyin, max_players, variant_id, format_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&table_id)
-            .bind(&tournament.id)
-            .bind(&registration.user_id)
+            .bind(&tournament.club_id)
+            .bind(&table_name)
+            .bind(current_level.small_blind)
+            .bind(current_level.big_blind)
+            .bind(tournament.starting_stack)
+            .bind(tournament.starting_stack)
+            .bind(table_capacity as i32)
+            .bind(&variant_id)
+            .bind(&tournament.format_id)
+            .bind(chrono::Utc::now().to_rfc3339())
             .execute(&*self.pool)
             .await?;
+
+            // Create the table in-memory
+            let variant = variant_from_id(&variant_id)
+                .ok_or_else(|| AppError::BadRequest(format!("Invalid variant: {}", variant_id)))?;
+            self.game_server
+                .create_table_with_options(
+                    table_id.clone(),
+                    table_name,
+                    current_level.small_blind,
+                    current_level.big_blind,
+                    variant,
+                    Box::new(format),
+                )
+                .await;
+
+            let seats_at_this_table = if table_num < extra {
+                base_per_table + 1
+            } else {
+                base_per_table
+            };
+            let mut seat = 0;
+            while player_index < player_count && seat < seats_at_this_table {
+                let registration = &registrations[player_index];
+                let username = self.get_username(&registration.user_id).await?;
+
+                // Check if this user is a bot
+                let is_bot: bool = sqlx::query_scalar("SELECT is_bot FROM users WHERE id = ?")
+                    .bind(&registration.user_id)
+                    .fetch_one(&*self.pool)
+                    .await
+                    .unwrap_or(false);
+
+                // Add player to table via game server
+                if let Err(e) = self
+                    .game_server
+                    .add_player_to_table(
+                        &table_id,
+                        registration.user_id.clone(),
+                        username.clone(),
+                        seat,
+                        tournament.starting_stack,
+                    )
+                    .await
+                {
+                    tracing::error!("Failed to seat player {}: {:?}", registration.user_id, e);
+                }
+
+                // Register bots with the bot manager
+                if is_bot {
+                    tracing::info!("Registering bot {} for SNG table {}", username, table_id);
+                    self.game_server
+                        .register_bot(&table_id, registration.user_id.clone(), username, None)
+                        .await;
+                }
+
+                // Update registration with table assignment
+                sqlx::query(
+                    "UPDATE tournament_registrations SET starting_table_id = ? WHERE tournament_id = ? AND user_id = ?",
+                )
+                .bind(&table_id)
+                .bind(&tournament.id)
+                .bind(&registration.user_id)
+                .execute(&*self.pool)
+                .await?;
+
+                player_index += 1;
+                seat += 1;
+            }
+
+            // Link table to tournament
+            sqlx::query(
+                "INSERT INTO tournament_tables (tournament_id, table_id, table_number, is_active) VALUES (?, ?, ?, 1)",
+            )
+            .bind(&tournament.id)
+            .bind(&table_id)
+            .bind((table_num + 1) as i32)
+            .execute(&*self.pool)
+            .await?;
+
+            // Set tournament ID on the table
+            self.game_server
+                .set_table_tournament(&table_id, tournament.id.clone())
+                .await;
+
+            // Force start the hand now that players are seated
+            self.game_server.force_start_table_hand(&table_id).await;
+
+            tracing::info!(
+                "Created SNG table {} (#{}) for tournament {} with {} players and started first hand",
+                table_id,
+                table_num + 1,
+                tournament.id,
+                seat
+            );
+
+            created_table_ids.push(table_id);
         }
 
-        // Link table to tournament
-        sqlx::query(
-            "INSERT INTO tournament_tables (tournament_id, table_id, table_number, is_active) VALUES (?, ?, ?, 1)",
-        )
-        .bind(&tournament.id)
-        .bind(&table_id)
-        .bind(1)
-        .execute(&*self.pool)
-        .await?;
-
-        // Set tournament ID on the table
-        self.game_server
-            .set_table_tournament(&table_id, tournament.id.clone())
-            .await;
-
-        // Force start the hand now that all players are seated
-        self.game_server.force_start_table_hand(&table_id).await;
+        let tournament_started_table_id = if created_table_ids.len() == 1 {
+            created_table_ids.first().cloned()
+        } else {
+            None
+        };
 
         // Broadcast tournament started event
         use crate::ws::messages::ServerMessage;
@@ -886,16 +920,16 @@ impl TournamentContext {
                 ServerMessage::TournamentStarted {
                     tournament_id: tournament.id.clone(),
                     tournament_name: tournament.name.clone(),
-                    table_id: Some(table_id.clone()),
+                    table_id: tournament_started_table_id,
                 },
             )
             .await;
 
         tracing::info!(
-            "Created SNG table {} for tournament {} with {} players and started first hand",
-            table_id,
+            "Created {} table(s) for SNG {} with {} total players",
+            table_count,
             tournament.id,
-            registrations.len()
+            player_count
         );
 
         Ok(())

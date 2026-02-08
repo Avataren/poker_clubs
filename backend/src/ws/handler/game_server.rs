@@ -125,12 +125,14 @@ impl GameServer {
         variant: Box<dyn PokerVariant>,
         format: Box<dyn GameFormat>,
     ) {
+        // Server invariant: never create a table with more than 9 seats.
+        let max_seats = format.config().max_seats.min(DEFAULT_MAX_SEATS);
         let table = PokerTable::with_variant_and_format(
             table_id.clone(),
             name,
             small_blind,
             big_blind,
-            DEFAULT_MAX_SEATS,
+            max_seats,
             variant,
             format,
         );
@@ -260,17 +262,30 @@ impl GameServer {
     // Load table from database into memory
     pub(super) async fn load_table_from_db(&self, table_id: &str) -> Result<(), String> {
         // Query database for table with variant and format
-        let table_data: Option<(String, String, String, i64, i64, String, String)> = sqlx::query_as(
-            "SELECT id, club_id, name, small_blind, big_blind, variant_id, format_id FROM tables WHERE id = ?",
-        )
-        .bind(table_id)
-        .fetch_optional(self.pool.as_ref())
-        .await
-        .map_err(|e| format!("Database error: {}", e))?;
+        let table_data: Option<(String, String, String, i64, i64, i64, String, String)> =
+            sqlx::query_as(
+                "SELECT id, club_id, name, small_blind, big_blind, max_players, variant_id, format_id FROM tables WHERE id = ?",
+            )
+            .bind(table_id)
+            .fetch_optional(self.pool.as_ref())
+            .await
+            .map_err(|e| format!("Database error: {}", e))?;
 
-        if let Some((id, _club_id, name, small_blind, big_blind, variant_id, format_id)) =
-            table_data
+        if let Some((
+            id,
+            _club_id,
+            name,
+            small_blind,
+            big_blind,
+            max_players,
+            variant_id,
+            format_id,
+        )) = table_data
         {
+            let max_seats = usize::try_from(max_players)
+                .ok()
+                .filter(|&n| n >= 2)
+                .unwrap_or(DEFAULT_MAX_SEATS);
             // Get the variant from ID (default to holdem if not found)
             let variant = crate::game::variant_from_id(&variant_id)
                 .ok_or_else(|| format!("Unknown variant: {}", variant_id))?;
@@ -301,7 +316,7 @@ impl GameServer {
                     Box::new(crate::game::SitAndGo::new(
                         buy_in,
                         starting_stack,
-                        tournament.max_players as usize,
+                        max_seats,
                         tournament.level_duration_secs as u64,
                     ))
                 } else {
@@ -338,7 +353,7 @@ impl GameServer {
                     name,
                     actual_sb,
                     actual_bb,
-                    9, // DEFAULT_MAX_SEATS
+                    max_seats,
                     variant,
                     format,
                 );
@@ -357,7 +372,7 @@ impl GameServer {
                     name,
                     small_blind,
                     big_blind,
-                    9, // DEFAULT_MAX_SEATS
+                    max_seats,
                     variant,
                 );
                 self.tables.write().await.insert(id.clone(), table);
