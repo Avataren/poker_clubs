@@ -1054,7 +1054,7 @@ class _GameScreenState extends State<GameScreen> {
               children: [
                 _buildGameHeader(),
 
-                // Poker table with seats
+                // Poker table with seats — fills all remaining space
                 Expanded(
                   child: Center(
                     child: _gameState != null
@@ -1096,10 +1096,23 @@ class _GameScreenState extends State<GameScreen> {
                           ),
                   ),
                 ),
-
-                _buildShowCardsSection(myPlayer, isShowdown),
-                _buildActionButtons(isMyTurn),
               ],
+            ),
+          ),
+          // Action buttons + show cards overlaid at the bottom
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildShowCardsSection(myPlayer, isShowdown),
+                  _buildActionButtons(isMyTurn),
+                ],
+              ),
             ),
           ),
           if (_showTournamentResultsOverlay) _buildTournamentResultsOverlay(),
