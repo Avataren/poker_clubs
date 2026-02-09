@@ -261,6 +261,113 @@ async fn test_get_my_clubs() {
 }
 
 // ============================================================================
+// Profile Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_profile_defaults() {
+    let server = setup().await;
+    let token = register_user(
+        &server,
+        "profile_user",
+        "profile@example.com",
+        "Password123",
+    )
+    .await;
+
+    let response = server
+        .get("/api/profile/me")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["username"], "profile_user");
+    assert_eq!(body["avatar_index"], 0);
+    assert_eq!(body["deck_style"], "classic");
+}
+
+#[tokio::test]
+async fn test_update_profile_settings() {
+    let server = setup().await;
+    let token = register_user(
+        &server,
+        "settings_user",
+        "settings@example.com",
+        "Password123",
+    )
+    .await;
+
+    let response = server
+        .put("/api/profile/me")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .json(&json!({
+            "avatar_index": 7,
+            "deck_style": "multi_color"
+        }))
+        .await;
+
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["avatar_index"], 7);
+    assert_eq!(body["deck_style"], "multi_color");
+
+    // Verify persisted value
+    let read_back = server
+        .get("/api/profile/me")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .await;
+    read_back.assert_status_ok();
+    let profile: Value = read_back.json();
+    assert_eq!(profile["avatar_index"], 7);
+    assert_eq!(profile["deck_style"], "multi_color");
+}
+
+#[tokio::test]
+async fn test_update_profile_rejects_invalid_avatar_index() {
+    let server = setup().await;
+    let token = register_user(
+        &server,
+        "bad_avatar_user",
+        "bad_avatar@example.com",
+        "Password123",
+    )
+    .await;
+
+    let response = server
+        .put("/api/profile/me")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .json(&json!({
+            "avatar_index": 25
+        }))
+        .await;
+
+    response.assert_status_bad_request();
+}
+
+#[tokio::test]
+async fn test_update_profile_rejects_invalid_deck_style() {
+    let server = setup().await;
+    let token = register_user(
+        &server,
+        "bad_deck_user",
+        "bad_deck@example.com",
+        "Password123",
+    )
+    .await;
+
+    let response = server
+        .put("/api/profile/me")
+        .add_header(AUTHORIZATION, format!("Bearer {}", token))
+        .json(&json!({
+            "deck_style": "neon_rainbow"
+        }))
+        .await;
+
+    response.assert_status_bad_request();
+}
+
+// ============================================================================
 // Table Tests
 // ============================================================================
 

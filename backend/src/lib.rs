@@ -59,6 +59,10 @@ pub fn create_app_with_cors(
             "/api/clubs",
             api::clubs_router().with_state(auth_state.clone()),
         )
+        .nest(
+            "/api/profile",
+            api::profile_router().with_state(auth_state.clone()),
+        )
         .nest("/api/tables", api::tables_router().with_state(table_state))
         .nest(
             "/api/tournaments",

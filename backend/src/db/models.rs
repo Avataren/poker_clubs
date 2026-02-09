@@ -15,6 +15,8 @@ pub struct User {
     pub is_bot: bool,
     #[serde(skip_serializing)]
     pub auth_provider: String,
+    pub avatar_index: i32,
+    pub deck_style: String,
 }
 
 impl User {
@@ -27,6 +29,8 @@ impl User {
             created_at: Utc::now().to_rfc3339(),
             is_bot: false,
             auth_provider: "local".to_string(),
+            avatar_index: 0,
+            deck_style: "classic".to_string(),
         }
     }
 
@@ -39,6 +43,8 @@ impl User {
             created_at: Utc::now().to_rfc3339(),
             is_bot: true,
             auth_provider: "system".to_string(),
+            avatar_index: 0,
+            deck_style: "classic".to_string(),
         }
     }
 }

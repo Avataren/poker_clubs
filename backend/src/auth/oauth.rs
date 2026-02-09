@@ -198,9 +198,11 @@ async fn create_oauth_user(
         created_at: Utc::now().to_rfc3339(),
         is_bot: false,
         auth_provider: "oauth".to_string(),
+        avatar_index: 0,
+        deck_style: "classic".to_string(),
     };
 
-    sqlx::query("INSERT INTO users (id, username, email, password_hash, created_at, is_bot, auth_provider) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO users (id, username, email, password_hash, created_at, is_bot, auth_provider, avatar_index, deck_style) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&user.id)
         .bind(&user.username)
         .bind(&user.email)
@@ -208,6 +210,8 @@ async fn create_oauth_user(
         .bind(&user.created_at)
         .bind(user.is_bot)
         .bind(&user.auth_provider)
+        .bind(user.avatar_index)
+        .bind(&user.deck_style)
         .execute(pool)
         .await?;
 

@@ -105,6 +105,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             "relax_tables_max_players_constraint",
             include_str!("migrations/009_relax_tables_max_players_constraint.sql"),
         ),
+        (
+            10,
+            "add_user_settings",
+            include_str!("migrations/010_add_user_settings.sql"),
+        ),
     ];
 
     for (version, name, sql) in migrations {
