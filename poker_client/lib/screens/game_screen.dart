@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/club.dart';
 import '../models/game_state.dart';
+import '../models/player.dart';
 import '../models/tournament.dart';
 import '../models/tournament_info_state.dart';
 import '../services/api_service.dart';
@@ -1107,32 +1108,7 @@ class _GameScreenState extends State<GameScreen> {
             ),
             child: Column(
               children: [
-                // Phase and game type indicator
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  child: Column(
-                    children: [
-                      // Variant and format info
-                      if (_gameState != null)
-                        Text(
-                          _gameState!.gameTypeDescription,
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.8),
-                            fontSize: 14,
-                          ),
-                        ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _gameState?.phase.toUpperCase() ?? 'WAITING',
-                        style: const TextStyle(
-                          color: Colors.amber,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _buildGameHeader(),
 
                 // Poker table with seats
                 Expanded(
@@ -1177,124 +1153,160 @@ class _GameScreenState extends State<GameScreen> {
                   ),
                 ),
 
-                // Show Cards buttons (fold-win showdown: winner can reveal cards)
-                if (_isSeated &&
-                    !_isTableClosed &&
-                    isShowdown &&
-                    myPlayer != null &&
-                    myPlayer.isWinner &&
-                    !myPlayer.isBot &&
-                    myPlayer.shownCards != null &&
-                    _gameState?.winningHand == null)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    color: Colors.black45,
-                    child: Wrap(
-                      spacing: 8,
-                      alignment: WrapAlignment.center,
-                      children: [
-                        for (
-                          int i = 0;
-                          i < (myPlayer.holeCards?.length ?? 0);
-                          i++
-                        )
-                          if (myPlayer.shownCards != null &&
-                              i < myPlayer.shownCards!.length &&
-                              !myPlayer.shownCards![i])
-                            ElevatedButton(
-                              onPressed: () => _wsService.showCards([i]),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.teal,
-                              ),
-                              child: Text('Show Card ${i + 1}'),
-                            ),
-                        if (myPlayer.shownCards != null &&
-                            myPlayer.shownCards!.any((s) => !s))
-                          ElevatedButton(
-                            onPressed: () {
-                              final indices = <int>[];
-                              for (
-                                int i = 0;
-                                i < myPlayer.shownCards!.length;
-                                i++
-                              ) {
-                                if (!myPlayer.shownCards![i]) indices.add(i);
-                              }
-                              _wsService.showCards(indices);
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.amber[700],
-                            ),
-                            child: const Text('Show All'),
-                          ),
-                      ],
-                    ),
-                  ),
-
-                // Action buttons (only show if seated and it's my turn)
-                if (_isSeated && !_isTableClosed && isMyTurn)
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.center,
-                      children: [
-                        ElevatedButton(
-                          onPressed: () => _playerAction('Fold'),
-                          style: _actionButtonStyle(Colors.red),
-                          child: const Text('Fold'),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => _playerAction('Check'),
-                          style: _actionButtonStyle(Colors.blue),
-                          child: const Text('Check'),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => _playerAction('Call'),
-                          style: _actionButtonStyle(Colors.orange),
-                          child: const Text('Call'),
-                        ),
-                        SizedBox(
-                          width: 100,
-                          child: TextField(
-                            controller: _raiseController,
-                            keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
-                              hintText: 'Amount',
-                              hintStyle: TextStyle(color: Colors.white54),
-                              filled: true,
-                              fillColor: Colors.black26,
-                              contentPadding: EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 8,
-                              ),
-                            ),
-                          ),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => _playerAction(
-                            'Raise',
-                            amount: int.tryParse(_raiseController.text),
-                          ),
-                          style: _actionButtonStyle(Colors.green),
-                          child: const Text('Raise'),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => _playerAction('AllIn'),
-                          style: _actionButtonStyle(Colors.purple),
-                          child: const Text('All In'),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  const SizedBox.shrink(),
+                _buildShowCardsSection(myPlayer, isShowdown),
+                _buildActionButtons(isMyTurn),
               ],
             ),
           ),
           if (_showTournamentResultsOverlay) _buildTournamentResultsOverlay(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGameHeader() {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: Column(
+        children: [
+          if (_gameState != null)
+            Text(
+              _gameState!.gameTypeDescription,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.8),
+                fontSize: 14,
+              ),
+            ),
+          const SizedBox(height: 4),
+          Text(
+            _gameState?.phase.toUpperCase() ?? 'WAITING',
+            style: const TextStyle(
+              color: Colors.amber,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildShowCardsSection(Player? myPlayer, bool isShowdown) {
+    if (!_isSeated ||
+        _isTableClosed ||
+        !isShowdown ||
+        myPlayer == null ||
+        !myPlayer.isWinner ||
+        myPlayer.isBot ||
+        myPlayer.shownCards == null ||
+        _gameState?.winningHand != null) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      color: Colors.black45,
+      child: Wrap(
+        spacing: 8,
+        alignment: WrapAlignment.center,
+        children: [
+          for (
+            int i = 0;
+            i < (myPlayer.holeCards?.length ?? 0);
+            i++
+          )
+            if (myPlayer.shownCards != null &&
+                i < myPlayer.shownCards!.length &&
+                !myPlayer.shownCards![i])
+              ElevatedButton(
+                onPressed: () => _wsService.showCards([i]),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                ),
+                child: Text('Show Card ${i + 1}'),
+              ),
+          if (myPlayer.shownCards != null &&
+              myPlayer.shownCards!.any((s) => !s))
+            ElevatedButton(
+              onPressed: () {
+                final indices = <int>[];
+                for (
+                  int i = 0;
+                  i < myPlayer.shownCards!.length;
+                  i++
+                ) {
+                  if (!myPlayer.shownCards![i]) indices.add(i);
+                }
+                _wsService.showCards(indices);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber[700],
+              ),
+              child: const Text('Show All'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButtons(bool isMyTurn) {
+    if (!_isSeated || _isTableClosed || !isMyTurn) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.center,
+        children: [
+          ElevatedButton(
+            onPressed: () => _playerAction('Fold'),
+            style: _actionButtonStyle(Colors.red),
+            child: const Text('Fold'),
+          ),
+          ElevatedButton(
+            onPressed: () => _playerAction('Check'),
+            style: _actionButtonStyle(Colors.blue),
+            child: const Text('Check'),
+          ),
+          ElevatedButton(
+            onPressed: () => _playerAction('Call'),
+            style: _actionButtonStyle(Colors.orange),
+            child: const Text('Call'),
+          ),
+          SizedBox(
+            width: 100,
+            child: TextField(
+              controller: _raiseController,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: 'Amount',
+                hintStyle: TextStyle(color: Colors.white54),
+                filled: true,
+                fillColor: Colors.black26,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => _playerAction(
+              'Raise',
+              amount: int.tryParse(_raiseController.text),
+            ),
+            style: _actionButtonStyle(Colors.green),
+            child: const Text('Raise'),
+          ),
+          ElevatedButton(
+            onPressed: () => _playerAction('AllIn'),
+            style: _actionButtonStyle(Colors.purple),
+            child: const Text('All In'),
+          ),
         ],
       ),
     );
