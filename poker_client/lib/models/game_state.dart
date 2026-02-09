@@ -37,6 +37,7 @@ class GameState {
   final int maxSeats;
   final String? lastWinnerMessage;
   final String? winningHand;
+  final bool wonWithoutShowdown;
   final int? dealerSeat;
   final int? smallBlindSeat;
   final int? bigBlindSeat;
@@ -69,6 +70,7 @@ class GameState {
     required this.maxSeats,
     this.lastWinnerMessage,
     this.winningHand,
+    this.wonWithoutShowdown = false,
     this.dealerSeat,
     this.smallBlindSeat,
     this.bigBlindSeat,
@@ -109,6 +111,7 @@ class GameState {
       maxSeats: json['max_seats'] as int? ?? 9,
       lastWinnerMessage: json['last_winner_message'] as String?,
       winningHand: json['winning_hand'] as String?,
+      wonWithoutShowdown: json['won_without_showdown'] as bool? ?? false,
       dealerSeat: json['dealer_seat'] as int?,
       smallBlindSeat: json['small_blind_seat'] as int?,
       bigBlindSeat: json['big_blind_seat'] as int?,

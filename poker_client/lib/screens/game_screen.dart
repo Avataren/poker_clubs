@@ -889,7 +889,7 @@ class _GameScreenState extends State<GameScreen> {
     required double sceneWidth,
     required double sceneHeight,
     required String? myUserId,
-    required bool isShowdown,
+    required bool isVisualShowdown,
   }) {
     final tableVerticalShift = sceneHeight * _tableSceneUpwardShiftFactor;
 
@@ -927,7 +927,7 @@ class _GameScreenState extends State<GameScreen> {
             myUserId: myUserId,
             onTakeSeat: (!_isSeated && !_isTableClosed) ? _takeSeat : null,
             onRemoveBot: _isTableClosed ? null : _removeBot,
-            showingDown: isShowdown,
+            showingDown: isVisualShowdown,
             gamePhase: _gameState!.phase,
             dealerSeat: _gameState!.dealerSeat,
             smallBlindSeat: _gameState!.smallBlindSeat,
@@ -972,7 +972,7 @@ class _GameScreenState extends State<GameScreen> {
                                         card: card,
                                         width: cardWidth,
                                         height: cardHeight,
-                                        isShowdown: isShowdown,
+                                        isShowdown: isVisualShowdown,
                                       ),
                                     )
                                     .toList(),
@@ -1005,7 +1005,9 @@ class _GameScreenState extends State<GameScreen> {
         .firstOrNull;
     final isMyTurn =
         myPlayer != null && _gameState?.currentPlayer?.userId == myUserId;
-    final isShowdown = _gameState?.phase.toLowerCase() == 'showdown';
+    final isShowdownPhase = _gameState?.phase.toLowerCase() == 'showdown';
+    final isUncontestedWin = _gameState?.wonWithoutShowdown ?? false;
+    final isVisualShowdown = isShowdownPhase && !isUncontestedWin;
     final canTopUp = _gameState?.canTopUp ?? true;
     final isPortrait =
         MediaQuery.of(context).orientation == Orientation.portrait;
@@ -1079,7 +1081,7 @@ class _GameScreenState extends State<GameScreen> {
                                 sceneWidth: _tableSceneWidth,
                                 sceneHeight: _tableSceneHeight,
                                 myUserId: myUserId,
-                                isShowdown: isShowdown,
+                                isVisualShowdown: isVisualShowdown,
                               ),
                             );
 
@@ -1126,7 +1128,11 @@ class _GameScreenState extends State<GameScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _buildShowCardsSection(myPlayer, isShowdown),
+                  _buildShowCardsSection(
+                    myPlayer,
+                    isShowdownPhase,
+                    isUncontestedWin,
+                  ),
                   _buildActionButtons(isMyTurn),
                 ],
               ),
@@ -1139,6 +1145,12 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   Widget _buildGameHeader() {
+    final phaseLabel = _gameState == null
+        ? 'WAITING'
+        : (_gameState!.wonWithoutShowdown
+              ? 'HAND OVER'
+              : _gameState!.phase.toUpperCase());
+
     return Container(
       padding: const EdgeInsets.all(8),
       child: Column(
@@ -1153,7 +1165,7 @@ class _GameScreenState extends State<GameScreen> {
             ),
           const SizedBox(height: 4),
           Text(
-            _gameState?.phase.toUpperCase() ?? 'WAITING',
+            phaseLabel,
             style: const TextStyle(
               color: Colors.amber,
               fontSize: 20,
@@ -1165,10 +1177,15 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  Widget _buildShowCardsSection(Player? myPlayer, bool isShowdown) {
+  Widget _buildShowCardsSection(
+    Player? myPlayer,
+    bool isShowdownPhase,
+    bool isUncontestedWin,
+  ) {
     if (!_isSeated ||
         _isTableClosed ||
-        !isShowdown ||
+        !isShowdownPhase ||
+        !isUncontestedWin ||
         myPlayer == null ||
         !myPlayer.isWinner ||
         myPlayer.isBot ||

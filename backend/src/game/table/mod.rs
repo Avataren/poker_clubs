@@ -1392,4 +1392,164 @@ mod tests {
         assert_eq!(winners.len(), 1);
         assert_eq!(winners[0].user_id, bb_user);
     }
+
+    #[test]
+    fn test_public_state_hides_bot_cards_before_and_after_fold() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+        assert!(!table.players[bot_idx].hole_cards.is_empty());
+        assert!(table.players[bot_idx].is_active_in_hand());
+
+        let pre_fold_state = table.get_public_state(Some("human"));
+        let pre_fold_bot = pre_fold_state
+            .players
+            .iter()
+            .find(|p| p.user_id == "bot_1")
+            .expect("bot should be present in public state");
+        let pre_fold_cards = pre_fold_bot
+            .hole_cards
+            .as_ref()
+            .expect("active bot should have placeholder cards");
+        assert_eq!(pre_fold_cards.len(), table.players[bot_idx].hole_cards.len());
+        assert!(
+            pre_fold_cards
+                .iter()
+                .all(|c| c.rank == 0 && c.suit == 0 && !c.face_up),
+            "bot cards should be hidden placeholders before fold"
+        );
+
+        table.players[bot_idx].fold();
+        let post_fold_state = table.get_public_state(Some("human"));
+        let post_fold_bot = post_fold_state
+            .players
+            .iter()
+            .find(|p| p.user_id == "bot_1")
+            .expect("bot should be present in public state");
+        assert!(
+            post_fold_bot.hole_cards.is_none(),
+            "folded bot should not have hole cards in public state"
+        );
+    }
+
+    #[test]
+    fn test_public_state_hides_bot_cards_on_uncontested_win_showdown() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+        assert!(!table.players[bot_idx].hole_cards.is_empty());
+
+        table.phase = GamePhase::Showdown;
+        table.won_without_showdown = true;
+        table.players[bot_idx].is_winner = true;
+        table.players[bot_idx].shown_cards =
+            vec![false; table.players[bot_idx].hole_cards.len()];
+
+        let state = table.get_public_state(Some("human"));
+        let bot_public = state
+            .players
+            .iter()
+            .find(|p| p.user_id == "bot_1")
+            .expect("bot should be present in public state");
+        let cards = bot_public
+            .hole_cards
+            .as_ref()
+            .expect("winner in fold-win should have placeholder cards");
+
+        assert_eq!(cards.len(), table.players[bot_idx].hole_cards.len());
+        assert!(
+            cards.iter().all(|c| c.rank == 0 && c.suit == 0 && !c.face_up),
+            "bot winner cards should stay hidden unless explicitly shown"
+        );
+    }
+
+    #[test]
+    fn test_uncontested_win_does_not_publish_winning_hand_labels() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000)
+            .unwrap();
+
+        // Create an uncontested preflop win:
+        // current player raises, everyone else folds.
+        let raiser = table.players[table.current_player].user_id.clone();
+        table
+            .handle_action(&raiser, PlayerAction::Raise(100))
+            .unwrap();
+        while table.phase == GamePhase::PreFlop {
+            let to_act = table.players[table.current_player].user_id.clone();
+            table.handle_action(&to_act, PlayerAction::Fold).unwrap();
+        }
+
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(table.won_without_showdown);
+        assert!(
+            table.winning_hand.is_none(),
+            "table-level winning_hand must be absent for uncontested wins"
+        );
+
+        let winner = table
+            .players
+            .iter()
+            .find(|p| p.is_winner)
+            .expect("expected one winner");
+        assert!(
+            winner.winning_hand.is_none(),
+            "player winning_hand must be absent for uncontested wins"
+        );
+
+        let public = table.get_public_state(Some("p2"));
+        assert!(
+            public.winning_hand.is_none(),
+            "public table winning_hand must be absent for uncontested wins"
+        );
+        let public_winner = public
+            .players
+            .iter()
+            .find(|p| p.user_id == raiser)
+            .expect("winner should be present in public state");
+        assert!(
+            public_winner.winning_hand.is_none(),
+            "public player winning_hand must be absent for uncontested wins"
+        );
+
+        assert!(
+            public.won_without_showdown,
+            "public state must explicitly mark uncontested wins"
+        );
+    }
 }
