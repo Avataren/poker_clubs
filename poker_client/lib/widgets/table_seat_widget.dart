@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/card.dart';
 import '../models/game_state.dart';
 import '../models/player.dart';
+import 'avatar_sprite.dart';
 import 'card_widget.dart';
 import 'chip_stack_widget.dart';
 
@@ -369,6 +370,8 @@ class TableSeatWidget extends StatelessWidget {
   }
 
   Widget _buildAvatar(double size) {
+    final avatar = AvatarSprite(avatarIndex: player!.avatarIndex, size: size);
+
     return GestureDetector(
       onLongPress: (player!.isBot && onRemoveBot != null) ? onRemoveBot : null,
       child: Container(
@@ -393,18 +396,7 @@ class TableSeatWidget extends StatelessWidget {
                 ]
               : null,
         ),
-        child: Center(
-          child: Text(
-            player!.username.isNotEmpty
-                ? player!.username[0].toUpperCase()
-                : '?',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: size * 0.4,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
+        child: avatar,
       ),
     );
   }

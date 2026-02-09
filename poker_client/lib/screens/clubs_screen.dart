@@ -4,6 +4,7 @@ import '../constants.dart';
 import '../models/club.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
+import 'settings_screen.dart';
 import 'tables_screen.dart';
 
 class ClubsScreen extends StatefulWidget {
@@ -125,6 +126,16 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
               _loadClubs();
             },
             tooltip: 'Refresh clubs',
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
           ),
           IconButton(
             icon: const Icon(Icons.logout),

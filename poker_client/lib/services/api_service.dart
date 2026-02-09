@@ -4,6 +4,29 @@ import '../config.dart';
 import '../models/club.dart';
 import '../models/tournament.dart';
 
+class UserProfile {
+  final String userId;
+  final String username;
+  final int avatarIndex;
+  final String deckStyle;
+
+  UserProfile({
+    required this.userId,
+    required this.username,
+    required this.avatarIndex,
+    required this.deckStyle,
+  });
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    return UserProfile(
+      userId: json['user_id'] as String,
+      username: json['username'] as String,
+      avatarIndex: json['avatar_index'] as int? ?? 0,
+      deckStyle: json['deck_style'] as String? ?? 'classic',
+    );
+  }
+}
+
 class ApiService {
   static const String baseUrl = AppConfig.httpBaseUrl;
   String? _token;
@@ -57,6 +80,47 @@ class ApiService {
       return data;
     } else {
       throw Exception('Login failed: ${response.body}');
+    }
+  }
+
+  Future<UserProfile> getMyProfile() async {
+    if (!isAuthenticated) throw Exception('Not authenticated');
+
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/profile/me'),
+      headers: {'Authorization': 'Bearer $_token'},
+    );
+
+    if (response.statusCode == 200) {
+      return UserProfile.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to load profile: ${response.body}');
+    }
+  }
+
+  Future<UserProfile> updateMyProfile({
+    int? avatarIndex,
+    String? deckStyle,
+  }) async {
+    if (!isAuthenticated) throw Exception('Not authenticated');
+
+    final payload = <String, dynamic>{};
+    if (avatarIndex != null) payload['avatar_index'] = avatarIndex;
+    if (deckStyle != null) payload['deck_style'] = deckStyle;
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/api/profile/me'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $_token',
+      },
+      body: jsonEncode(payload),
+    );
+
+    if (response.statusCode == 200) {
+      return UserProfile.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to update profile: ${response.body}');
     }
   }
 

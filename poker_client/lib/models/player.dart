@@ -3,6 +3,7 @@ import 'card.dart';
 class Player {
   final String userId;
   final String username;
+  final int avatarIndex;
   final int seat;
   final int stack;
   final int currentBet;
@@ -18,6 +19,7 @@ class Player {
   Player({
     required this.userId,
     required this.username,
+    this.avatarIndex = 0,
     required this.seat,
     required this.stack,
     required this.currentBet,
@@ -47,6 +49,7 @@ class Player {
     return Player(
       userId: json['user_id'] as String,
       username: json['username'] as String,
+      avatarIndex: json['avatar_index'] as int? ?? 0,
       seat: json['seat'] as int,
       stack: json['stack'] as int,
       currentBet: json['current_bet'] as int,
