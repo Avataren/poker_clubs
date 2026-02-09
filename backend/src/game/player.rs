@@ -29,6 +29,8 @@ pub struct Player {
     pub pot_won: i64,             // Amount won from pot (for animation)
     pub winning_hand: Option<String>, // Per-player winning hand description (showdown only)
     pub shown_cards: Vec<bool>,   // Which cards the winner chose to show after fold-win
+    #[serde(default)]
+    pub pending_stand_up: bool, // Cash-game stand-up requested mid-hand; remove at hand end
 }
 
 impl Player {
@@ -49,6 +51,7 @@ impl Player {
             pot_won: 0,
             winning_hand: None,
             shown_cards: vec![],
+            pending_stand_up: false,
         }
     }
 

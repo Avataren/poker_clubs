@@ -1761,4 +1761,46 @@ mod tests {
             "with remaining active players matched/acted, preflop should advance"
         );
     }
+
+    #[test]
+    fn test_stand_up_mid_hand_removes_player_on_next_hand_start() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p0".to_string(), "Player 0".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 2, 5000)
+            .unwrap();
+
+        table.phase = GamePhase::PreFlop;
+        table.current_player = 0;
+        table.players[1].state = PlayerState::Active;
+
+        table.stand_up("p1").unwrap();
+        assert!(
+            table.players.iter().any(|p| p.user_id == "p1"),
+            "stand-up during a hand should defer removal until hand end"
+        );
+        assert!(
+            table
+                .players
+                .iter()
+                .find(|p| p.user_id == "p1")
+                .expect("player should still be present")
+                .pending_stand_up,
+            "player should be marked for deferred stand-up"
+        );
+
+        // Simulate hand boundary.
+        table.start_new_hand();
+
+        assert!(
+            !table.players.iter().any(|p| p.user_id == "p1"),
+            "player should be removed automatically at the next hand start"
+        );
+    }
 }

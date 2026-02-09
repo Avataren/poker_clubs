@@ -6,6 +6,11 @@ impl PokerTable {
         self.winning_hand = None;
         self.won_without_showdown = false;
 
+        // In cash games, a stand-up requested mid-hand is finalized here.
+        if self.format.can_cash_out() {
+            self.remove_pending_standups();
+        }
+
         // Remove broke players before starting a new hand (tournament mode)
         self.check_eliminations();
 

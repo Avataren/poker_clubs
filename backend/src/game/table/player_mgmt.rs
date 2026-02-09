@@ -1,6 +1,19 @@
 use super::*;
 
 impl PokerTable {
+    pub(crate) fn remove_pending_standups(&mut self) {
+        let pending_user_ids: Vec<String> = self
+            .players
+            .iter()
+            .filter(|p| p.pending_stand_up)
+            .map(|p| p.user_id.clone())
+            .collect();
+
+        for user_id in pending_user_ids {
+            self.remove_player(&user_id);
+        }
+    }
+
     pub fn add_player(
         &mut self,
         user_id: String,
@@ -169,6 +182,7 @@ impl PokerTable {
             self.players[player_idx].state = PlayerState::SittingOut;
             self.players[player_idx].last_action = Some("Stand Up".to_string());
             self.players[player_idx].has_acted_this_round = true;
+            self.players[player_idx].pending_stand_up = true;
             tracing::debug!(
                 "Player {} will stand up after current hand",
                 self.players[player_idx].username
