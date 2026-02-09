@@ -906,12 +906,12 @@ class _GameScreenState extends State<GameScreen> {
       tableHeight = tableWidth / 1.6;
     }
 
-    // Calculate responsive positioning for overlay elements
-    // Position community cards higher in the center area
-    final cardTop = (sceneHeight - tableHeight) / 2 + tableHeight * 0.25;
+    // Calculate responsive positioning for overlay elements.
+    // Keep community cards closer to table center for better balance.
+    final cardTop = (sceneHeight - tableHeight) / 2 + tableHeight * 0.36;
 
     // Calculate card dimensions with proper aspect ratio (1.4:1)
-    final cardWidth = (tableWidth * 0.08).clamp(40.0, 60.0);
+    final cardWidth = (tableWidth * 0.105).clamp(52.0, 80.0);
     final cardHeight = cardWidth * 1.4;
 
     return Transform.translate(

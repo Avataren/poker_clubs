@@ -1299,4 +1299,97 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn test_preflop_all_fold_to_raise_ends_hand_without_board() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        let raiser = table.players[table.current_player].user_id.clone();
+        table
+            .handle_action(&raiser, PlayerAction::Raise(100))
+            .unwrap();
+
+        // Everyone else folds; raiser should not need to act again.
+        while table.phase == GamePhase::PreFlop {
+            let to_act = table.players[table.current_player].user_id.clone();
+            assert_ne!(
+                to_act, raiser,
+                "Raiser should not get another turn once all other players fold"
+            );
+            table.handle_action(&to_act, PlayerAction::Fold).unwrap();
+        }
+
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(table.won_without_showdown);
+        assert!(
+            table.community_cards.is_empty(),
+            "No board cards should be dealt on fold-win"
+        );
+
+        let winners: Vec<&Player> = table.players.iter().filter(|p| p.is_winner).collect();
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].user_id, raiser);
+    }
+
+    #[test]
+    fn test_preflop_all_fold_to_big_blind_auto_wins_without_acting() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000)
+            .unwrap();
+        table
+            .take_seat("p4".to_string(), "Player 4".to_string(), 3, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        let bb_user = table
+            .players
+            .iter()
+            .find(|p| p.current_bet == table.big_blind)
+            .expect("Expected exactly one big blind poster in 4-handed preflop")
+            .user_id
+            .clone();
+
+        // Fold everyone who gets to act before the BB.
+        while table.phase == GamePhase::PreFlop {
+            let to_act = table.players[table.current_player].user_id.clone();
+            assert_ne!(
+                to_act, bb_user,
+                "Big blind should win immediately once all other players fold"
+            );
+            table.handle_action(&to_act, PlayerAction::Fold).unwrap();
+        }
+
+        // BB should win immediately without needing to act.
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(table.won_without_showdown);
+        assert!(
+            table.community_cards.is_empty(),
+            "No board cards should be dealt on fold-win to BB"
+        );
+
+        let winners: Vec<&Player> = table.players.iter().filter(|p| p.is_winner).collect();
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].user_id, bb_user);
+    }
 }

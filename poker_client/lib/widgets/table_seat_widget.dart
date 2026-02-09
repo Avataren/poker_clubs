@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../models/card.dart';
 import '../models/game_state.dart';
 import '../models/player.dart';
 import 'card_widget.dart';
@@ -57,6 +58,8 @@ class _SeatVisualLayout {
     return centerY - (cardHeight / 2);
   }
 
+  static double portraitCardsLift(double seatSize) => seatSize * 0.06;
+
   static double cardLeftInFrame(
     int cardIndex,
     int totalCards,
@@ -103,6 +106,13 @@ class _SeatGeometry {
     required this.left,
     required this.top,
   });
+}
+
+class _FoldCardAnimation {
+  final int seatIndex;
+  final List<PokerCard> cards;
+
+  const _FoldCardAnimation({required this.seatIndex, required this.cards});
 }
 
 class TableSeatWidget extends StatelessWidget {
@@ -161,6 +171,11 @@ class TableSeatWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isEmpty = player == null;
+    final preserveWinnerCardOpacity =
+        player != null &&
+        showingDown &&
+        player!.isWinner &&
+        player!.shownCards != null;
 
     final usernameFontSize = (seatSize * 0.14).clamp(12.0, 24.0);
     final stackFontSize = (seatSize * 0.13).clamp(11.0, 22.0);
@@ -176,6 +191,8 @@ class TableSeatWidget extends StatelessWidget {
       avatarSize,
       cardHeight,
     );
+    final portraitCardsTop =
+        cardsTop - _SeatVisualLayout.portraitCardsLift(seatSize);
 
     if (isEmpty) {
       return _buildEmptySeat(
@@ -201,19 +218,6 @@ class TableSeatWidget extends StatelessWidget {
               child: _buildAvatar(avatarSize),
             ),
 
-            Positioned(
-              top: namePlateTop,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: _buildNamePlate(
-                  usernameFontSize,
-                  stackFontSize,
-                  avatarSize,
-                ),
-              ),
-            ),
-
             // Cards are rendered in front of the avatar with a slight fan.
             if (_hasCards)
               ...List.generate(player!.holeCards!.length, (index) {
@@ -230,7 +234,7 @@ class TableSeatWidget extends StatelessWidget {
                     frameWidth,
                     cardWidth,
                   ),
-                  top: cardsTop,
+                  top: portraitCardsTop,
                   child: Opacity(
                     opacity: visible ? 1.0 : 0.0,
                     child: Transform.rotate(
@@ -242,12 +246,25 @@ class TableSeatWidget extends StatelessWidget {
                         card: card,
                         width: cardWidth,
                         height: cardHeight,
-                        isShowdown: showingDown,
+                        isShowdown: showingDown && !preserveWinnerCardOpacity,
                       ),
                     ),
                   ),
                 );
               }),
+
+            Positioned(
+              top: namePlateTop,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _buildNamePlate(
+                  usernameFontSize,
+                  stackFontSize,
+                  avatarSize,
+                ),
+              ),
+            ),
 
             if (isDealer || isSmallBlind || isBigBlind)
               Positioned(
@@ -623,6 +640,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       {}; // Track if animation has started for player's current card
   final Map<String, int> _dealtCardsCount =
       {}; // Number of cards that have reached final position per player
+  final Map<String, _FoldCardAnimation> _foldCardAnimations = {};
+  final Map<String, bool> _foldAnimationStarted = {};
   String? _lastPhase;
 
   @override
@@ -654,6 +673,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       _dealingCardsTo.clear();
       _cardAnimationStarted.clear();
       _dealtCardsCount.clear();
+      _foldCardAnimations.clear();
+      _foldAnimationStarted.clear();
 
       // Schedule card dealing animation with stagger
       // Note: shuffle sound plays immediately in game_screen.dart
@@ -772,6 +793,51 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
     _lastPhase = widget.gamePhase;
 
+    final oldPlayersById = {for (final p in oldWidget.players) p.userId: p};
+    final newFoldAnimations = <(String, int, List<PokerCard>)>[];
+    for (final player in widget.players) {
+      final oldPlayer = oldPlayersById[player.userId];
+      if (oldPlayer == null) continue;
+
+      final foldedNow = !oldPlayer.isFolded && player.isFolded;
+      final hadCards =
+          oldPlayer.holeCards != null && oldPlayer.holeCards!.isNotEmpty;
+      if (!foldedNow ||
+          !hadCards ||
+          _foldCardAnimations.containsKey(player.userId)) {
+        continue;
+      }
+
+      final cardsToAnimate = List<PokerCard>.from(oldPlayer.holeCards!);
+      newFoldAnimations.add((player.userId, player.seat, cardsToAnimate));
+    }
+    if (newFoldAnimations.isNotEmpty) {
+      setState(() {
+        for (final (userId, seat, cards) in newFoldAnimations) {
+          _foldCardAnimations[userId] = _FoldCardAnimation(
+            seatIndex: seat,
+            cards: cards,
+          );
+          _foldAnimationStarted[userId] = false;
+        }
+      });
+      for (final (userId, _, _) in newFoldAnimations) {
+        Future.delayed(const Duration(milliseconds: 10), () {
+          if (!mounted || !_foldCardAnimations.containsKey(userId)) return;
+          setState(() {
+            _foldAnimationStarted[userId] = true;
+          });
+        });
+        Future.delayed(const Duration(milliseconds: 510), () {
+          if (!mounted) return;
+          setState(() {
+            _foldCardAnimations.remove(userId);
+            _foldAnimationStarted.remove(userId);
+          });
+        });
+      }
+    }
+
     // Drop stale card animation state if players changed (e.g. table move).
     final activePlayerIds = widget.players.map((p) => p.userId).toSet();
     _dealingCardsTo.removeWhere(
@@ -781,6 +847,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       (userId, _) => !activePlayerIds.contains(userId),
     );
     _dealtCardsCount.removeWhere(
+      (userId, _) => !activePlayerIds.contains(userId),
+    );
+    _foldCardAnimations.removeWhere(
+      (userId, _) => !activePlayerIds.contains(userId),
+    );
+    _foldAnimationStarted.removeWhere(
       (userId, _) => !activePlayerIds.contains(userId),
     );
 
@@ -933,6 +1005,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               // Animated dealing cards (fly from center to players)
               for (int i = 0; i < widget.maxSeats; i++)
                 _buildDealingCardsAnimation(i, tableWidth, tableHeight),
+              // Folded hand cards (fling to table + fade out)
+              ..._buildFoldCardsAnimations(tableWidth, tableHeight),
               // Player bet chips on table (between player and center)
               for (int i = 0; i < widget.maxSeats; i++)
                 _buildChipsAtPosition(i, tableWidth, tableHeight),
@@ -1046,6 +1120,98 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         ),
       ),
     ];
+  }
+
+  List<Widget> _buildFoldCardsAnimations(
+    double tableWidth,
+    double tableHeight,
+  ) {
+    if (_foldCardAnimations.isEmpty) {
+      return const [];
+    }
+
+    final widgets = <Widget>[];
+    for (final entry in _foldCardAnimations.entries) {
+      final userId = entry.key;
+      final animation = entry.value;
+      if (animation.cards.isEmpty) continue;
+      if (animation.seatIndex < 0 || animation.seatIndex >= widget.maxSeats) {
+        continue;
+      }
+
+      final geometry = _seatGeometryForIndex(
+        animation.seatIndex,
+        tableWidth,
+        tableHeight,
+      );
+      final cardCount = animation.cards.length;
+      final started = _foldAnimationStarted[userId] ?? false;
+
+      for (int i = 0; i < cardCount; i++) {
+        final card = animation.cards[i];
+        final startLeft =
+            geometry.left +
+            _SeatVisualLayout.cardLeftInFrame(
+              i,
+              cardCount,
+              geometry.frameWidth,
+              geometry.cardWidth,
+            );
+        final startTop =
+            geometry.top +
+            _SeatVisualLayout.cardsTop(
+              geometry.seatSize,
+              _SeatVisualLayout.avatarSize(geometry.seatSize),
+              geometry.cardHeight,
+            ) -
+            _SeatVisualLayout.portraitCardsLift(geometry.seatSize);
+
+        final seatAngle =
+            (2 * pi * animation.seatIndex / widget.maxSeats) - pi / 2;
+        final muckCenterX = tableWidth / 2;
+        final muckCenterY = tableHeight * 0.54;
+        final spreadX =
+            (i - (cardCount - 1) / 2.0) * (geometry.cardWidth * 0.28);
+        final tossX = cos(seatAngle) * geometry.cardWidth * 0.18;
+        final tossY = sin(seatAngle) * geometry.cardHeight * 0.12;
+        final endLeft =
+            muckCenterX - (geometry.cardWidth / 2) + spreadX - tossX;
+        final endTop = muckCenterY - (geometry.cardHeight / 2) - tossY;
+
+        final startRotation = _SeatVisualLayout.cardFanRotation(i, cardCount);
+        final spinDirection = ((animation.seatIndex + i).isEven ? 1.0 : -1.0);
+        final endRotation =
+            startRotation + (spinDirection * 0.45) * (started ? 1 : 0);
+
+        widgets.add(
+          AnimatedPositioned(
+            key: ValueKey('fold_${userId}_$i'),
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutCubic,
+            left: started ? endLeft : startLeft,
+            top: started ? endTop : startTop,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 500),
+                curve: Curves.easeOut,
+                opacity: started ? 0.0 : 1.0,
+                child: Transform.rotate(
+                  angle: endRotation,
+                  child: CardWidget(
+                    card: card,
+                    width: geometry.cardWidth,
+                    height: geometry.cardHeight,
+                    isShowdown: false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    return widgets;
   }
 
   _SeatGeometry _seatGeometryForIndex(
@@ -1226,7 +1392,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           geometry.seatSize,
           _SeatVisualLayout.avatarSize(geometry.seatSize),
           geometry.cardHeight,
-        );
+        ) -
+        _SeatVisualLayout.portraitCardsLift(geometry.seatSize);
     final targetRotation = _SeatVisualLayout.cardFanRotation(
       cardIndex,
       totalCards,
