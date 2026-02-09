@@ -206,7 +206,7 @@ class TableSeatWidget extends StatelessWidget {
     }
 
     return Opacity(
-      opacity: _isDimmed ? 0.5 : 1.0,
+      opacity: _isDimmed ? 0.72 : 1.0,
       child: SizedBox(
         width: frameWidth,
         height: frameHeight,

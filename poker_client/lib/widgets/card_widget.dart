@@ -30,7 +30,7 @@ class CardWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final opacity = isShowdown && !card.highlighted ? 0.3 : 1.0;
+    final opacity = isShowdown && !card.highlighted ? 0.45 : 1.0;
     final cardWidth = _resolvedWidth;
     final cardHeight = _resolvedHeight;
     final borderRadius = BorderRadius.circular(cardWidth * 0.12);
