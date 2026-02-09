@@ -9,6 +9,7 @@ import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/sound_service.dart';
 import '../widgets/card_widget.dart';
+import '../widgets/dialogs.dart';
 import '../widgets/table_seat_widget.dart';
 
 class GameScreen extends StatefulWidget {
@@ -230,106 +231,49 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  void _takeSeat(int seatNumber) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Take Seat ${seatNumber + 1}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Enter buy-in amount:'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _buyinController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                hintText: 'Buy-in amount',
-                prefixText: '\$',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final amount = int.tryParse(_buyinController.text) ?? 5000;
-              _wsService.takeSeat(widget.table.id, seatNumber, amount);
-              Navigator.pop(context);
-            },
-            child: const Text('Take Seat'),
-          ),
-        ],
-      ),
+  void _takeSeat(int seatNumber) async {
+    final result = await InputDialog.show(
+      context,
+      title: 'Take Seat ${seatNumber + 1}',
+      prompt: 'Enter buy-in amount:',
+      controller: _buyinController,
+      hintText: 'Buy-in amount',
+      prefixText: '\$',
+      confirmLabel: 'Take Seat',
+      keyboardType: TextInputType.number,
     );
+    if (result != null) {
+      final amount = int.tryParse(result) ?? 5000;
+      _wsService.takeSeat(widget.table.id, seatNumber, amount);
+    }
   }
 
-  void _standUp() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Stand Up'),
-        content: const Text(
-          'Are you sure you want to leave your seat?\n\nYou will leave immediately if not in a hand, or after the current hand concludes.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              _wsService.standUp();
-              Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Stand Up'),
-          ),
-        ],
-      ),
+  void _standUp() async {
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Stand Up',
+      content: 'Are you sure you want to leave your seat?\n\nYou will leave immediately if not in a hand, or after the current hand concludes.',
+      confirmLabel: 'Stand Up',
+      confirmColor: Colors.red,
     );
+    if (confirmed) _wsService.standUp();
   }
 
-  void _topUp() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Top Up'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Add chips to your stack:'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _topUpController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                hintText: 'Top-up amount',
-                prefixText: '\$',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final amount = int.tryParse(_topUpController.text) ?? 5000;
-              _wsService.topUp(amount);
-              Navigator.pop(context);
-            },
-            child: const Text('Top Up'),
-          ),
-        ],
-      ),
+  void _topUp() async {
+    final result = await InputDialog.show(
+      context,
+      title: 'Top Up',
+      prompt: 'Add chips to your stack:',
+      controller: _topUpController,
+      hintText: 'Top-up amount',
+      prefixText: '\$',
+      confirmLabel: 'Top Up',
+      keyboardType: TextInputType.number,
     );
+    if (result != null) {
+      final amount = int.tryParse(result) ?? 5000;
+      _wsService.topUp(amount);
+    }
   }
 
   void _showAddBotDialog() {

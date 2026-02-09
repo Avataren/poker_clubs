@@ -6,6 +6,7 @@ import '../services/websocket_service.dart';
 import '../constants.dart';
 import '../utils/format_utils.dart';
 import '../widgets/blind_structure_widget.dart';
+import '../widgets/dialogs.dart';
 import '../widgets/tournament_status_widget.dart';
 
 class TournamentDetailScreen extends StatefulWidget {
@@ -207,25 +208,14 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   }
 
   Future<void> _startTournament() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Start Tournament'),
-        content: const Text('Are you sure you want to start this tournament?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Start'),
-          ),
-        ],
-      ),
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Start Tournament',
+      content: 'Are you sure you want to start this tournament?',
+      confirmLabel: 'Start',
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     setState(() => _isProcessing = true);
 
@@ -241,31 +231,16 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   }
 
   Future<void> _cancelTournament() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cancel Tournament'),
-        content: const Text(
-          'Are you sure you want to cancel this tournament? This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('No'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Yes, Cancel Tournament'),
-          ),
-        ],
-      ),
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Cancel Tournament',
+      content: 'Are you sure you want to cancel this tournament? This action cannot be undone.',
+      confirmLabel: 'Yes, Cancel Tournament',
+      confirmColor: Colors.red,
+      cancelLabel: 'No',
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     setState(() => _isProcessing = true);
 
@@ -281,32 +256,16 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   }
 
   Future<void> _deleteTournament() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Tournament'),
-        content: const Text(
-          'Are you sure you want to permanently delete this tournament? '
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Delete Tournament',
+      content: 'Are you sure you want to permanently delete this tournament? '
           'Registered players will be refunded.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade900,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Delete',
+      confirmColor: Colors.red.shade900,
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     setState(() => _isProcessing = true);
 
@@ -326,27 +285,14 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
   }
 
   Future<void> _fillWithBots() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Fill with Bots'),
-        content: const Text(
-          'This will fill all remaining seats with bot players. Continue?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Fill'),
-          ),
-        ],
-      ),
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: 'Fill with Bots',
+      content: 'This will fill all remaining seats with bot players. Continue?',
+      confirmLabel: 'Fill',
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     setState(() => _isProcessing = true);
 
