@@ -1174,14 +1174,16 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
             (i - (cardCount - 1) / 2.0) * (geometry.cardWidth * 0.28);
         final tossX = cos(seatAngle) * geometry.cardWidth * 0.18;
         final tossY = sin(seatAngle) * geometry.cardHeight * 0.12;
-        final endLeft =
+        final fullEndLeft =
             muckCenterX - (geometry.cardWidth / 2) + spreadX - tossX;
-        final endTop = muckCenterY - (geometry.cardHeight / 2) - tossY;
+        final fullEndTop = muckCenterY - (geometry.cardHeight / 2) - tossY;
+        // Folded cards should only travel halfway toward table center.
+        final endLeft = startLeft + ((fullEndLeft - startLeft) * 0.5);
+        final endTop = startTop + ((fullEndTop - startTop) * 0.5);
 
         final startRotation = _SeatVisualLayout.cardFanRotation(i, cardCount);
         final spinDirection = ((animation.seatIndex + i).isEven ? 1.0 : -1.0);
-        final endRotation =
-            startRotation + (spinDirection * 0.45) * (started ? 1 : 0);
+        final endRotation = startRotation + (spinDirection * 0.24);
 
         widgets.add(
           AnimatedPositioned(
@@ -1195,8 +1197,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                 duration: const Duration(milliseconds: 500),
                 curve: Curves.easeOut,
                 opacity: started ? 0.0 : 1.0,
-                child: Transform.rotate(
-                  angle: endRotation,
+                child: AnimatedRotation(
+                  duration: const Duration(milliseconds: 500),
+                  curve: Curves.easeOutCubic,
+                  turns: (started ? endRotation : startRotation) / (2 * pi),
                   child: CardWidget(
                     card: card,
                     width: geometry.cardWidth,
