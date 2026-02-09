@@ -1567,6 +1567,50 @@ mod tests {
     }
 
     #[test]
+    fn test_public_state_hides_own_cards_after_fold() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        assert!(!table.players[human_idx].hole_cards.is_empty());
+
+        let pre_fold_state = table.get_public_state(Some("human"));
+        let pre_fold_human = pre_fold_state
+            .players
+            .iter()
+            .find(|p| p.user_id == "human")
+            .expect("human should be present in public state");
+        assert!(
+            pre_fold_human.hole_cards.is_some(),
+            "active player should see own cards"
+        );
+
+        table.players[human_idx].fold();
+        let post_fold_state = table.get_public_state(Some("human"));
+        let post_fold_human = post_fold_state
+            .players
+            .iter()
+            .find(|p| p.user_id == "human")
+            .expect("human should be present in public state");
+        assert!(
+            post_fold_human.hole_cards.is_none(),
+            "folded player should not keep seeing own cards"
+        );
+    }
+
+    #[test]
     fn test_public_state_hides_bot_cards_on_uncontested_win_showdown() {
         let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
 

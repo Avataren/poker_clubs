@@ -160,6 +160,7 @@ class TableSeatWidget extends StatelessWidget {
 
   bool get _hasCards {
     return player != null &&
+        !player!.isFolded &&
         player!.holeCards != null &&
         player!.holeCards!.isNotEmpty;
   }
