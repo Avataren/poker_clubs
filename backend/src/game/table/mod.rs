@@ -25,6 +25,18 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Get current timestamp in milliseconds since UNIX epoch.
+/// Returns 0 on system clock error (should never happen in practice).
+pub(crate) fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or_else(|e| {
+            tracing::error!("System clock error: {}", e);
+            0
+        })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum GamePhase {
     Waiting,  // Waiting for players

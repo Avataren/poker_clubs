@@ -180,11 +180,7 @@ impl PokerTable {
         self.last_winner_message = Some(winner_names.join(", "));
 
         // Record showdown time for delay before new hand
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        self.last_phase_change_time = Some(now);
+        self.last_phase_change_time = Some(current_timestamp_ms());
 
         tracing::info!(
             "Showdown complete{}. Winner: {}. Will auto-advance after delay.",

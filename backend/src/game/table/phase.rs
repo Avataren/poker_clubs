@@ -3,11 +3,7 @@ use super::*;
 impl PokerTable {
     pub(crate) fn advance_phase(&mut self) {
         // Record when phase changed
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        self.last_phase_change_time = Some(now);
+        self.last_phase_change_time = Some(current_timestamp_ms());
 
         // Reset current bets for new betting round
         for player in &mut self.players {
@@ -104,10 +100,7 @@ impl PokerTable {
 
     // Check if enough time has passed to auto-advance to next phase
     pub fn check_auto_advance(&mut self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now = current_timestamp_ms();
 
         // SNG and MTT should share tournament table behavior.
         // SNG differs only in how the tournament starts (auto-start when full).
