@@ -1,6 +1,13 @@
 use super::*;
 
 impl PokerTable {
+    /// Attempt a phase transition. Silently ignores invalid transitions.
+    pub(crate) fn try_transition(&mut self, target: GamePhase) {
+        if let Ok(next) = self.phase.transition_to(target) {
+            self.phase = next;
+        }
+    }
+
     pub(crate) fn advance_phase(&mut self) {
         // Record when phase changed
         self.last_phase_change_time = Some(current_timestamp_ms());
@@ -37,9 +44,7 @@ impl PokerTable {
                 self.players[winner_idx].username, total
             ));
             // Pot reset happens in start_new_hand(), not here
-            if let Ok(next) = self.phase.transition_to(GamePhase::Showdown) {
-                self.phase = next;
-            }
+            self.try_transition(GamePhase::Showdown);
             tracing::info!(
                 "Hand over: {} wins ${} (all others folded)",
                 self.players[winner_idx].username,
@@ -54,9 +59,7 @@ impl PokerTable {
                 self.deck.deal();
                 // Deal flop
                 self.community_cards = self.deck.deal_multiple(3);
-                if let Ok(next) = self.phase.transition_to(GamePhase::Flop) {
-                    self.phase = next;
-                }
+                self.try_transition(GamePhase::Flop);
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
             GamePhase::Flop => {
@@ -68,9 +71,7 @@ impl PokerTable {
                 } else {
                     tracing::error!("Deck exhausted when dealing turn card");
                 }
-                if let Ok(next) = self.phase.transition_to(GamePhase::Turn) {
-                    self.phase = next;
-                }
+                self.try_transition(GamePhase::Turn);
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
             GamePhase::Turn => {
@@ -82,9 +83,7 @@ impl PokerTable {
                 } else {
                     tracing::error!("Deck exhausted when dealing river card");
                 }
-                if let Ok(next) = self.phase.transition_to(GamePhase::River) {
-                    self.phase = next;
-                }
+                self.try_transition(GamePhase::River);
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
             GamePhase::River => {
@@ -173,9 +172,7 @@ impl PokerTable {
                         tracing::info!(
                             "Showdown delay complete on tournament table, transitioning to Waiting"
                         );
-                        if let Ok(next) = self.phase.transition_to(GamePhase::Waiting) {
-                            self.phase = next;
-                        }
+                        self.try_transition(GamePhase::Waiting);
 
                         // Remove busted players once showdown has been visible long enough.
                         self.check_eliminations();
@@ -186,9 +183,7 @@ impl PokerTable {
                         self.start_new_hand();
                     } else {
                         tracing::info!("Not enough players, going to Waiting phase");
-                        if let Ok(next) = self.phase.transition_to(GamePhase::Waiting) {
-                            self.phase = next;
-                        }
+                        self.try_transition(GamePhase::Waiting);
                         self.last_phase_change_time = Some(now);
                     }
                 } else {

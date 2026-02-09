@@ -54,9 +54,7 @@ impl PokerTable {
         self.deal_hole_cards();
 
         // Set phase - current_player was already set by post_blinds
-        if let Ok(next) = self.phase.transition_to(GamePhase::PreFlop) {
-            self.phase = next;
-        }
+        self.try_transition(GamePhase::PreFlop);
     }
 
     pub(crate) fn deal_hole_cards(&mut self) {
