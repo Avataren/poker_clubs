@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/tournament.dart';
+import '../utils/format_utils.dart';
 
 class TournamentStatusWidget extends StatefulWidget {
   final Tournament tournament;
@@ -106,10 +107,10 @@ class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
             _buildInfoRow(
                 'Type', widget.tournament.tournamentType.toUpperCase()),
             _buildInfoRow(
-                'Buy-in', '\$${_formatChips(widget.tournament.buyIn)}'),
+                'Buy-in', '\$${FormatUtils.formatChips(widget.tournament.buyIn)}'),
             _buildInfoRow(
               'Prize Pool',
-              '\$${_formatChips(widget.tournament.prizePool)}',
+              '\$${FormatUtils.formatChips(widget.tournament.prizePool)}',
             ),
             _buildInfoRow(
               'Players',
@@ -117,7 +118,7 @@ class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
             ),
             _buildInfoRow(
               'Starting Stack',
-              '${_formatChips(widget.tournament.startingStack)} chips',
+              '${FormatUtils.formatChips(widget.tournament.startingStack)} chips',
             ),
             _buildInfoRow(
               'Level Duration',
@@ -128,17 +129,17 @@ class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
             else if (widget.tournament.scheduledStart != null)
               _buildInfoRow(
                 'Scheduled Start',
-                _formatDateTime(widget.tournament.scheduledStart!),
+                FormatUtils.formatAbsolute(widget.tournament.scheduledStart!),
               ),
             if (widget.tournament.actualStart != null)
               _buildInfoRow(
                 'Started At',
-                _formatDateTime(widget.tournament.actualStart!),
+                FormatUtils.formatAbsolute(widget.tournament.actualStart!),
               ),
             if (widget.tournament.finishedAt != null)
               _buildInfoRow(
                 'Finished At',
-                _formatDateTime(widget.tournament.finishedAt!),
+                FormatUtils.formatAbsolute(widget.tournament.finishedAt!),
               ),
             const SizedBox(height: 12),
             _buildProgressBar(
@@ -275,17 +276,4 @@ class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
     );
   }
 
-  String _formatChips(int chips) {
-    if (chips >= 1000000) {
-      return '${(chips / 1000000).toStringAsFixed(1)}M';
-    } else if (chips >= 1000) {
-      return '${(chips / 1000).toStringAsFixed(1)}K';
-    }
-    return chips.toString();
-  }
-
-  String _formatDateTime(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  }
 }

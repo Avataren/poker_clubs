@@ -3,6 +3,7 @@ import '../models/tournament.dart';
 import '../models/club.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
+import '../utils/format_utils.dart';
 import '../widgets/blind_structure_widget.dart';
 import '../widgets/tournament_status_widget.dart';
 
@@ -472,7 +473,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           subtitle: Text(
             isFinished
                 ? 'Eliminated - Position ${player.finishPosition}'
-                : 'Registered ${_formatDateTime(player.registeredAt)}',
+                : 'Registered ${FormatUtils.formatRelativeTime(player.registeredAt)}',
           ),
           trailing: player.prizeAmount > 0
               ? Container(
@@ -485,7 +486,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    '\$${_formatChips(player.prizeAmount)}',
+                    '\$${FormatUtils.formatChips(player.prizeAmount)}',
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -723,7 +724,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           onPressed: _isProcessing ? null : _register,
           icon: const Icon(Icons.how_to_reg, size: 18),
           label: Text(
-            'Register - \$${_formatChips(tournament.buyIn)}',
+            'Register - \$${FormatUtils.formatChips(tournament.buyIn)}',
             style: const TextStyle(fontSize: 13),
           ),
           style: ElevatedButton.styleFrom(
@@ -758,27 +759,4 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
     return const SizedBox.shrink();
   }
 
-  String _formatChips(int chips) {
-    if (chips >= 1000000) {
-      return '${(chips / 1000000).toStringAsFixed(1)}M';
-    } else if (chips >= 1000) {
-      return '${(chips / 1000).toStringAsFixed(1)}K';
-    }
-    return chips.toString();
-  }
-
-  String _formatDateTime(DateTime dt) {
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-
-    if (diff.inDays > 0) {
-      return '${diff.inDays}d ago';
-    } else if (diff.inHours > 0) {
-      return '${diff.inHours}h ago';
-    } else if (diff.inMinutes > 0) {
-      return '${diff.inMinutes}m ago';
-    } else {
-      return 'Just now';
-    }
-  }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/tournament.dart';
+import '../utils/format_utils.dart';
 
 class BlindStructureWidget extends StatelessWidget {
   final List<TournamentBlindLevel> blindLevels;
@@ -62,20 +63,20 @@ class BlindStructureWidget extends StatelessWidget {
                           children: [
                             _buildBlindInfo(
                               'SB',
-                              _formatChips(level.smallBlind),
+                              FormatUtils.formatChips(level.smallBlind),
                               isCurrentLevel,
                             ),
                             const SizedBox(width: 16),
                             _buildBlindInfo(
                               'BB',
-                              _formatChips(level.bigBlind),
+                              FormatUtils.formatChips(level.bigBlind),
                               isCurrentLevel,
                             ),
                             if (level.ante > 0) ...[
                               const SizedBox(width: 16),
                               _buildBlindInfo(
                                 'Ante',
-                                _formatChips(level.ante),
+                                FormatUtils.formatChips(level.ante),
                                 isCurrentLevel,
                               ),
                             ],
@@ -115,12 +116,4 @@ class BlindStructureWidget extends StatelessWidget {
     );
   }
 
-  String _formatChips(int chips) {
-    if (chips >= 1000000) {
-      return '${(chips / 1000000).toStringAsFixed(1)}M';
-    } else if (chips >= 1000) {
-      return '${(chips / 1000).toStringAsFixed(0)}K';
-    }
-    return chips.toString();
-  }
 }

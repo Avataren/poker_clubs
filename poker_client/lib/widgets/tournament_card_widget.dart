@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/tournament.dart';
+import '../utils/format_utils.dart';
 
 class TournamentCardWidget extends StatelessWidget {
   final TournamentWithStats tournamentStats;
@@ -48,7 +49,7 @@ class TournamentCardWidget extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   _buildInfoChip(
-                    'Buy-in: \$${_formatChips(tournament.buyIn)}',
+                    'Buy-in: \$${FormatUtils.formatChips(tournament.buyIn)}',
                     Colors.green,
                   ),
                 ],
@@ -63,7 +64,7 @@ class TournamentCardWidget extends StatelessWidget {
                   ),
                   _buildInfoRow(
                     Icons.casino,
-                    '${_formatChips(tournament.startingStack)} chips',
+                    '${FormatUtils.formatChips(tournament.startingStack)} chips',
                   ),
                   _buildInfoRow(
                     Icons.timer,
@@ -105,7 +106,7 @@ class TournamentCardWidget extends StatelessWidget {
                     const Icon(Icons.schedule, size: 16),
                     const SizedBox(width: 4),
                     Text(
-                      'Starts: ${_formatDateTime(tournament.scheduledStart!)}',
+                      'Starts: ${FormatUtils.formatCountdown(tournament.scheduledStart!)}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ],
@@ -190,27 +191,4 @@ class TournamentCardWidget extends StatelessWidget {
     );
   }
 
-  String _formatChips(int chips) {
-    if (chips >= 1000000) {
-      return '${(chips / 1000000).toStringAsFixed(1)}M';
-    } else if (chips >= 1000) {
-      return '${(chips / 1000).toStringAsFixed(1)}K';
-    }
-    return chips.toString();
-  }
-
-  String _formatDateTime(DateTime dt) {
-    final now = DateTime.now();
-    final diff = dt.difference(now);
-
-    if (diff.inDays > 0) {
-      return '${diff.inDays}d ${diff.inHours % 24}h';
-    } else if (diff.inHours > 0) {
-      return '${diff.inHours}h ${diff.inMinutes % 60}m';
-    } else if (diff.inMinutes > 0) {
-      return '${diff.inMinutes}m';
-    } else {
-      return 'Soon';
-    }
-  }
 }
