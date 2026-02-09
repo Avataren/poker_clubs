@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../constants.dart';
 import '../models/club.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
@@ -145,7 +146,7 @@ class _TablesScreenState extends State<TablesScreen>
   Widget _buildTablesTab() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 700;
+        final isCompact = constraints.maxWidth < Breakpoints.tablet;
         return Column(
           children: [
             Padding(

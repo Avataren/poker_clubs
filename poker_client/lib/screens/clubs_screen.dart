@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../constants.dart';
 import '../models/club.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
@@ -111,7 +112,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final isCompact = MediaQuery.of(context).size.width < 600;
+    final isCompact = MediaQuery.of(context).size.width < Breakpoints.compact;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Poker Clubs'),
