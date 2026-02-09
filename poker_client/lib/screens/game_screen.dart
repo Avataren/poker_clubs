@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/club.dart';
 import '../models/game_state.dart';
 import '../models/tournament.dart';
+import '../models/tournament_info_state.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/sound_service.dart';
@@ -44,17 +45,7 @@ class _GameScreenState extends State<GameScreen> {
   DateTime? _singlePlayerWaitingSince;
 
   // Tournament info from live broadcast
-  String? _tournamentId;
-  String? _serverTime;
-  int? _tournamentLevel;
-  int? _tournamentSmallBlind;
-  int? _tournamentBigBlind;
-  int? _tournamentAnte;
-  String? _levelStartTime;
-  int? _levelDurationSecs;
-  int? _levelTimeRemainingSecs; // Server-calculated remaining time
-  int? _nextSmallBlind;
-  int? _nextBigBlind;
+  final _tournamentInfo = TournamentInfoState();
 
   @override
   void initState() {
@@ -103,17 +94,19 @@ class _GameScreenState extends State<GameScreen> {
             'DEBUG: TournamentInfo received - Level $level, Blinds $smallBlind/$bigBlind, Remaining: ${levelTimeRemainingSecs}s',
           );
           setState(() {
-            _tournamentId = tournamentId;
-            _serverTime = serverTime;
-            _tournamentLevel = level;
-            _tournamentSmallBlind = smallBlind;
-            _tournamentBigBlind = bigBlind;
-            _tournamentAnte = ante;
-            _levelStartTime = levelStartTime;
-            _levelDurationSecs = levelDurationSecs;
-            _levelTimeRemainingSecs = levelTimeRemainingSecs;
-            _nextSmallBlind = nextSmallBlind;
-            _nextBigBlind = nextBigBlind;
+            _tournamentInfo.update(
+              tournamentId: tournamentId,
+              serverTime: serverTime,
+              level: level,
+              smallBlind: smallBlind,
+              bigBlind: bigBlind,
+              ante: ante,
+              levelStartTime: levelStartTime,
+              levelDurationSecs: levelDurationSecs,
+              levelTimeRemainingSecs: levelTimeRemainingSecs,
+              nextSmallBlind: nextSmallBlind,
+              nextBigBlind: nextBigBlind,
+            );
           });
         };
     _wsService.onTournamentFinished = (tournamentId, tournamentName, winners) =>
@@ -135,7 +128,7 @@ class _GameScreenState extends State<GameScreen> {
           normalized.contains('table disappeared');
 
       final isTournamentContext =
-          _gameState?.tournamentId != null || _tournamentId != null;
+          _gameState?.tournamentId != null || _tournamentInfo.tournamentId != null;
       if (tableGone && isTournamentContext) {
         setState(() {
           _isTableClosed = true;
@@ -599,7 +592,7 @@ class _GameScreenState extends State<GameScreen> {
     String tournamentName,
     List<TournamentWinner> winners,
   ) async {
-    final activeTournamentId = _gameState?.tournamentId ?? _tournamentId;
+    final activeTournamentId = _gameState?.tournamentId ?? _tournamentInfo.tournamentId;
     if (activeTournamentId != null && activeTournamentId != tournamentId) {
       return;
     }
@@ -1033,9 +1026,9 @@ class _GameScreenState extends State<GameScreen> {
                         : const SizedBox.shrink(),
                   ),
                   // Tournament info (if tournament table)
-                  if (_tournamentId != null || _gameState!.tournamentId != null)
+                  if (_tournamentInfo.tournamentId != null || _gameState!.tournamentId != null)
                     SizedBox(height: tableHeight * 0.02),
-                  if (_tournamentId != null || _gameState!.tournamentId != null)
+                  if (_tournamentInfo.tournamentId != null || _gameState!.tournamentId != null)
                     _buildTournamentInfo(),
                 ],
               ),
@@ -1309,29 +1302,29 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildTournamentInfo() {
     // Use live tournament info from broadcast if available, otherwise use gameState data
-    final tournamentId = _tournamentId ?? _gameState?.tournamentId;
+    final tournamentId = _tournamentInfo.tournamentId ?? _gameState?.tournamentId;
     if (tournamentId == null) {
       return const SizedBox.shrink();
     }
 
     final level =
-        (_tournamentLevel ?? _gameState?.tournamentBlindLevel ?? 0) + 1;
+        (_tournamentInfo.level ?? _gameState?.tournamentBlindLevel ?? 0) + 1;
     // Prioritize tournament blinds from either source, fallback to table blinds only if neither available
     final smallBlind =
-        _tournamentSmallBlind ??
+        _tournamentInfo.smallBlind ??
         _gameState?.tournamentSmallBlind ??
         widget.table.smallBlind;
     final bigBlind =
-        _tournamentBigBlind ??
+        _tournamentInfo.bigBlind ??
         _gameState?.tournamentBigBlind ??
         widget.table.bigBlind;
-    final nextSmall = _nextSmallBlind ?? _gameState?.tournamentNextSmallBlind;
-    final nextBig = _nextBigBlind ?? _gameState?.tournamentNextBigBlind;
+    final nextSmall = _tournamentInfo.nextSmallBlind ?? _gameState?.tournamentNextSmallBlind;
+    final nextBig = _tournamentInfo.nextBigBlind ?? _gameState?.tournamentNextBigBlind;
 
     // Use server-calculated remaining time (no client-side calculation)
     String countdown = '--:--';
-    if (_levelTimeRemainingSecs != null) {
-      final remaining = _levelTimeRemainingSecs!;
+    if (_tournamentInfo.levelTimeRemainingSecs != null) {
+      final remaining = _tournamentInfo.levelTimeRemainingSecs!;
       if (remaining <= 0) {
         countdown = '00:00';
       } else {
