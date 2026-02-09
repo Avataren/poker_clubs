@@ -60,6 +60,7 @@ impl PokerTable {
 
         // Set phase - current_player was already set by post_blinds
         self.try_transition(GamePhase::PreFlop);
+        self.last_phase_change_time = Some(current_timestamp_ms());
     }
 
     pub(crate) fn deal_hole_cards(&mut self) {

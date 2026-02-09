@@ -86,6 +86,14 @@ impl PokerTable {
         for_user_id: Option<&str>,
         tournament_info: Option<TournamentInfo>,
     ) -> PublicTableState {
+        let active_in_hand_count = self
+            .players
+            .iter()
+            .filter(|p| p.is_active_in_hand())
+            .count();
+        let effective_won_without_showdown = self.won_without_showdown
+            || (self.phase == GamePhase::Showdown && active_in_hand_count == 1);
+
         // Get the actual seat number of the current player (not array index)
         // During Waiting phase or invalid states, use the first player's seat if available
         let current_player_seat = if self.phase == GamePhase::Waiting {
@@ -193,7 +201,7 @@ impl PokerTable {
                             // Show own cards face-up while still in the hand
                             Some(p.hole_cards.clone())
                         } else if self.phase == GamePhase::Showdown
-                            && self.won_without_showdown
+                            && effective_won_without_showdown
                             && p.is_winner
                         {
                             // Fold-win: only show cards the winner chose to reveal
@@ -252,12 +260,14 @@ impl PokerTable {
                             None
                         };
 
-                    let shown_cards_field =
-                        if self.won_without_showdown && p.is_winner && !p.shown_cards.is_empty() {
-                            Some(p.shown_cards.clone())
-                        } else {
-                            None
-                        };
+                    let shown_cards_field = if effective_won_without_showdown
+                        && p.is_winner
+                        && !p.shown_cards.is_empty()
+                    {
+                        Some(p.shown_cards.clone())
+                    } else {
+                        None
+                    };
                     let avatar_index =
                         normalize_public_avatar_index(&p.user_id, &p.username, p.avatar_index);
 
@@ -281,7 +291,7 @@ impl PokerTable {
             max_seats: self.max_seats,
             last_winner_message: self.last_winner_message.clone(),
             winning_hand: self.winning_hand.clone(),
-            won_without_showdown: self.won_without_showdown,
+            won_without_showdown: effective_won_without_showdown,
             format_id: self.format.format_id().to_string(),
             format_name: self.format.name().to_string(),
             can_cash_out: self.format.can_cash_out(),

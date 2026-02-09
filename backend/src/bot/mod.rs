@@ -7,7 +7,8 @@
 pub mod evaluate;
 pub mod strategy;
 
-use crate::game::table::PokerTable;
+use crate::game::constants::BOT_ACTION_THINK_DELAY_MS;
+use crate::game::table::{current_timestamp_ms, PokerTable};
 use crate::game::{GamePhase, PlayerAction};
 use std::collections::HashMap;
 use strategy::{BotGameView, BotPosition, BotStrategy, SimpleStrategy};
@@ -162,6 +163,7 @@ impl BotManager {
         tables: &HashMap<String, PokerTable>,
     ) -> Vec<(String, String, PlayerAction)> {
         let mut actions = Vec::new();
+        let now = current_timestamp_ms();
 
         for (table_id, table) in tables {
             // Skip tables not in an active betting phase
@@ -170,6 +172,14 @@ impl BotManager {
                 GamePhase::PreFlop | GamePhase::Flop | GamePhase::Turn | GamePhase::River
             ) {
                 continue;
+            }
+
+            // Give clients a short window to render phase transitions before
+            // the next bot action mutates state again.
+            if let Some(phase_changed_at) = table.last_phase_change_time {
+                if now.saturating_sub(phase_changed_at) < BOT_ACTION_THINK_DELAY_MS {
+                    continue;
+                }
             }
 
             // Check if current player is a bot

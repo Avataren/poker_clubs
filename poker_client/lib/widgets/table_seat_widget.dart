@@ -923,7 +923,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
         // Calculate pot center position - responsive to table size
         // Position pot above the center to avoid overlapping with community cards
-        final potTopOffset = tableHeight * 0.25; // 25% from center
+        final potTopOffset =
+            tableHeight * 0.18; // Slightly lower to avoid top-seat bet overlap
         final centerOffset = Offset(
           tableWidth / 2,
           tableHeight / 2 - potTopOffset,

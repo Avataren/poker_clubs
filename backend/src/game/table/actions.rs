@@ -21,6 +21,7 @@ impl PokerTable {
             tracing::debug!("Cannot act: state={:?}", current.state);
             return Err(GameError::CannotAct);
         }
+        let acted_by_bot = is_bot_identity(&current.user_id, &current.username);
 
         tracing::debug!("Processing action: {:?}", action);
         let betting_structure = self.variant.betting_structure();
@@ -188,7 +189,7 @@ impl PokerTable {
         );
 
         // Move to next player or next phase
-        self.advance_action();
+        self.advance_action_with_bot_pacing(acted_by_bot);
 
         tracing::info!(
             "After advance: current_player={}, state={:?}",
@@ -252,6 +253,10 @@ impl PokerTable {
     }
 
     pub(crate) fn advance_action(&mut self) {
+        self.advance_action_with_bot_pacing(false);
+    }
+
+    fn advance_action_with_bot_pacing(&mut self, acted_by_bot: bool) {
         // If everyone but one player has folded, award the pot immediately.
         // This covers cases like "folds to the big blind" where the last
         // remaining player may not have acted in the round yet.
@@ -267,8 +272,13 @@ impl PokerTable {
 
         // Check if betting round is complete
         if self.is_betting_round_complete() {
-            self.advance_phase();
-            // Don't auto-advance anymore - delays are handled by check_auto_advance
+            if acted_by_bot {
+                // Preserve call/check chips and action badges briefly for clients
+                // before advancing the street/showdown.
+                self.last_phase_change_time = Some(current_timestamp_ms());
+            } else {
+                self.advance_phase();
+            }
         } else {
             self.current_player = self.next_active_player(self.current_player);
 
@@ -282,7 +292,7 @@ impl PokerTable {
                     self.players[self.current_player].last_action =
                         Some("Auto-Fold (Sitting Out)".to_string());
                     // Recursively advance to next player
-                    self.advance_action();
+                    self.advance_action_with_bot_pacing(false);
                 }
             }
 
@@ -295,7 +305,7 @@ impl PokerTable {
                     self.players[self.current_player].has_acted_this_round = true;
                     self.players[self.current_player].last_action =
                         Some("Auto-Fold (Disconnected)".to_string());
-                    self.advance_action();
+                    self.advance_action_with_bot_pacing(false);
                 }
             }
         }

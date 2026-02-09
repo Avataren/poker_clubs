@@ -93,14 +93,21 @@ impl Player {
         self.winning_hand = None;
         self.shown_cards.clear();
 
-        // Activate players who have chips and aren't voluntarily sitting out, eliminated, or disconnected
-        if self.is_eligible_for_button() {
+        // Players with no chips must never carry in-hand states (e.g. AllIn)
+        // into the next hand; they sit out until they rebuy (cash) or are removed
+        // by tournament elimination handling.
+        if self.stack <= 0 {
+            if self.state != PlayerState::Eliminated {
+                self.state = PlayerState::SittingOut;
+            }
+        }
+        // Activate players who have chips and aren't voluntarily sitting out,
+        // eliminated, or disconnected.
+        else if self.is_eligible_for_button() {
             self.state = PlayerState::Active;
         }
-        // Players with 0 stack will be handled by check_eliminations in tournament mode
-        // or set to SittingOut in cash games
-        // If already Eliminated, stay Eliminated
-        // If SittingOut voluntarily, stay SittingOut
+        // If already Eliminated, stay Eliminated.
+        // If SittingOut voluntarily, stay SittingOut.
     }
 
     pub fn add_chips(&mut self, amount: i64) {

@@ -25,6 +25,11 @@ pub const DEFAULT_MAX_BUYIN_BB: i64 = 100; // 100 big blinds
 pub const DEFAULT_STREET_DELAY_MS: u64 = 1000; // Delay between flop/turn/river
 pub const DEFAULT_SHOWDOWN_DELAY_MS: u64 = 5000; // Delay to show results before next hand
 pub const DEFAULT_FOLD_WIN_DELAY_MS: u64 = 2000; // Shorter delay for uncontested (fold) wins
+/// Bot uncontested wins should still wait briefly so clients can render fold/muck animation.
+pub const BOT_FOLD_WIN_DELAY_MS: u64 = 600;
+/// Minimum think time after a phase change before a bot can act.
+/// Prevents clients from skipping transient states when bot-only hands progress quickly.
+pub const BOT_ACTION_THINK_DELAY_MS: u64 = 350;
 /// MTT-only Waiting window between hands.
 /// Gives deferred tournament balancing moves a short window to apply before the next hand.
 pub const MTT_WAITING_REBALANCE_MS: u64 = 1000;

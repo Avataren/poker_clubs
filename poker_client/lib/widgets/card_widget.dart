@@ -30,48 +30,52 @@ class CardWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final opacity = isShowdown && !card.highlighted ? 0.45 : 1.0;
+    final darkenForShowdown = isShowdown && !card.highlighted;
     final cardWidth = _resolvedWidth;
     final cardHeight = _resolvedHeight;
     final borderRadius = BorderRadius.circular(cardWidth * 0.12);
 
-    return Opacity(
-      opacity: opacity,
-      child: Container(
-        width: cardWidth,
-        height: cardHeight,
-        margin: const EdgeInsets.symmetric(horizontal: 2),
-        decoration: BoxDecoration(
-          color: card.faceUp ? Colors.white : null,
-          gradient: card.faceUp
-              ? null
-              : const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF1a237e),
-                    Color(0xFF283593),
-                    Color(0xFF1a237e),
-                  ],
-                ),
-          borderRadius: borderRadius,
-          border: card.faceUp
-              ? (card.highlighted && isShowdown
-                    ? Border.all(color: Colors.amber, width: 2.5)
-                    : Border.all(color: Colors.grey[300]!, width: 0.5))
-              : Border.all(color: Colors.white70, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 4,
-              offset: const Offset(1, 2),
-            ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: card.faceUp
-            ? _buildFaceUp(cardWidth, cardHeight)
-            : _buildFaceDown(cardWidth),
+    return Container(
+      width: cardWidth,
+      height: cardHeight,
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: card.faceUp ? Colors.white : null,
+        gradient: card.faceUp
+            ? null
+            : const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF1a237e),
+                  Color(0xFF283593),
+                  Color(0xFF1a237e),
+                ],
+              ),
+        borderRadius: borderRadius,
+        border: card.faceUp
+            ? (card.highlighted && isShowdown
+                  ? Border.all(color: Colors.amber, width: 2.5)
+                  : Border.all(color: Colors.grey[300]!, width: 0.5))
+            : Border.all(color: Colors.white70, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 4,
+            offset: const Offset(1, 2),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          card.faceUp
+              ? _buildFaceUp(cardWidth, cardHeight)
+              : _buildFaceDown(cardWidth),
+          if (darkenForShowdown)
+            Container(color: Colors.black.withValues(alpha: 0.32)),
+        ],
       ),
     );
   }

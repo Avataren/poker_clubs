@@ -1009,7 +1009,11 @@ class _GameScreenState extends State<GameScreen> {
     final isMyTurn =
         myPlayer != null && _gameState?.currentPlayer?.userId == myUserId;
     final isShowdownPhase = _gameState?.phase.toLowerCase() == 'showdown';
-    final isUncontestedWin = _gameState?.wonWithoutShowdown ?? false;
+    final activeInHandCount =
+        _gameState?.players.where((p) => p.isActive || p.isAllIn).length ?? 0;
+    final inferredUncontestedWin = isShowdownPhase && activeInHandCount == 1;
+    final isUncontestedWin =
+        (_gameState?.wonWithoutShowdown ?? false) || inferredUncontestedWin;
     final isVisualShowdown = isShowdownPhase && !isUncontestedWin;
     final canTopUp = _gameState?.canTopUp ?? true;
     final isPortrait =
@@ -1298,9 +1302,7 @@ class _GameScreenState extends State<GameScreen> {
                           currentBet: gs.currentBet,
                           playerCurrentBet: myPlayer.currentBet,
                           playerStack: myPlayer.stack,
-                          minRaise: gs.minRaise > 0
-                              ? gs.minRaise
-                              : gs.bigBlind,
+                          minRaise: gs.minRaise > 0 ? gs.minRaise : gs.bigBlind,
                           onSelect: (amount) {
                             setState(() => _showBetPanel = false);
                             _playerAction('Raise', amount: amount);

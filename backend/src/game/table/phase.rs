@@ -8,7 +8,7 @@ impl PokerTable {
             .any(|p| p.is_winner && is_bot_identity(&p.user_id, &p.username));
 
         if winner_is_bot {
-            0
+            BOT_FOLD_WIN_DELAY_MS
         } else {
             DEFAULT_FOLD_WIN_DELAY_MS
         }
@@ -174,17 +174,20 @@ impl PokerTable {
 
         // During Showdown, always allow auto-advance (start new hand after delay).
         // For other phases, auto-advance only if fewer than 2 players can act
-        // (everyone all-in or folded, no meaningful betting possible).
+        // (everyone all-in or folded) OR when the betting round is complete.
         if self.phase != GamePhase::Showdown {
+            let betting_round_complete = self.is_betting_round_complete();
             let can_act_count = self.players.iter().filter(|p| p.can_act()).count();
-            if can_act_count >= MIN_PLAYERS_TO_START {
+            if can_act_count >= MIN_PLAYERS_TO_START && !betting_round_complete {
                 return false;
             }
         }
 
         // Determine delay for current phase
         let delay_ms = match self.phase {
-            GamePhase::Flop | GamePhase::Turn | GamePhase::River => self.street_delay_ms,
+            GamePhase::PreFlop | GamePhase::Flop | GamePhase::Turn | GamePhase::River => {
+                self.street_delay_ms
+            }
             GamePhase::Showdown => {
                 if self.won_without_showdown {
                     self.fold_win_delay_ms()

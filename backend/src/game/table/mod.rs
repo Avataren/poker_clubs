@@ -11,9 +11,9 @@ pub use state::{PublicPlayerState, PublicPot, PublicTableState, TournamentInfo};
 
 use super::{
     constants::{
-        DEFAULT_FOLD_WIN_DELAY_MS, DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS,
-        DEFAULT_STREET_DELAY_MS, HEADS_UP_PLAYER_COUNT, MAX_RAISES_PER_ROUND, MIN_PLAYERS_TO_START,
-        MTT_WAITING_REBALANCE_MS,
+        BOT_FOLD_WIN_DELAY_MS, DEFAULT_FOLD_WIN_DELAY_MS, DEFAULT_MAX_SEATS,
+        DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS, HEADS_UP_PLAYER_COUNT,
+        MAX_RAISES_PER_ROUND, MIN_PLAYERS_TO_START, MTT_WAITING_REBALANCE_MS,
     },
     deck::{Card, Deck},
     error::{GameError, GameResult},
@@ -1445,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bot_fold_win_auto_advances_without_delay() {
+    fn test_bot_fold_win_waits_briefly_for_animation_then_auto_advances() {
         // Heads-up: human folds preflop to a bot in BB.
         let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 25, 50);
         table
@@ -1470,10 +1470,119 @@ mod tests {
         assert_eq!(winner.user_id, "bot_1");
 
         assert!(
+            !table.check_auto_advance(),
+            "bot uncontested win should wait briefly so fold animation can render"
+        );
+        table.last_phase_change_time =
+            Some(current_timestamp_ms().saturating_sub(BOT_FOLD_WIN_DELAY_MS + 1));
+        assert!(
             table.check_auto_advance(),
-            "bot uncontested win should auto-advance immediately"
+            "bot uncontested win should auto-advance after short fold-win delay"
         );
         assert_eq!(table.phase, GamePhase::PreFlop);
+    }
+
+    #[test]
+    fn test_bot_call_defers_street_advance_briefly() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        table.street_delay_ms = 5;
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+
+        // Create a preflop state where bot call will complete the betting round.
+        table.current_player = bot_idx;
+        table.current_bet = 100;
+        table.players[human_idx].current_bet = 100;
+        table.players[human_idx].has_acted_this_round = true;
+        table.players[bot_idx].current_bet = 50;
+        table.players[bot_idx].has_acted_this_round = false;
+
+        table
+            .handle_action("bot_1", PlayerAction::Call)
+            .expect("bot call should succeed");
+
+        // Street should not advance immediately; keep call text/chips visible briefly.
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        assert!(
+            !table.check_auto_advance(),
+            "should wait street delay before advancing after bot call"
+        );
+
+        table.last_phase_change_time =
+            Some(current_timestamp_ms().saturating_sub(table.street_delay_ms + 1));
+        assert!(
+            table.check_auto_advance(),
+            "should auto-advance once delay has elapsed"
+        );
+        assert_eq!(table.phase, GamePhase::Flop);
+    }
+
+    #[test]
+    fn test_zero_stack_allin_player_not_counted_in_next_hand_fold_win() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 1000)
+            .unwrap();
+
+        // Simulate a busted player that ended the prior hand as AllIn.
+        let busted_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "p3")
+            .expect("p3 should exist");
+        table.players[busted_idx].stack = 0;
+        table.players[busted_idx].state = PlayerState::AllIn;
+
+        table.phase = GamePhase::Showdown;
+        table.start_new_hand();
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        assert_eq!(
+            table.players[busted_idx].state,
+            PlayerState::SittingOut,
+            "busted player must not remain AllIn into next hand"
+        );
+        assert!(
+            !table.players[busted_idx].is_active_in_hand(),
+            "busted player must not be counted as active in hand"
+        );
+
+        // With only two playable players, a fold should produce immediate uncontested win.
+        let folder = table.players[table.current_player].user_id.clone();
+        table.handle_action(&folder, PlayerAction::Fold).unwrap();
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(
+            table.won_without_showdown,
+            "fold to last playable player should be uncontested win"
+        );
+        assert!(
+            table.community_cards.is_empty(),
+            "board must not run out on uncontested fold win"
+        );
     }
 
     #[test]
@@ -1607,6 +1716,42 @@ mod tests {
         assert!(
             post_fold_human.hole_cards.is_none(),
             "folded player should not keep seeing own cards"
+        );
+    }
+
+    #[test]
+    fn test_public_state_infers_fold_win_when_one_active_in_showdown() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        table.phase = GamePhase::Showdown;
+        table.won_without_showdown = false; // Simulate desynced flag
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+
+        table.players[human_idx].fold();
+        table.players[bot_idx].is_winner = true;
+        table.players[bot_idx].shown_cards = vec![false; table.players[bot_idx].hole_cards.len()];
+
+        let public = table.get_public_state(Some("human"));
+        assert!(
+            public.won_without_showdown,
+            "public state should infer fold-win when showdown has only one active player"
         );
     }
 
