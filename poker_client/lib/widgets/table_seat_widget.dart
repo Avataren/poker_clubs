@@ -117,7 +117,8 @@ class TableSeatWidget extends StatelessWidget {
   final bool isSmallBlind;
   final bool isBigBlind;
   final int smallBlind;
-  final bool isDealingCards;
+  final int dealtCardsCount;
+  final int? animatingCardIndex;
   final double seatSize;
   final double cardWidth;
   final double cardHeight;
@@ -137,7 +138,8 @@ class TableSeatWidget extends StatelessWidget {
     this.isSmallBlind = false,
     this.isBigBlind = false,
     this.smallBlind = 10,
-    this.isDealingCards = false,
+    this.dealtCardsCount = 2,
+    this.animatingCardIndex,
     this.seatSize = 80.0,
     this.cardWidth = 35.0,
     this.cardHeight = 50.0,
@@ -217,6 +219,9 @@ class TableSeatWidget extends StatelessWidget {
               ...List.generate(player!.holeCards!.length, (index) {
                 final card = player!.holeCards![index];
                 final totalCards = player!.holeCards!.length;
+                final hasBeenDealt = index < dealtCardsCount;
+                final isAnimatingThisCard = animatingCardIndex == index;
+                final visible = hasBeenDealt && !isAnimatingThisCard;
 
                 return Positioned(
                   left: _SeatVisualLayout.cardLeftInFrame(
@@ -227,7 +232,7 @@ class TableSeatWidget extends StatelessWidget {
                   ),
                   top: cardsTop,
                   child: Opacity(
-                    opacity: isDealingCards ? 0.0 : 1.0,
+                    opacity: visible ? 1.0 : 0.0,
                     child: Transform.rotate(
                       angle: _SeatVisualLayout.cardFanRotation(
                         index,
@@ -616,6 +621,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       {}; // Map of player ID to card number (1 or 2) being dealt
   final Map<String, bool> _cardAnimationStarted =
       {}; // Track if animation has started for player's current card
+  final Map<String, int> _dealtCardsCount =
+      {}; // Number of cards that have reached final position per player
   String? _lastPhase;
 
   @override
@@ -646,6 +653,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       // Clear any existing animation state
       _dealingCardsTo.clear();
       _cardAnimationStarted.clear();
+      _dealtCardsCount.clear();
 
       // Schedule card dealing animation with stagger
       // Note: shuffle sound plays immediately in game_screen.dart
@@ -703,6 +711,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
               Future.delayed(Duration(milliseconds: cardAnimDuration + 10), () {
                 if (mounted) {
                   setState(() {
+                    _dealtCardsCount[player.userId] = max(
+                      _dealtCardsCount[player.userId] ?? 0,
+                      1,
+                    );
                     _dealingCardsTo.remove(player.userId);
                     _cardAnimationStarted.remove(player.userId);
                   });
@@ -741,6 +753,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                   () {
                     if (mounted) {
                       setState(() {
+                        _dealtCardsCount[player.userId] = max(
+                          _dealtCardsCount[player.userId] ?? 0,
+                          2,
+                        );
                         _dealingCardsTo.remove(player.userId);
                         _cardAnimationStarted.remove(player.userId);
                       });
@@ -755,6 +771,18 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     }
 
     _lastPhase = widget.gamePhase;
+
+    // Drop stale card animation state if players changed (e.g. table move).
+    final activePlayerIds = widget.players.map((p) => p.userId).toSet();
+    _dealingCardsTo.removeWhere(
+      (userId, _) => !activePlayerIds.contains(userId),
+    );
+    _cardAnimationStarted.removeWhere(
+      (userId, _) => !activePlayerIds.contains(userId),
+    );
+    _dealtCardsCount.removeWhere(
+      (userId, _) => !activePlayerIds.contains(userId),
+    );
 
     // Don't trigger pot animation if one is already running
     if (_animatingPot) {
@@ -1067,6 +1095,17 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     final isCurrentTurn =
         widget.gamePhase.toLowerCase() != 'waiting' &&
         widget.currentPlayerSeat == seatIndex;
+    final animatingCardNumber = player != null
+        ? _dealingCardsTo[player.userId]
+        : null;
+    final dealingRevealActive =
+        widget.gamePhase == 'PreFlop' &&
+        (_dealtCardsCount.isNotEmpty || _dealingCardsTo.isNotEmpty);
+    final dealtCardsCount = player == null
+        ? 0
+        : dealingRevealActive
+        ? (_dealtCardsCount[player.userId] ?? 0)
+        : (player.holeCards?.length ?? 0);
 
     return Positioned(
       left: geometry.left,
@@ -1091,8 +1130,10 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           isSmallBlind: widget.smallBlindSeat == seatIndex,
           isBigBlind: widget.bigBlindSeat == seatIndex,
           smallBlind: widget.smallBlind,
-          isDealingCards:
-              player != null && _dealingCardsTo.containsKey(player.userId),
+          dealtCardsCount: dealtCardsCount,
+          animatingCardIndex: animatingCardNumber != null
+              ? animatingCardNumber - 1
+              : null,
           seatSize: geometry.seatSize,
           cardWidth: geometry.cardWidth,
           cardHeight: geometry.cardHeight,
