@@ -47,6 +47,7 @@ pub struct PublicTableState {
 pub struct PublicPlayerState {
     pub user_id: String,
     pub username: String,
+    pub avatar_index: i32,
     pub seat: usize,
     pub stack: i64,
     pub current_bet: i64,
@@ -246,6 +247,7 @@ impl PokerTable {
                     PublicPlayerState {
                         user_id: p.user_id.clone(),
                         username: p.username.clone(),
+                        avatar_index: p.avatar_index,
                         seat: p.seat,
                         stack: p.stack,
                         current_bet: p.current_bet,

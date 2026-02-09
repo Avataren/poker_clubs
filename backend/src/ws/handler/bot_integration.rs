@@ -1,4 +1,5 @@
 use super::game_server::GameServer;
+use rand::Rng;
 
 impl GameServer {
     /// Check all tables for bots whose turn it is and execute their actions.
@@ -96,6 +97,7 @@ impl GameServer {
             let mut bot_mgr = self.bot_manager.write().await;
             bot_mgr.add_bot(table_id, name, strategy)
         };
+        let avatar_index: i32 = rand::thread_rng().gen_range(0..25);
 
         // Seat the bot at the table
         {
@@ -110,16 +112,20 @@ impl GameServer {
                     // (can't await here, so we'll do a blocking attempt)
                     e.to_string()
                 })?;
+            if let Some(player) = table.players.iter_mut().find(|p| p.user_id == bot_user_id) {
+                player.avatar_index = avatar_index;
+            }
         }
 
         self.notify_table_update(table_id).await;
 
         tracing::info!(
-            "Bot {} ({}) added to table {} with {} chips",
+            "Bot {} ({}) added to table {} with {} chips (avatar_index={})",
             bot_username,
             bot_user_id,
             table_id,
-            buyin
+            buyin,
+            avatar_index
         );
 
         Ok((bot_user_id, bot_username))

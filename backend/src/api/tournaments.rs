@@ -12,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -915,16 +916,18 @@ async fn fill_with_bots(
         for i in 0..spots_remaining {
             let bot_username = format!("Bot_{}", current_count + i + 1);
             let bot_id = uuid::Uuid::new_v4().to_string();
+            let avatar_index: i32 = rand::thread_rng().gen_range(0..25);
 
             if let Err(e) = sqlx::query(
-                "INSERT INTO users (id, username, email, password_hash, is_bot)
-                 VALUES (?, ?, ?, ?, 1)
+                "INSERT INTO users (id, username, email, password_hash, is_bot, avatar_index)
+                 VALUES (?, ?, ?, ?, 1, ?)
                  ON CONFLICT(username) DO NOTHING",
             )
             .bind(&bot_id)
             .bind(&bot_username)
             .bind(format!("{}@bot.local", bot_username))
             .bind(bot_password_hash)
+            .bind(avatar_index)
             .execute(&mut *conn)
             .await
             {

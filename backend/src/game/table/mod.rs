@@ -1427,7 +1427,10 @@ mod tests {
             .hole_cards
             .as_ref()
             .expect("active bot should have placeholder cards");
-        assert_eq!(pre_fold_cards.len(), table.players[bot_idx].hole_cards.len());
+        assert_eq!(
+            pre_fold_cards.len(),
+            table.players[bot_idx].hole_cards.len()
+        );
         assert!(
             pre_fold_cards
                 .iter()
@@ -1469,8 +1472,7 @@ mod tests {
         table.phase = GamePhase::Showdown;
         table.won_without_showdown = true;
         table.players[bot_idx].is_winner = true;
-        table.players[bot_idx].shown_cards =
-            vec![false; table.players[bot_idx].hole_cards.len()];
+        table.players[bot_idx].shown_cards = vec![false; table.players[bot_idx].hole_cards.len()];
 
         let state = table.get_public_state(Some("human"));
         let bot_public = state
@@ -1485,7 +1487,9 @@ mod tests {
 
         assert_eq!(cards.len(), table.players[bot_idx].hole_cards.len());
         assert!(
-            cards.iter().all(|c| c.rank == 0 && c.suit == 0 && !c.face_up),
+            cards
+                .iter()
+                .all(|c| c.rank == 0 && c.suit == 0 && !c.face_up),
             "bot winner cards should stay hidden unless explicitly shown"
         );
     }
@@ -1551,5 +1555,33 @@ mod tests {
             public.won_without_showdown,
             "public state must explicitly mark uncontested wins"
         );
+    }
+
+    #[test]
+    fn test_public_state_includes_avatar_index() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+
+        let p1 = table
+            .players
+            .iter_mut()
+            .find(|p| p.user_id == "p1")
+            .expect("player p1 should exist");
+        p1.avatar_index = 17;
+
+        let state = table.get_public_state(Some("p1"));
+        let p1_public = state
+            .players
+            .iter()
+            .find(|p| p.user_id == "p1")
+            .expect("player p1 should be present in public state");
+
+        assert_eq!(p1_public.avatar_index, 17);
     }
 }

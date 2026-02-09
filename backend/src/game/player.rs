@@ -16,6 +16,7 @@ pub enum PlayerState {
 pub struct Player {
     pub user_id: String,
     pub username: String,
+    pub avatar_index: i32,
     pub seat: usize,
     pub stack: i64,
     pub hole_cards: Vec<Card>,
@@ -35,6 +36,7 @@ impl Player {
         Self {
             user_id,
             username,
+            avatar_index: 0,
             seat,
             stack,
             hole_cards: vec![],

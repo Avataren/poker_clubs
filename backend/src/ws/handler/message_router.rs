@@ -215,10 +215,17 @@ pub(super) async fn handle_client_message(
                 }
             } else {
                 // Join with a seat (legacy auto-seat behavior)
+                let avatar_index = game_server.get_user_avatar_index(user_id).await;
                 let mut tables = game_server.tables.write().await;
                 if let Some(table) = tables.get_mut(&table_id) {
                     match table.add_player(user_id.to_string(), username.to_string(), buyin) {
                         Ok(_seat) => {
+                            if let Some(player) =
+                                table.players.iter_mut().find(|p| p.user_id == user_id)
+                            {
+                                player.avatar_index = avatar_index;
+                            }
+
                             drop(tables); // Release lock before notifying
 
                             // Notify all players at table
@@ -279,10 +286,17 @@ pub(super) async fn handle_client_message(
             }
 
             // Take the specific seat at the table
+            let avatar_index = game_server.get_user_avatar_index(user_id).await;
             let mut tables = game_server.tables.write().await;
             if let Some(table) = tables.get_mut(&table_id) {
                 match table.take_seat(user_id.to_string(), username.to_string(), seat, buyin) {
                     Ok(_seat_num) => {
+                        if let Some(player) =
+                            table.players.iter_mut().find(|p| p.user_id == user_id)
+                        {
+                            player.avatar_index = avatar_index;
+                        }
+
                         *current_table_id = Some(table_id.clone());
                         drop(tables); // Release lock before subscribing
 

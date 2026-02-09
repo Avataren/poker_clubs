@@ -193,6 +193,17 @@ impl GameServer {
         }
     }
 
+    pub(super) async fn get_user_avatar_index(&self, user_id: &str) -> i32 {
+        let avatar: Option<(i32,)> = sqlx::query_as("SELECT avatar_index FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(self.pool.as_ref())
+            .await
+            .ok()
+            .flatten();
+
+        avatar.map(|(idx,)| idx.clamp(0, 24)).unwrap_or_default()
+    }
+
     /// Fetch tournament info for a table to include in state
     pub(super) async fn get_tournament_info(
         &self,

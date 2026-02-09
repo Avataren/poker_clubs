@@ -13,12 +13,16 @@ impl GameServer {
         seat: usize,
         stack: i64,
     ) -> Result<(), crate::game::error::GameError> {
+        let avatar_index = self.get_user_avatar_index(&user_id).await;
         let mut tables = self.tables.write().await;
         let table = tables
             .get_mut(table_id)
             .ok_or(crate::game::error::GameError::InvalidTableId)?;
 
         table.take_seat(user_id, username, seat, stack)?;
+        if let Some(player) = table.players.iter_mut().find(|p| p.seat == seat) {
+            player.avatar_index = avatar_index;
+        }
 
         Ok(())
     }
@@ -31,6 +35,7 @@ impl GameServer {
         username: &str,
         stack: i64,
     ) -> Result<usize, crate::game::error::GameError> {
+        let avatar_index = self.get_user_avatar_index(user_id).await;
         let mut tables = self.tables.write().await;
         let table = tables
             .get_mut(table_id)
@@ -53,6 +58,9 @@ impl GameServer {
             .ok_or(crate::game::error::GameError::TableFull)?;
 
         table.take_seat(user_id.to_string(), username.to_string(), seat, stack)?;
+        if let Some(player) = table.players.iter_mut().find(|p| p.user_id == user_id) {
+            player.avatar_index = avatar_index;
+        }
 
         drop(tables);
         self.notify_table_update(table_id).await;
@@ -201,7 +209,7 @@ impl GameServer {
         tournament_id: Option<&str>,
     ) -> Result<(), String> {
         // Extract player info and move within a single tables lock
-        let (username, stack) = {
+        let (username, stack, avatar_index) = {
             let mut tables = self.tables.write().await;
             let from_table = tables
                 .get(from_table_id)
@@ -219,6 +227,7 @@ impl GameServer {
                 .ok_or_else(|| "Player not found on source table".to_string())?;
             let username = player.username.clone();
             let stack = player.stack;
+            let avatar_index = player.avatar_index;
 
             // Remove from source
             let from_table = tables.get_mut(from_table_id).unwrap();
@@ -245,8 +254,11 @@ impl GameServer {
             to_table
                 .take_seat(user_id.to_string(), username.clone(), seat, stack)
                 .map_err(|e| format!("Failed to seat player: {:?}", e))?;
+            if let Some(player) = to_table.players.iter_mut().find(|p| p.user_id == user_id) {
+                player.avatar_index = avatar_index;
+            }
 
-            (username, stack)
+            (username, stack, avatar_index)
         };
 
         // Move bot registration if applicable
@@ -273,10 +285,11 @@ impl GameServer {
         }
 
         tracing::info!(
-            "Moved player {} ({}) with stack {} from table {} to table {}",
+            "Moved player {} ({}) with stack {} and avatar_index {} from table {} to table {}",
             username,
             user_id,
             stack,
+            avatar_index,
             from_table_id,
             to_table_id
         );
