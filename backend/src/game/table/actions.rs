@@ -10,6 +10,28 @@ impl PokerTable {
             self.current_player
         );
 
+        if matches!(self.phase, GamePhase::Waiting | GamePhase::Showdown) {
+            tracing::debug!(
+                "Cannot process action during {:?} phase (user_id={})",
+                self.phase,
+                user_id
+            );
+            return Err(GameError::InvalidAction {
+                reason: format!("Cannot act during {:?} phase", self.phase),
+            });
+        }
+
+        if self.current_player >= self.players.len() {
+            tracing::error!(
+                "Invalid current_player index {} for {} players",
+                self.current_player,
+                self.players.len()
+            );
+            return Err(GameError::InvalidAction {
+                reason: "No current player available".to_string(),
+            });
+        }
+
         // Verify it's the player's turn
         let current = &self.players[self.current_player];
         if current.user_id != user_id {
@@ -22,6 +44,18 @@ impl PokerTable {
             return Err(GameError::CannotAct);
         }
         let acted_by_bot = is_bot_identity(&current.user_id, &current.username);
+
+        // When a betting round is already complete, the table is waiting for
+        // street/showdown advancement. No further actions are legal.
+        if self.is_betting_round_complete() {
+            tracing::debug!(
+                "Ignoring action because betting round is complete (phase={:?})",
+                self.phase
+            );
+            return Err(GameError::InvalidAction {
+                reason: "Betting round already complete".to_string(),
+            });
+        }
 
         tracing::debug!("Processing action: {:?}", action);
         let betting_structure = self.variant.betting_structure();
@@ -318,14 +352,18 @@ impl PokerTable {
             return true;
         }
 
-        // Need at least 2 checks:
-        // 1. All active players have acted this round
-        // 2. All active players have matched the current bet
-
-        let all_acted = active_players.iter().all(|p| p.has_acted_this_round);
         let all_matched = active_players
             .iter()
             .all(|p| p.current_bet == self.current_bet);
+
+        // If only one player can act, only unmatched chips can keep the round open.
+        // This covers all-in runouts where no further betting action exists.
+        if active_players.len() == 1 {
+            return all_matched;
+        }
+
+        // Multi-way: round closes only when everyone has acted and matched.
+        let all_acted = active_players.iter().all(|p| p.has_acted_this_round);
 
         // Debug logging
         tracing::debug!(

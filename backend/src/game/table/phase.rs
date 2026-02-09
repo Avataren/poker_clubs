@@ -173,12 +173,14 @@ impl PokerTable {
         }
 
         // During Showdown, always allow auto-advance (start new hand after delay).
-        // For other phases, auto-advance only if fewer than 2 players can act
-        // (everyone all-in or folded) OR when the betting round is complete.
+        // For betting phases, do not auto-advance while any active player still
+        // has a pending decision (for example: one covered player facing an all-in).
+        // Only fully-closed action (no active decision makers) or a completed
+        // betting round may progress automatically.
         if self.phase != GamePhase::Showdown {
             let betting_round_complete = self.is_betting_round_complete();
             let can_act_count = self.players.iter().filter(|p| p.can_act()).count();
-            if can_act_count >= MIN_PLAYERS_TO_START && !betting_round_complete {
+            if can_act_count > 0 && !betting_round_complete {
                 return false;
             }
         }

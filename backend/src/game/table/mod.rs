@@ -1536,6 +1536,181 @@ mod tests {
     }
 
     #[test]
+    fn test_no_second_action_allowed_while_waiting_for_street_advance() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+
+        // Create a preflop state where bot call will complete the betting round.
+        table.current_player = bot_idx;
+        table.current_bet = 100;
+        table.players[human_idx].current_bet = 100;
+        table.players[human_idx].has_acted_this_round = true;
+        table.players[bot_idx].current_bet = 50;
+        table.players[bot_idx].has_acted_this_round = false;
+
+        table
+            .handle_action("bot_1", PlayerAction::Call)
+            .expect("bot call should succeed");
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        assert!(table.is_betting_round_complete());
+
+        let bot_bet_after_call = table.players[bot_idx].current_bet;
+        let pot_after_call = table.pot.total();
+
+        let second_action = table.handle_action("bot_1", PlayerAction::Raise(100));
+        assert!(
+            matches!(second_action, Err(GameError::InvalidAction { .. })),
+            "second action before street advance must be rejected; got {:?}",
+            second_action
+        );
+        assert_eq!(table.players[bot_idx].current_bet, bot_bet_after_call);
+        assert_eq!(table.pot.total(), pot_after_call);
+    }
+
+    #[test]
+    fn test_single_active_player_facing_allin_must_act_before_auto_advance() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_2".to_string(), "Bot Two".to_string(), 2, 5000)
+            .unwrap();
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        let bot1_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot_1 should exist");
+        let bot2_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_2")
+            .expect("bot_2 should exist");
+
+        // Flop state: one active human still owes chips to call an all-in bet.
+        table.phase = GamePhase::Flop;
+        table.current_player = human_idx;
+        table.current_bet = 2000;
+        table.street_delay_ms = 1;
+        table.last_phase_change_time = Some(current_timestamp_ms().saturating_sub(10_000));
+
+        table.players[human_idx].state = PlayerState::Active;
+        table.players[human_idx].current_bet = 1000;
+        table.players[human_idx].has_acted_this_round = false;
+        table.players[human_idx].stack = 4000;
+
+        table.players[bot1_idx].state = PlayerState::AllIn;
+        table.players[bot1_idx].current_bet = 2000;
+        table.players[bot1_idx].has_acted_this_round = true;
+        table.players[bot1_idx].stack = 0;
+
+        table.players[bot2_idx].state = PlayerState::Folded;
+        table.players[bot2_idx].current_bet = 0;
+        table.players[bot2_idx].has_acted_this_round = true;
+
+        assert!(
+            !table.is_betting_round_complete(),
+            "human still has a pending decision"
+        );
+        assert!(
+            !table.check_auto_advance(),
+            "table must not auto-advance while active player still needs to act"
+        );
+        assert_eq!(table.phase, GamePhase::Flop);
+        assert_eq!(table.current_player, human_idx);
+    }
+
+    #[test]
+    fn test_single_active_player_with_matched_bet_auto_advances_runout() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_2".to_string(), "Bot Two".to_string(), 2, 5000)
+            .unwrap();
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        let bot1_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot_1 should exist");
+        let bot2_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_2")
+            .expect("bot_2 should exist");
+
+        // Flop runout state: human is the only active player, but has no pending call.
+        table.phase = GamePhase::Flop;
+        table.current_player = human_idx;
+        table.current_bet = 0;
+        table.street_delay_ms = 1;
+        table.last_phase_change_time = Some(current_timestamp_ms().saturating_sub(10_000));
+
+        table.players[human_idx].state = PlayerState::Active;
+        table.players[human_idx].current_bet = 0;
+        table.players[human_idx].has_acted_this_round = false;
+
+        table.players[bot1_idx].state = PlayerState::AllIn;
+        table.players[bot1_idx].current_bet = 0;
+        table.players[bot1_idx].has_acted_this_round = true;
+        table.players[bot1_idx].stack = 0;
+
+        table.players[bot2_idx].state = PlayerState::Folded;
+        table.players[bot2_idx].current_bet = 0;
+        table.players[bot2_idx].has_acted_this_round = true;
+
+        assert!(
+            table.is_betting_round_complete(),
+            "with only one active player and matched bet, round should auto-close"
+        );
+        assert!(
+            table.check_auto_advance(),
+            "table should auto-advance runout without requiring a forced check action"
+        );
+        assert_eq!(table.phase, GamePhase::Turn);
+    }
+
+    #[test]
     fn test_zero_stack_allin_player_not_counted_in_next_hand_fold_win() {
         let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
 
@@ -1753,6 +1928,137 @@ mod tests {
             public.won_without_showdown,
             "public state should infer fold-win when showdown has only one active player"
         );
+    }
+
+    #[test]
+    fn test_public_state_hides_opponent_cards_before_showdown_during_allin_runout() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        let p1_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "p1")
+            .expect("p1 should exist");
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+
+        assert!(!table.players[p1_idx].hole_cards.is_empty());
+        assert!(!table.players[bot_idx].hole_cards.is_empty());
+
+        // Simulate an all-in runout state prior to showdown.
+        table.phase = GamePhase::Flop;
+        table.players[p1_idx].state = PlayerState::AllIn;
+        table.players[bot_idx].state = PlayerState::Active;
+        table.won_without_showdown = false;
+
+        let public = table.get_public_state(Some("p1"));
+        let bot_public = public
+            .players
+            .iter()
+            .find(|p| p.user_id == "bot_1")
+            .expect("bot should be present in public state");
+        let bot_cards = bot_public
+            .hole_cards
+            .as_ref()
+            .expect("active opponent should have placeholder cards before showdown");
+        assert_eq!(bot_cards.len(), table.players[bot_idx].hole_cards.len());
+        assert!(
+            bot_cards
+                .iter()
+                .all(|c| c.rank == 0 && c.suit == 0 && !c.face_up),
+            "opponent cards must remain hidden before final showdown"
+        );
+    }
+
+    #[test]
+    fn test_public_state_hides_opponent_cards_when_showdown_board_incomplete() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        let p1_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "p1")
+            .expect("p1 should exist");
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_1")
+            .expect("bot should exist");
+
+        assert!(!table.players[p1_idx].hole_cards.is_empty());
+        assert!(!table.players[bot_idx].hole_cards.is_empty());
+
+        // Defensive invariant: even if phase is temporarily Showdown, do not reveal
+        // unless the full board is actually dealt.
+        table.phase = GamePhase::Showdown;
+        table.won_without_showdown = false;
+        table.community_cards = vec![Card::new(14, 0), Card::new(13, 1), Card::new(12, 2)];
+        table.players[p1_idx].state = PlayerState::Active;
+        table.players[bot_idx].state = PlayerState::Active;
+
+        let public = table.get_public_state(Some("p1"));
+        let bot_public = public
+            .players
+            .iter()
+            .find(|p| p.user_id == "bot_1")
+            .expect("bot should be present in public state");
+        let bot_cards = bot_public
+            .hole_cards
+            .as_ref()
+            .expect("active opponent should have placeholder cards");
+        assert_eq!(bot_cards.len(), table.players[bot_idx].hole_cards.len());
+        assert!(
+            bot_cards
+                .iter()
+                .all(|c| c.rank == 0 && c.suit == 0 && !c.face_up),
+            "opponent cards must remain hidden until the final board is dealt"
+        );
+    }
+
+    #[test]
+    fn test_handle_action_rejected_during_showdown_phase() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 5000)
+            .unwrap();
+
+        let acting_user = table.players[table.current_player].user_id.clone();
+        let previous_bet = table.players[table.current_player].current_bet;
+        let previous_pot = table.pot.total();
+
+        table.phase = GamePhase::Showdown;
+        let result = table.handle_action(&acting_user, PlayerAction::Call);
+        assert!(
+            matches!(result, Err(GameError::InvalidAction { .. })),
+            "actions must be rejected during showdown; got {:?}",
+            result
+        );
+        assert_eq!(
+            table.players[table.current_player].current_bet,
+            previous_bet
+        );
+        assert_eq!(table.pot.total(), previous_pot);
     }
 
     #[test]

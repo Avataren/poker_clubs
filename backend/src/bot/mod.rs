@@ -182,6 +182,12 @@ impl BotManager {
                 }
             }
 
+            // If a round is complete, the table is waiting on timed auto-advance.
+            // Do not queue a new bot action in that transition window.
+            if table.is_betting_round_complete() {
+                continue;
+            }
+
             // Check if current player is a bot
             if table.current_player >= table.players.len() {
                 continue;
@@ -327,6 +333,7 @@ fn compute_position(table: &PokerTable, player_idx: usize) -> BotPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::constants::BOT_ACTION_THINK_DELAY_MS;
 
     #[test]
     fn test_bot_manager_add_remove() {
@@ -358,5 +365,47 @@ mod tests {
         let (id3, _) = mgr.add_bot("t2", None, None);
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
+    }
+
+    #[test]
+    fn test_collect_bot_actions_skips_completed_round() {
+        let mut mgr = BotManager::new();
+        let table_id = "table_1".to_string();
+        let (bot_id, bot_name) = mgr.add_bot(&table_id, None, None);
+
+        let mut table = PokerTable::new(table_id.clone(), "Test Table".to_string(), 50, 100);
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table.take_seat(bot_id.clone(), bot_name, 1, 5000).unwrap();
+
+        let human_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "human")
+            .expect("human should exist");
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == bot_id)
+            .expect("bot should exist");
+
+        table.current_player = bot_idx;
+        table.current_bet = 100;
+        table.players[human_idx].current_bet = 100;
+        table.players[human_idx].has_acted_this_round = true;
+        table.players[bot_idx].current_bet = 100;
+        table.players[bot_idx].has_acted_this_round = true;
+        table.last_phase_change_time =
+            Some(current_timestamp_ms().saturating_sub(BOT_ACTION_THINK_DELAY_MS + 1));
+        assert!(table.is_betting_round_complete());
+
+        let mut tables = HashMap::new();
+        tables.insert(table_id, table);
+        let actions = mgr.collect_bot_actions(&tables);
+        assert!(
+            actions.is_empty(),
+            "bot manager should not queue actions while waiting for street auto-advance"
+        );
     }
 }

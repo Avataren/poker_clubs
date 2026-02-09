@@ -91,8 +91,17 @@ impl PokerTable {
             .iter()
             .filter(|p| p.is_active_in_hand())
             .count();
+        let full_board_cards = self
+            .variant
+            .streets()
+            .iter()
+            .map(|street| street.cards_to_deal)
+            .sum::<usize>();
         let effective_won_without_showdown = self.won_without_showdown
             || (self.phase == GamePhase::Showdown && active_in_hand_count == 1);
+        let reveal_full_showdown_cards = self.phase == GamePhase::Showdown
+            && self.community_cards.len() >= full_board_cards
+            && !effective_won_without_showdown;
 
         // Get the actual seat number of the current player (not array index)
         // During Waiting phase or invalid states, use the first player's seat if available
@@ -186,16 +195,6 @@ impl PokerTable {
                 .players
                 .iter()
                 .map(|p| {
-                    // Check if this is an all-in runout situation (fewer than 2 players can act)
-                    // In this case, all active players' cards should be revealed like in real poker
-                    let is_allin_runout = self.players.iter().filter(|pl| pl.can_act()).count() < 2
-                        && self
-                            .players
-                            .iter()
-                            .filter(|pl| pl.is_active_in_hand())
-                            .count()
-                            >= 2;
-
                     let hole_cards =
                         if Some(p.user_id.as_str()) == for_user_id && p.is_active_in_hand() {
                             // Show own cards face-up while still in the hand
@@ -237,10 +236,8 @@ impl PokerTable {
                                     num_cards
                                 ])
                             }
-                        } else if (self.phase == GamePhase::Showdown || is_allin_runout)
-                            && p.is_active_in_hand()
-                        {
-                            // During normal showdown OR all-in runout, show all active players' cards face-up
+                        } else if reveal_full_showdown_cards && p.is_active_in_hand() {
+                            // During showdown, show all active players' cards face-up.
                             Some(p.hole_cards.clone())
                         } else if p.is_active_in_hand() && !p.hole_cards.is_empty() {
                             // For other players still in the hand, send placeholder face-down cards
