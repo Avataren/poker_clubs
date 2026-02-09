@@ -162,14 +162,27 @@ impl PokerTable {
         let should_defer_standup = self.phase != GamePhase::Waiting
             && (self.players[player_idx].state == PlayerState::Active
                 || self.players[player_idx].state == PlayerState::AllIn);
+        let was_current_turn = player_idx == self.current_player;
 
         // If player is in an active hand, mark them to stand up after hand concludes.
         if should_defer_standup {
             self.players[player_idx].state = PlayerState::SittingOut;
+            self.players[player_idx].last_action = Some("Stand Up".to_string());
+            self.players[player_idx].has_acted_this_round = true;
             tracing::debug!(
                 "Player {} will stand up after current hand",
                 self.players[player_idx].username
             );
+
+            // If they stand up on their betting turn, continue the hand immediately.
+            if was_current_turn
+                && matches!(
+                    self.phase,
+                    GamePhase::PreFlop | GamePhase::Flop | GamePhase::Turn | GamePhase::River
+                )
+            {
+                self.advance_action();
+            }
             return Ok(());
         }
 

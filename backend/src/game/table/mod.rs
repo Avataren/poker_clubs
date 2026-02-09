@@ -1707,4 +1707,58 @@ mod tests {
         assert!(public.small_blind_seat.is_some());
         assert!(public.big_blind_seat.is_some());
     }
+
+    #[test]
+    fn test_stand_up_on_current_turn_advances_action_in_cash_game() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table.players.push(Player::new(
+            "p0".to_string(),
+            "Player 0".to_string(),
+            0,
+            5000,
+        ));
+        table.players.push(Player::new(
+            "p1".to_string(),
+            "Player 1".to_string(),
+            1,
+            5000,
+        ));
+        table.players.push(Player::new(
+            "p2".to_string(),
+            "Player 2".to_string(),
+            2,
+            5000,
+        ));
+
+        table.phase = GamePhase::PreFlop;
+        table.current_bet = 100;
+        table.current_player = 1;
+        table.dealer_seat = 0;
+
+        table.players[0].state = PlayerState::Active;
+        table.players[0].current_bet = 100;
+        table.players[0].has_acted_this_round = true;
+
+        table.players[1].state = PlayerState::Active;
+        table.players[1].current_bet = 100;
+        table.players[1].has_acted_this_round = false;
+
+        table.players[2].state = PlayerState::Active;
+        table.players[2].current_bet = 100;
+        table.players[2].has_acted_this_round = true;
+
+        table.stand_up("p1").unwrap();
+
+        assert_eq!(table.players[1].state, PlayerState::SittingOut);
+        assert_ne!(
+            table.current_player, 1,
+            "current turn should advance when a player stands up on their turn"
+        );
+        assert_eq!(
+            table.phase,
+            GamePhase::Flop,
+            "with remaining active players matched/acted, preflop should advance"
+        );
+    }
 }
