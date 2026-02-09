@@ -400,14 +400,7 @@ impl PokerTable {
     /// Find the first player eligible for dealer button starting from seat 0
     /// Dealer button: must have chips and not be sitting out, eliminated, or disconnected
     pub(crate) fn first_eligible_player_for_button(&self) -> usize {
-        let next = self.first_player_index_by_seat(|player| {
-            // Player is eligible for dealer if they have chips and aren't
-            // sitting out, eliminated, or disconnected.
-            player.stack > 0
-                && player.state != PlayerState::SittingOut
-                && player.state != PlayerState::Eliminated
-                && player.state != PlayerState::Disconnected
-        });
+        let next = self.first_player_index_by_seat(|player| player.is_eligible_for_button());
 
         if let Some(idx) = next {
             tracing::info!(
@@ -440,14 +433,7 @@ impl PokerTable {
             self.players.len()
         );
 
-        let next = self.next_player_index_by_seat(after, |player| {
-            // Player is eligible for dealer if they have chips and aren't
-            // sitting out, eliminated, or disconnected.
-            player.stack > 0
-                && player.state != PlayerState::SittingOut
-                && player.state != PlayerState::Eliminated
-                && player.state != PlayerState::Disconnected
-        });
+        let next = self.next_player_index_by_seat(after, |player| player.is_eligible_for_button());
 
         if let Some(idx) = next {
             tracing::info!(

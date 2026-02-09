@@ -89,11 +89,7 @@ impl Player {
         self.shown_cards.clear();
 
         // Activate players who have chips and aren't voluntarily sitting out, eliminated, or disconnected
-        if self.stack > 0
-            && self.state != PlayerState::SittingOut
-            && self.state != PlayerState::Eliminated
-            && self.state != PlayerState::Disconnected
-        {
+        if self.is_eligible_for_button() {
             self.state = PlayerState::Active;
         }
         // Players with 0 stack will be handled by check_eliminations in tournament mode
@@ -115,6 +111,22 @@ impl Player {
 
     pub fn is_active_in_hand(&self) -> bool {
         matches!(self.state, PlayerState::Active | PlayerState::AllIn)
+    }
+
+    /// Eligible for the dealer button: has chips and is not sitting out,
+    /// eliminated, or disconnected.
+    pub fn is_eligible_for_button(&self) -> bool {
+        self.stack > 0
+            && self.state != PlayerState::SittingOut
+            && self.state != PlayerState::Eliminated
+            && self.state != PlayerState::Disconnected
+    }
+
+    /// Can be dealt into a hand in tournament mode: has chips and isn't
+    /// eliminated. Sitting-out and disconnected players still get cards
+    /// (they auto-fold).
+    pub fn is_eligible_for_tournament_blind(&self) -> bool {
+        self.stack > 0 && self.state != PlayerState::Eliminated
     }
 }
 

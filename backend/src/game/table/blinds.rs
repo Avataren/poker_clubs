@@ -103,17 +103,12 @@ impl PokerTable {
             return 0;
         }
 
+        let is_tournament = self.format.eliminates_players();
         let next = self.next_player_index_by_seat(after, |player| {
-            // In tournaments, sitting out players still pay blinds.
-            // Only skip eliminated players.
-            if self.format.eliminates_players() {
-                player.stack > 0 && player.state != PlayerState::Eliminated
+            if is_tournament {
+                player.is_eligible_for_tournament_blind()
             } else {
-                // In cash games, skip sitting out, eliminated, and disconnected.
-                player.stack > 0
-                    && player.state != PlayerState::SittingOut
-                    && player.state != PlayerState::Eliminated
-                    && player.state != PlayerState::Disconnected
+                player.is_eligible_for_button()
             }
         });
 
