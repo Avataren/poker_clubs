@@ -916,7 +916,7 @@ async fn fill_with_bots(
         for i in 0..spots_remaining {
             let bot_username = format!("Bot_{}", current_count + i + 1);
             let bot_id = uuid::Uuid::new_v4().to_string();
-            let avatar_index: i32 = rand::thread_rng().gen_range(0..25);
+            let avatar_index: i32 = rand::thread_rng().gen_range(1..25);
 
             if let Err(e) = sqlx::query(
                 "INSERT INTO users (id, username, email, password_hash, is_bot, avatar_index)

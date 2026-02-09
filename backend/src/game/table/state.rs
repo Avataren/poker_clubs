@@ -1,4 +1,6 @@
 use super::*;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicPot {
@@ -243,11 +245,12 @@ impl PokerTable {
                         } else {
                             None
                         };
+                    let avatar_index = normalize_public_avatar_index(&p.user_id, p.avatar_index);
 
                     PublicPlayerState {
                         user_id: p.user_id.clone(),
                         username: p.username.clone(),
-                        avatar_index: p.avatar_index,
+                        avatar_index,
                         seat: p.seat,
                         stack: p.stack,
                         current_bet: p.current_bet,
@@ -301,4 +304,21 @@ impl PokerTable {
             tournament_next_big_blind: tournament_info.as_ref().and_then(|t| t.next_big_blind),
         }
     }
+}
+
+fn normalize_public_avatar_index(user_id: &str, avatar_index: i32) -> i32 {
+    // Human users may intentionally use index 0.
+    if !user_id.starts_with("bot_") {
+        return avatar_index.clamp(0, 24);
+    }
+
+    // Bots should always show a portrait, so avoid 0 and derive a stable fallback.
+    if (1..=24).contains(&avatar_index) {
+        return avatar_index;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    user_id.hash(&mut hasher);
+    let hashed = hasher.finish();
+    ((hashed % 24) as i32) + 1
 }

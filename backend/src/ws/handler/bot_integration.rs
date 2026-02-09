@@ -97,7 +97,7 @@ impl GameServer {
             let mut bot_mgr = self.bot_manager.write().await;
             bot_mgr.add_bot(table_id, name, strategy)
         };
-        let avatar_index: i32 = rand::thread_rng().gen_range(0..25);
+        let avatar_index: i32 = rand::thread_rng().gen_range(1..25);
 
         // Seat the bot at the table
         {
