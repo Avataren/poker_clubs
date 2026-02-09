@@ -13,6 +13,7 @@ class Player {
   final int potWon;
   final String? winningHand;
   final List<bool>? shownCards;
+  final String? avatarUrl;
 
   Player({
     required this.userId,
@@ -27,6 +28,7 @@ class Player {
     this.potWon = 0,
     this.winningHand,
     this.shownCards,
+    this.avatarUrl,
   });
 
   factory Player.fromJson(Map<String, dynamic> json) {
@@ -55,6 +57,7 @@ class Player {
       potWon: json['pot_won'] as int? ?? 0,
       winningHand: json['winning_hand'] as String?,
       shownCards: shownCards,
+      avatarUrl: json['avatar_url'] as String?,
     );
   }
 

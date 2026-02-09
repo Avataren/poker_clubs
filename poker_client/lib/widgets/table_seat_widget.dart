@@ -21,6 +21,8 @@ class TableSeatWidget extends StatelessWidget {
   final double seatSize;
   final double cardWidth;
   final double cardHeight;
+  final String? lastAction;
+  final String? avatarUrl;
 
   const TableSeatWidget({
     super.key,
@@ -39,6 +41,8 @@ class TableSeatWidget extends StatelessWidget {
     this.seatSize = 80.0,
     this.cardWidth = 35.0,
     this.cardHeight = 50.0,
+    this.lastAction,
+    this.avatarUrl,
   });
 
   bool get _hasCards {
@@ -47,255 +51,391 @@ class TableSeatWidget extends StatelessWidget {
         player!.holeCards!.isNotEmpty;
   }
 
+  bool get _isDimmed {
+    if (player == null) return false;
+    return player!.isFolded || player!.isSittingOut || player!.isDisconnected;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEmpty = player == null;
 
-    // Calculate responsive font sizes
     final usernameFontSize = (seatSize * 0.14).clamp(9.0, 13.0);
-    final stackFontSize = (seatSize * 0.15).clamp(10.0, 14.0);
-    final betFontSize = (seatSize * 0.11).clamp(8.0, 11.0);
+    final stackFontSize = (seatSize * 0.13).clamp(9.0, 12.0);
     final badgeFontSize = (seatSize * 0.11).clamp(8.0, 11.0);
+    final avatarSize = seatSize * 0.55;
 
-    return Stack(
-      clipBehavior: Clip.none,
-      alignment: Alignment.center,
-      children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Cards (above the seat circle)
-            // Hide cards during dealing animation to avoid showing both animated and static cards
-            // Use Opacity instead of conditionally rendering to prevent layout shifts
-            SizedBox(
-              height: cardHeight,
-              child: _hasCards
-                  ? Opacity(
-                      opacity: isDealingCards ? 0.0 : 1.0,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: player!.holeCards!
-                            .map(
-                              (card) => CardWidget(
-                                card: card,
-                                width: cardWidth,
-                                height: cardHeight,
-                                isShowdown: showingDown,
-                              ),
-                            )
-                            .toList(),
-                      ),
-                    )
-                  : null,
-            ),
+    if (isEmpty) {
+      return _buildEmptySeat(avatarSize, usernameFontSize);
+    }
 
-            SizedBox(height: seatSize * 0.05),
-
-            // Seat circle with winner badge overlay
-            Stack(
-              alignment: Alignment.center,
-              clipBehavior: Clip.none,
-              children: [
-                // Seat circle
-                GestureDetector(
-                  onTap: isEmpty ? onTakeSeat : null,
-                  onLongPress:
-                      (!isEmpty && player!.isBot && onRemoveBot != null)
-                      ? onRemoveBot
-                      : null,
-                  child: Container(
-                    width: seatSize,
-                    height: seatSize,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isEmpty
-                          ? Colors.black26
-                          : (isCurrentTurn
-                                ? Colors.amber[700]
-                                : Colors.blue[900]),
-                      border: Border.all(
-                        color: isMe
-                            ? Colors.green
-                            : (isEmpty ? Colors.white30 : Colors.white70),
-                        width: isMe ? 3 : 2,
-                      ),
-                      boxShadow: isCurrentTurn
-                          ? [
-                              BoxShadow(
-                                color: Colors.amber.withValues(alpha: 0.5),
-                                blurRadius: 10,
-                                spreadRadius: 2,
-                              ),
-                            ]
-                          : null,
-                    ),
-                    child: Center(
-                      child: isEmpty
-                          ? Text(
-                              'Seat\n${seatNumber + 1}',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white54,
-                                fontSize: usernameFontSize,
-                              ),
-                            )
-                          : Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  player!.username,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: isCurrentTurn
-                                        ? Colors.black
-                                        : Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: usernameFontSize,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+    return Opacity(
+      opacity: _isDimmed ? 0.5 : 1.0,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Cards above the seat
+              SizedBox(
+                height: cardHeight,
+                child: _hasCards
+                    ? Opacity(
+                        opacity: isDealingCards ? 0.0 : 1.0,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: player!.holeCards!
+                              .map(
+                                (card) => CardWidget(
+                                  card: card,
+                                  width: cardWidth,
+                                  height: cardHeight,
+                                  isShowdown: showingDown,
                                 ),
-                                SizedBox(height: seatSize * 0.025),
-                                Text(
-                                  '\$${player!.stack}',
-                                  style: TextStyle(
-                                    color: isCurrentTurn
-                                        ? Colors.black87
-                                        : Colors.green[300],
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: stackFontSize,
-                                  ),
-                                ),
-                                if (player!.currentBet > 0)
-                                  Text(
-                                    'Bet: \$${player!.currentBet}',
-                                    style: TextStyle(
-                                      color: isCurrentTurn
-                                          ? Colors.black54
-                                          : Colors.white70,
-                                      fontSize: betFontSize,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                    ),
-                  ),
-                ),
+                              )
+                              .toList(),
+                        ),
+                      )
+                    : null,
+              ),
 
-                // Dealer / Blind badge
-                if (!isEmpty && (isDealer || isSmallBlind || isBigBlind))
-                  Positioned(
-                    bottom: -(seatSize * 0.05),
-                    left: -(seatSize * 0.05),
-                    child: Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: seatSize * 0.06,
-                        vertical: seatSize * 0.025,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDealer
-                            ? Colors.white
-                            : isSmallBlind
-                            ? Colors.blue[700]
-                            : Colors.orange[700],
-                        borderRadius: BorderRadius.circular(seatSize * 0.1),
-                        border: Border.all(
-                          color: isDealer
-                              ? Colors.black54
-                              : isSmallBlind
-                              ? Colors.blue[900]!
-                              : Colors.orange[900]!,
-                          width: 1,
+              SizedBox(height: seatSize * 0.04),
+
+              // Avatar + name plate stack
+              Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.topCenter,
+                children: [
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Avatar circle
+                      _buildAvatar(avatarSize),
+                      // Name plate (overlaps bottom of avatar slightly)
+                      Transform.translate(
+                        offset: Offset(0, -(avatarSize * 0.12)),
+                        child: _buildNamePlate(
+                          usernameFontSize,
+                          stackFontSize,
+                          avatarSize,
                         ),
                       ),
-                      child: Text(
-                        isDealer
-                            ? 'D'
-                            : isSmallBlind
-                            ? 'SB'
-                            : 'BB',
-                        style: TextStyle(
-                          color: isDealer ? Colors.black : Colors.white,
-                          fontSize: badgeFontSize,
-                          fontWeight: FontWeight.bold,
+                    ],
+                  ),
+
+                  // Dealer / Blind badge — right side of avatar
+                  if (isDealer || isSmallBlind || isBigBlind)
+                    Positioned(
+                      top: avatarSize * 0.05,
+                      right: -(seatSize * 0.15),
+                      child: _buildDealerBlindBadge(badgeFontSize),
+                    ),
+
+                  // Bot indicator — top-right of avatar
+                  if (player!.isBot)
+                    Positioned(
+                      top: -(avatarSize * 0.08),
+                      right: -(seatSize * 0.08),
+                      child: Container(
+                        padding: EdgeInsets.all(seatSize * 0.025),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[800],
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white54, width: 1),
+                        ),
+                        child: Icon(
+                          Icons.smart_toy,
+                          size: seatSize * 0.13,
+                          color: Colors.white70,
                         ),
                       ),
                     ),
-                  ),
 
-                // Bot indicator
-                if (player != null && player!.isBot)
-                  Positioned(
-                    top: -(seatSize * 0.05),
-                    right: -(seatSize * 0.05),
-                    child: Container(
-                      padding: EdgeInsets.all(seatSize * 0.025),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[800],
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white54, width: 1),
-                      ),
-                      child: Icon(
-                        Icons.smart_toy,
-                        size: seatSize * 0.15,
-                        color: Colors.white70,
-                      ),
+                  // Last action badge — above name plate
+                  if (lastAction != null && lastAction!.isNotEmpty)
+                    Positioned(
+                      top: avatarSize + (avatarSize * -0.12) - (seatSize * 0.16),
+                      child: _buildLastActionBadge(badgeFontSize),
                     ),
-                  ),
 
-                // Winner badge overlay
-                if (player != null && player!.isWinner && showingDown)
-                  Positioned(
-                    child: Container(
-                      constraints: BoxConstraints(maxWidth: seatSize * 0.875),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: seatSize * 0.075,
-                        vertical: seatSize * 0.025,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.amber[600],
-                        borderRadius: BorderRadius.circular(seatSize * 0.1),
-                        border: Border.all(
-                          color: Colors.amber[900]!,
-                          width: 1.5,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.4),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '🏆',
-                            style: TextStyle(fontSize: seatSize * 0.2),
-                          ),
-                          if (player!.winningHand != null &&
-                              player!.winningHand!.isNotEmpty)
-                            Text(
-                              player!.winningHand!,
-                              style: TextStyle(
-                                color: Colors.black,
-                                fontSize: badgeFontSize,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                        ],
-                      ),
+                  // Winner badge overlay
+                  if (player!.isWinner && showingDown)
+                    Positioned(
+                      top: avatarSize * 0.2,
+                      child: _buildWinnerBadge(badgeFontSize),
                     ),
-                  ),
-              ],
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptySeat(double avatarSize, double fontSize) {
+    return GestureDetector(
+      onTap: onTakeSeat,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(height: cardHeight),
+          SizedBox(height: seatSize * 0.04),
+          Container(
+            width: avatarSize,
+            height: avatarSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white24,
+                width: 1.5,
+              ),
             ),
-          ],
+            child: Center(
+              child: Icon(
+                Icons.add,
+                color: Colors.white30,
+                size: avatarSize * 0.4,
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Seat ${seatNumber + 1}',
+            style: TextStyle(
+              color: Colors.white30,
+              fontSize: fontSize * 0.9,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAvatar(double size) {
+    return GestureDetector(
+      onLongPress: (player!.isBot && onRemoveBot != null) ? onRemoveBot : null,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color(0xFF2a3a5c),
+          border: Border.all(
+            color: isMe
+                ? const Color(0xFF4caf50)
+                : (isCurrentTurn ? Colors.amber : Colors.white38),
+            width: isMe ? 2.5 : (isCurrentTurn ? 2.5 : 1.5),
+          ),
+          boxShadow: isCurrentTurn
+              ? [
+                  BoxShadow(
+                    color: Colors.amber.withValues(alpha: 0.5),
+                    blurRadius: 10,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
         ),
-      ],
+        child: Center(
+          child: Text(
+            player!.username.isNotEmpty
+                ? player!.username[0].toUpperCase()
+                : '?',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: size * 0.4,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNamePlate(
+    double usernameFontSize,
+    double stackFontSize,
+    double avatarSize,
+  ) {
+    return Container(
+      constraints: BoxConstraints(maxWidth: seatSize * 1.1),
+      padding: EdgeInsets.only(
+        left: seatSize * 0.08,
+        right: seatSize * 0.08,
+        top: avatarSize * 0.14,
+        bottom: seatSize * 0.04,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(seatSize * 0.08),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            player!.username,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: usernameFontSize,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 1),
+          Text(
+            '\$${player!.stack}',
+            style: TextStyle(
+              color: const Color(0xFF66bb6a),
+              fontWeight: FontWeight.bold,
+              fontSize: stackFontSize,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDealerBlindBadge(double fontSize) {
+    final Color bgColor;
+    final Color borderColor;
+    final Color textColor;
+    final String label;
+
+    if (isDealer) {
+      bgColor = Colors.white;
+      borderColor = Colors.black54;
+      textColor = Colors.black;
+      label = 'D';
+    } else if (isSmallBlind) {
+      bgColor = Colors.blue[700]!;
+      borderColor = Colors.blue[900]!;
+      textColor = Colors.white;
+      label = 'SB';
+    } else {
+      bgColor = Colors.orange[700]!;
+      borderColor = Colors.orange[900]!;
+      textColor = Colors.white;
+      label = 'BB';
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: seatSize * 0.06,
+        vertical: seatSize * 0.025,
+      ),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(seatSize * 0.1),
+        border: Border.all(color: borderColor, width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: textColor,
+          fontSize: fontSize,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLastActionBadge(double fontSize) {
+    final action = lastAction!.toLowerCase();
+    final Color bgColor;
+
+    if (action.contains('fold')) {
+      bgColor = Colors.red[700]!;
+    } else if (action.contains('call')) {
+      bgColor = Colors.orange[700]!;
+    } else if (action.contains('raise') || action.contains('bet')) {
+      bgColor = Colors.green[700]!;
+    } else if (action.contains('check')) {
+      bgColor = Colors.blue[600]!;
+    } else if (action.contains('all')) {
+      bgColor = Colors.purple[600]!;
+    } else {
+      bgColor = Colors.grey[700]!;
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: seatSize * 0.07,
+        vertical: seatSize * 0.02,
+      ),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(seatSize * 0.06),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Text(
+        lastAction!,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: fontSize,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWinnerBadge(double fontSize) {
+    return Container(
+      constraints: BoxConstraints(maxWidth: seatSize * 0.95),
+      padding: EdgeInsets.symmetric(
+        horizontal: seatSize * 0.075,
+        vertical: seatSize * 0.025,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.amber[600],
+        borderRadius: BorderRadius.circular(seatSize * 0.1),
+        border: Border.all(
+          color: Colors.amber[900]!,
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 6,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'WINNER',
+            style: TextStyle(
+              color: Colors.black,
+              fontSize: fontSize,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          if (player!.winningHand != null && player!.winningHand!.isNotEmpty)
+            Text(
+              player!.winningHand!,
+              style: TextStyle(
+                color: Colors.black87,
+                fontSize: fontSize * 0.9,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+        ],
+      ),
     );
   }
 }
@@ -340,10 +480,7 @@ class PokerTableWidget extends StatefulWidget {
 
 class _PokerTableWidgetState extends State<PokerTableWidget> {
   bool _animatingPot = false;
-  bool _lastShowingDown = false;
   final Map<String, int> _winnerPots = {}; // Map of userId to pot amount won
-  final double _lastTableWidth = 0;
-  final double _lastTableHeight = 0;
 
   // Card dealing animation
   final Map<String, int> _dealingCardsTo =
@@ -542,7 +679,6 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       }
     }
 
-    _lastShowingDown = widget.showingDown;
   }
 
   @override
@@ -585,24 +721,53 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              // Table surface
+              // Table surface — outer rim + inner felt
               Center(
                 child: Container(
-                  width: tableWidth * 0.7,
-                  height: tableHeight * 0.7,
+                  width: tableWidth * 0.78,
+                  height: tableHeight * 0.78,
                   decoration: BoxDecoration(
-                    color: Colors.green[800],
                     borderRadius: BorderRadius.circular(
-                      (tableHeight * 0.7) / 2,
+                      (tableHeight * 0.78) / 2,
                     ),
-                    border: Border.all(color: Colors.brown, width: borderWidth),
+                    gradient: const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0xFF3a3a3a),
+                        Color(0xFF2a2a2a),
+                        Color(0xFF1e1e1e),
+                      ],
+                    ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.3),
-                        blurRadius: 15,
-                        spreadRadius: 5,
+                        color: Colors.black.withValues(alpha: 0.5),
+                        blurRadius: 20,
+                        spreadRadius: 8,
                       ),
                     ],
+                  ),
+                  padding: EdgeInsets.all(borderWidth),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(
+                        (tableHeight * 0.78 - borderWidth * 2) / 2,
+                      ),
+                      gradient: const RadialGradient(
+                        center: Alignment(0.0, -0.1),
+                        radius: 0.9,
+                        colors: [
+                          Color(0xFF1a7a3a), // lighter center
+                          Color(0xFF0d5e2e), // mid green
+                          Color(0xFF084420), // darker edges
+                        ],
+                        stops: [0.0, 0.5, 1.0],
+                      ),
+                      border: Border.all(
+                        color: const Color(0xFF0a3d1a),
+                        width: 2,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -632,8 +797,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                   // Calculate winner seat position
                   final angle =
                       (2 * pi * winner.seat / widget.maxSeats) - pi / 2;
-                  final radiusX = tableWidth * 0.35;
-                  final radiusY = tableHeight * 0.35;
+                  final radiusX = tableWidth * 0.48;
+                  final radiusY = tableHeight * 0.49;
                   final targetX = radiusX * cos(angle);
                   final targetY = radiusY * sin(angle);
                   final seatOffset = tableHeight * 0.08; // Responsive offset
@@ -676,56 +841,51 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
   List<Widget> _buildPotDisplay(Offset centerOffset, double tableWidth) {
     final pots = widget.pots;
-    final scale = (tableWidth / 500).clamp(0.8, 1.3);
+    final fontSize = (tableWidth * 0.025).clamp(10.0, 16.0);
 
-    // Single pot or no detailed pots: show like before (no label)
+    // Build pot text
+    String potText;
     if (pots.length <= 1) {
-      return [
-        AnimatedPositioned(
-          duration: const Duration(milliseconds: 0),
-          left: centerOffset.dx,
-          top: centerOffset.dy,
-          child: FractionalTranslation(
-            translation: const Offset(-0.5, 0),
-            child: ChipStackWidget(
-              amount: widget.potTotal,
-              smallBlind: widget.smallBlind,
-              scale: scale,
-              showAmount: true,
-              textColor: Colors.lightGreenAccent,
-            ),
-          ),
-        ),
-      ];
+      potText = 'Pot: \$${widget.potTotal}';
+    } else {
+      final parts = <String>[];
+      for (int i = 0; i < pots.length; i++) {
+        if (pots[i].amount > 0) {
+          parts.add(i == 0
+              ? 'Main: \$${pots[i].amount}'
+              : 'Side: \$${pots[i].amount}');
+        }
+      }
+      potText = parts.join('  |  ');
     }
 
-    // Multiple pots: lay out horizontally, side pots slightly smaller
     return [
-      AnimatedPositioned(
-        duration: const Duration(milliseconds: 0),
+      Positioned(
         left: centerOffset.dx,
         top: centerOffset.dy,
         child: FractionalTranslation(
-          translation: const Offset(-0.5, 0),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              for (int i = 0; i < pots.length; i++)
-                if (pots[i].amount > 0)
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 4.0 * scale),
-                    child: ChipStackWidget(
-                      amount: pots[i].amount,
-                      smallBlind: widget.smallBlind,
-                      scale: i == 0 ? scale : scale * 0.85,
-                      showAmount: true,
-                      textColor: i == 0
-                          ? Colors.lightGreenAccent
-                          : Colors.yellow[200]!,
-                    ),
-                  ),
-            ],
+          translation: const Offset(-0.5, -0.5),
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: tableWidth * 0.025,
+              vertical: tableWidth * 0.01,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(tableWidth * 0.015),
+              border: Border.all(
+                color: const Color(0xFF4caf50).withValues(alpha: 0.6),
+                width: 1.5,
+              ),
+            ),
+            child: Text(
+              potText,
+              style: TextStyle(
+                color: Colors.lightGreenAccent,
+                fontSize: fontSize,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ),
       ),
@@ -742,9 +902,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         (2 * pi * seatIndex / widget.maxSeats) - pi / 2; // Start from top
 
     // Oval dimensions - seats positioned outside the table surface
-    // Reduce radius slightly to prevent overflow at edges
-    final radiusX = (tableWidth / 2) * 0.92;
-    final radiusY = (tableHeight / 2) * 0.95;
+    final radiusX = (tableWidth / 2) * 0.96;
+    final radiusY = (tableHeight / 2) * 0.98;
 
     final x = radiusX * cos(angle);
     final y = radiusY * sin(angle);
@@ -798,6 +957,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           seatSize: seatSize,
           cardWidth: cardWidth,
           cardHeight: cardHeight,
+          lastAction: player?.lastAction,
+          avatarUrl: player?.avatarUrl,
         ),
       ),
     );
@@ -822,8 +983,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     final angle = (2 * pi * seatIndex / widget.maxSeats) - pi / 2;
 
     // Position chips at 60% of the seat radius (on the table, between player and center)
-    final chipRadiusX = ((tableWidth / 2) * 0.92) * 0.6;
-    final chipRadiusY = ((tableHeight / 2) * 0.95) * 0.6;
+    final chipRadiusX = ((tableWidth / 2) * 0.96) * 0.6;
+    final chipRadiusY = ((tableHeight / 2) * 0.98) * 0.6;
 
     final x = chipRadiusX * cos(angle);
     final y = chipRadiusY * sin(angle);
@@ -870,8 +1031,8 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
     // Calculate target position (same as seat position but offset for cards)
     final angle = (2 * pi * seatIndex / widget.maxSeats) - pi / 2;
-    final radiusX = (tableWidth / 2) * 0.92;
-    final radiusY = (tableHeight / 2) * 0.95;
+    final radiusX = (tableWidth / 2) * 0.96;
+    final radiusY = (tableHeight / 2) * 0.98;
 
     final targetX = radiusX * cos(angle);
     final targetY = radiusY * sin(angle);
