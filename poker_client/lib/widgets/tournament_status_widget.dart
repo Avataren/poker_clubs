@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/tournament.dart';
 import '../utils/format_utils.dart';
+import 'tournament_status_badge.dart';
 
 class TournamentStatusWidget extends StatefulWidget {
   final Tournament tournament;
@@ -100,7 +101,7 @@ class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
                   'Tournament Info',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                _buildStatusBadge(widget.tournament.status),
+                TournamentStatusBadge(status: widget.tournament.status),
               ],
             ),
             const SizedBox(height: 16),
@@ -183,53 +184,6 @@ class _TournamentStatusWidgetState extends State<TournamentStatusWidget> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildStatusBadge(String status) {
-    Color color;
-    String label;
-
-    switch (status) {
-      case 'registering':
-        color = Colors.blue;
-        label = 'Registration Open';
-        break;
-      case 'seating':
-        color = Colors.teal;
-        label = 'Seating';
-        break;
-      case 'running':
-        color = Colors.orange;
-        label = 'In Progress';
-        break;
-      case 'finished':
-        color = Colors.grey;
-        label = 'Finished';
-        break;
-      case 'cancelled':
-        color = Colors.red;
-        label = 'Cancelled';
-        break;
-      default:
-        color = Colors.grey;
-        label = status;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-        ),
       ),
     );
   }
