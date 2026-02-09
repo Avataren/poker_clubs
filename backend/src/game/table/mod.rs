@@ -1646,4 +1646,65 @@ mod tests {
             "tournament bot avatar should resolve to visible non-zero fallback index"
         );
     }
+
+    #[test]
+    fn test_stand_up_mid_hand_keeps_dealer_and_current_indices_in_bounds() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p0".to_string(), "Player 0".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 2, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 3, 5000)
+            .unwrap();
+
+        // Simulate a mid-hand immediate stand-up (player already folded/not active).
+        table.phase = GamePhase::PreFlop;
+        table.dealer_seat = table.players.len() - 1;
+        table.current_player = table.players.len() - 1;
+        let removed_id = table.players[table.dealer_seat].user_id.clone();
+        table.players[table.dealer_seat].state = PlayerState::Folded;
+
+        table.stand_up(&removed_id).unwrap();
+
+        assert_eq!(table.players.len(), 3);
+        assert!(
+            table.dealer_seat < table.players.len(),
+            "dealer index must stay valid after stand-up removal"
+        );
+        assert!(
+            table.current_player < table.players.len(),
+            "current player index must stay valid after stand-up removal"
+        );
+
+        // Regression check: previously this path could panic with OOB indexing.
+        let public = table.get_public_state(Some("p0"));
+        assert!(public.dealer_seat.is_some());
+    }
+
+    #[test]
+    fn test_public_state_handles_stale_dealer_index_without_panic() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p0".to_string(), "Player 0".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 1, 5000)
+            .unwrap();
+
+        table.phase = GamePhase::PreFlop;
+        table.dealer_seat = table.players.len();
+
+        let public = table.get_public_state(Some("p0"));
+        assert!(public.dealer_seat.is_some());
+        assert!(public.small_blind_seat.is_some());
+        assert!(public.big_blind_seat.is_some());
+    }
 }

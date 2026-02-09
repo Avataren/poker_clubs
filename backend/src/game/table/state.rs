@@ -150,6 +150,14 @@ impl PokerTable {
             }
         };
 
+        // Dealer/current indices are vec indices; after removals, stale values
+        // should not crash state serialization.
+        let safe_dealer_idx = if self.players.is_empty() {
+            0
+        } else {
+            self.dealer_seat.min(self.players.len() - 1)
+        };
+
         PublicTableState {
             table_id: self.table_id.clone(),
             name: self.name.clone(),
@@ -274,18 +282,18 @@ impl PokerTable {
             can_cash_out: self.format.can_cash_out(),
             can_top_up: self.format.can_top_up(),
             dealer_seat: if self.phase != GamePhase::Waiting && !self.players.is_empty() {
-                Some(self.players[self.dealer_seat].seat)
+                Some(self.players[safe_dealer_idx].seat)
             } else {
                 None
             },
             small_blind_seat: if self.phase != GamePhase::Waiting && self.players.len() >= 2 {
-                let sb_idx = self.next_eligible_player_for_button(self.dealer_seat);
+                let sb_idx = self.next_eligible_player_for_button(safe_dealer_idx);
                 Some(self.players[sb_idx].seat)
             } else {
                 None
             },
             big_blind_seat: if self.phase != GamePhase::Waiting && self.players.len() >= 2 {
-                let sb_idx = self.next_eligible_player_for_button(self.dealer_seat);
+                let sb_idx = self.next_eligible_player_for_button(safe_dealer_idx);
                 let bb_idx = self.next_eligible_player_for_button(sb_idx);
                 Some(self.players[bb_idx].seat)
             } else {

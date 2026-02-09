@@ -153,29 +153,31 @@ impl PokerTable {
     }
 
     pub fn stand_up(&mut self, user_id: &str) -> GameResult<()> {
-        let player = self
+        let player_idx = self
             .players
-            .iter_mut()
-            .find(|p| p.user_id == user_id)
+            .iter()
+            .position(|p| p.user_id == user_id)
             .ok_or(GameError::PlayerNotAtTable)?;
 
-        // If player is in an active hand, mark them to stand up after hand concludes
-        if self.phase != GamePhase::Waiting
-            && (player.state == PlayerState::Active || player.state == PlayerState::AllIn)
-        {
-            player.state = PlayerState::SittingOut;
+        let should_defer_standup = self.phase != GamePhase::Waiting
+            && (self.players[player_idx].state == PlayerState::Active
+                || self.players[player_idx].state == PlayerState::AllIn);
+
+        // If player is in an active hand, mark them to stand up after hand concludes.
+        if should_defer_standup {
+            self.players[player_idx].state = PlayerState::SittingOut;
             tracing::debug!(
                 "Player {} will stand up after current hand",
-                player.username
+                self.players[player_idx].username
             );
-            Ok(())
-        } else {
-            // Remove player immediately
-            let username = player.username.clone();
-            self.players.retain(|p| p.user_id != user_id);
-            tracing::debug!("Player {} stood up immediately", username);
-            Ok(())
+            return Ok(());
         }
+
+        // Remove immediately and keep table indices consistent.
+        let username = self.players[player_idx].username.clone();
+        self.remove_player(user_id);
+        tracing::debug!("Player {} stood up immediately", username);
+        Ok(())
     }
 
     pub fn top_up(&mut self, user_id: &str, amount: i64) -> GameResult<()> {
