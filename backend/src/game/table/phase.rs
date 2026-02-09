@@ -163,9 +163,80 @@ impl PokerTable {
         }
     }
 
+    /// Recover from turn-pointer desync in betting phases.
+    ///
+    /// Under heavy tournament churn (table moves/sit-outs/disconnects), the
+    /// current_player index can occasionally point at a player who cannot act.
+    /// If at least one player can act, rotate to an actionable player so the
+    /// hand cannot deadlock waiting on an impossible turn.
+    fn recover_stuck_current_player(&mut self) -> bool {
+        if !matches!(
+            self.phase,
+            GamePhase::PreFlop | GamePhase::Flop | GamePhase::Turn | GamePhase::River
+        ) {
+            return false;
+        }
+
+        if self.players.is_empty() || self.players.iter().all(|p| !p.can_act()) {
+            return false;
+        }
+
+        if self.current_player >= self.players.len() {
+            if let Some(next) = self.first_player_index_by_seat(|p| p.can_act()) {
+                tracing::warn!(
+                    "Recovered out-of-bounds current_player {} -> {} on table {}",
+                    self.current_player,
+                    next,
+                    self.table_id
+                );
+                self.current_player = next;
+                return true;
+            }
+            return false;
+        }
+
+        if self.players[self.current_player].can_act() {
+            return false;
+        }
+
+        let original_idx = self.current_player;
+        for _ in 0..self.players.len() {
+            let next = self.next_active_player(self.current_player);
+            if next == self.current_player {
+                break;
+            }
+            self.current_player = next;
+            if self.players[self.current_player].can_act() {
+                tracing::warn!(
+                    "Recovered non-actionable turn {} -> {} on table {}",
+                    original_idx,
+                    self.current_player,
+                    self.table_id
+                );
+                return true;
+            }
+        }
+
+        if let Some(next) = self.first_player_index_by_seat(|p| p.can_act()) {
+            if next != self.current_player {
+                tracing::warn!(
+                    "Recovered turn using seat scan {} -> {} on table {}",
+                    self.current_player,
+                    next,
+                    self.table_id
+                );
+                self.current_player = next;
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Check if enough time has passed to auto-advance to the next phase.
     pub fn check_auto_advance(&mut self) -> bool {
         let now = current_timestamp_ms();
+        let mut recovered_turn = false;
 
         // Tournament Waiting window (rebalance before next hand)
         if let Some(result) = self.check_tournament_waiting(now) {
@@ -178,10 +249,11 @@ impl PokerTable {
         // Only fully-closed action (no active decision makers) or a completed
         // betting round may progress automatically.
         if self.phase != GamePhase::Showdown {
+            recovered_turn = self.recover_stuck_current_player();
             let betting_round_complete = self.is_betting_round_complete();
             let can_act_count = self.players.iter().filter(|p| p.can_act()).count();
             if can_act_count > 0 && !betting_round_complete {
-                return false;
+                return recovered_turn;
             }
         }
 
@@ -197,17 +269,17 @@ impl PokerTable {
                     self.showdown_delay_ms
                 }
             }
-            _ => return false,
+            _ => return recovered_turn,
         };
 
         // Check if enough time has passed
         let last_change = match self.last_phase_change_time {
             Some(ts) => ts,
-            None => return false,
+            None => return recovered_turn,
         };
         let elapsed = now.saturating_sub(last_change);
         if elapsed < delay_ms {
-            return false;
+            return recovered_turn;
         }
 
         tracing::info!(

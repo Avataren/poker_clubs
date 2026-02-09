@@ -1711,6 +1711,44 @@ mod tests {
     }
 
     #[test]
+    fn test_check_auto_advance_recovers_non_actionable_current_player() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 5000)
+            .unwrap();
+        table
+            .take_seat("p3".to_string(), "Player 3".to_string(), 2, 5000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        let stuck_idx = table.current_player;
+        table.players[stuck_idx].state = PlayerState::WaitingForHand;
+        table.players[stuck_idx].has_acted_this_round = false;
+        table.last_phase_change_time = Some(current_timestamp_ms());
+
+        assert!(
+            table.players.iter().any(|p| p.can_act()),
+            "table should still have actionable players"
+        );
+
+        assert!(
+            table.check_auto_advance(),
+            "auto-advance loop should recover the turn pointer instead of stalling"
+        );
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        assert_ne!(table.current_player, stuck_idx);
+        assert!(
+            table.players[table.current_player].can_act(),
+            "recovered current_player must be able to act"
+        );
+    }
+
+    #[test]
     fn test_zero_stack_allin_player_not_counted_in_next_hand_fold_win() {
         let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
 

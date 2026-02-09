@@ -35,6 +35,8 @@ pub struct GameServer {
     // Tournament broadcasts scoped by club
     pub(super) tournament_broadcasts:
         Arc<RwLock<HashMap<String, broadcast::Sender<ServerMessage>>>>,
+    // Cache tournament_id -> club_id for tournament-scoped broadcasts
+    pub(super) tournament_club_cache: Arc<RwLock<HashMap<String, String>>>,
     // Bot manager - tracks server-side bot players
     pub(super) bot_manager: Arc<RwLock<BotManager>>,
     // Track disconnected players awaiting reconnection
@@ -52,6 +54,7 @@ impl GameServer {
             club_broadcasts: Arc::new(RwLock::new(HashMap::new())),
             global_broadcast: global_tx,
             tournament_broadcasts: Arc::new(RwLock::new(HashMap::new())),
+            tournament_club_cache: Arc::new(RwLock::new(HashMap::new())),
             bot_manager: Arc::new(RwLock::new(BotManager::new())),
             disconnected_players: Arc::new(RwLock::new(HashMap::new())),
         }

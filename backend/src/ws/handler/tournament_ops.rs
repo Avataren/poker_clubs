@@ -337,45 +337,11 @@ impl GameServer {
             .and_then(|t| t.players.last().map(|p| p.user_id.clone()))
     }
 
-    /// Broadcast a tournament event to all tables in a tournament
-    pub async fn broadcast_tournament_event(&self, tournament_id: &str, message: ServerMessage) {
-        // Get tournament to find its club_id
-        let tournament_result: Result<(String,), sqlx::Error> =
-            sqlx::query_as("SELECT club_id FROM tournaments WHERE id = ?")
-                .bind(tournament_id)
-                .fetch_one(self.pool.as_ref())
-                .await;
-
-        if let Ok((club_id,)) = tournament_result {
-            // Send via tournament broadcast channel (scoped by club)
-            let broadcasts = self.tournament_broadcasts.read().await;
-            if let Some(tx) = broadcasts.get(&club_id) {
-                let _ = tx.send(message.clone());
-            }
-            drop(broadcasts);
-        }
-
-        // Also find and trigger table updates for certain tournament events
-        let tables = self.tables.read().await;
-        let mut table_ids = Vec::new();
-
-        for (table_id, table) in tables.iter() {
-            if let Some(tid) = &table.tournament_id {
-                if tid == tournament_id {
-                    table_ids.push(table_id.clone());
-                }
-            }
-        }
-
-        drop(tables);
-
-        // Trigger table state updates
-        let table_broadcasts = self.table_broadcasts.read().await;
-        for table_id in table_ids {
-            if let Some(tx) = table_broadcasts.get(&table_id) {
-                let _ = tx.send(TableBroadcast {
-                    table_id: table_id.clone(),
-                });
+    async fn get_tournament_club_id_cached(&self, tournament_id: &str) -> Option<String> {
+        {
+            let cache = self.tournament_club_cache.read().await;
+            if let Some(club_id) = cache.get(tournament_id) {
+                return Some(club_id.clone());
             }
         }
 
@@ -386,7 +352,24 @@ impl GameServer {
                 .await
                 .ok()
                 .flatten();
+
         if let Some((club_id,)) = club_id {
+            let mut cache = self.tournament_club_cache.write().await;
+            cache.insert(tournament_id.to_string(), club_id.clone());
+            Some(club_id)
+        } else {
+            None
+        }
+    }
+
+    /// Broadcast a tournament event to all tables in a tournament
+    pub async fn broadcast_tournament_event(&self, tournament_id: &str, message: ServerMessage) {
+        // TournamentInfo is pushed every second; sending an additional full
+        // TableState update for it causes unnecessary DB load and WS traffic.
+        let should_notify_tables = !matches!(&message, ServerMessage::TournamentInfo { .. });
+
+        if let Some(club_id) = self.get_tournament_club_id_cached(tournament_id).await {
+            // Send via tournament broadcast channel (scoped by club)
             let broadcasts = self.tournament_broadcasts.read().await;
             if let Some(tx) = broadcasts.get(&club_id) {
                 let _ = tx.send(message);
@@ -395,6 +378,31 @@ impl GameServer {
                     tournament_id,
                     club_id
                 );
+            }
+        }
+
+        if should_notify_tables {
+            let tables = self.tables.read().await;
+            let mut table_ids = Vec::new();
+
+            for (table_id, table) in tables.iter() {
+                if let Some(tid) = &table.tournament_id {
+                    if tid == tournament_id {
+                        table_ids.push(table_id.clone());
+                    }
+                }
+            }
+
+            drop(tables);
+
+            // Trigger table state updates
+            let table_broadcasts = self.table_broadcasts.read().await;
+            for table_id in table_ids {
+                if let Some(tx) = table_broadcasts.get(&table_id) {
+                    let _ = tx.send(TableBroadcast {
+                        table_id: table_id.clone(),
+                    });
+                }
             }
         }
     }

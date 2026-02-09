@@ -36,6 +36,23 @@ async fn main() -> anyhow::Result<()> {
         game_server.clone(),
     ));
 
+    // Tournament hand state is currently in-memory only. If the process
+    // restarts, previously running tournaments cannot be resumed safely.
+    match tournament_manager
+        .cancel_orphaned_running_tournaments_on_startup()
+        .await
+    {
+        Ok(count) if count > 0 => tracing::warn!(
+            "Startup recovery cancelled {} orphaned running tournament(s)",
+            count
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::error!(
+            "Failed startup recovery for orphaned running tournaments: {:?}",
+            e
+        ),
+    }
+
     // Create shared state for auth/clubs endpoints
     let auth_state = Arc::new(api::AppState {
         pool: pool.clone(),
@@ -129,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
     let tournament_mgr_eliminations = tournament_manager.clone();
     let token = shutdown_token.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
             tokio::select! {
                 _ = interval.tick() => {

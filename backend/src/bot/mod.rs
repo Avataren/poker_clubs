@@ -8,7 +8,7 @@ pub mod evaluate;
 pub mod strategy;
 
 use crate::game::constants::BOT_ACTION_THINK_DELAY_MS;
-use crate::game::table::{current_timestamp_ms, PokerTable};
+use crate::game::table::{current_timestamp_ms, is_bot_identity, PokerTable};
 use crate::game::{GamePhase, PlayerAction};
 use std::collections::HashMap;
 use strategy::{BotGameView, BotPosition, BotStrategy, SimpleStrategy};
@@ -211,6 +211,21 @@ impl BotManager {
                     view.current_bet
                 );
                 actions.push((table_id.clone(), current.user_id.clone(), action));
+            } else if is_bot_identity(&current.user_id, &current.username) {
+                // Tournament/table balancing can transiently desync bot-manager
+                // registration. Fall back to a balanced strategy so the table
+                // cannot deadlock waiting for a bot turn.
+                let view = build_bot_view(table, table.current_player);
+                let fallback = SimpleStrategy::balanced();
+                let action = fallback.decide(&view);
+                tracing::warn!(
+                    "Bot {} ({}) missing from bot manager at table {}; using fallback action {:?}",
+                    current.username,
+                    current.user_id,
+                    table_id,
+                    action
+                );
+                actions.push((table_id.clone(), current.user_id.clone(), action));
             }
         }
 
@@ -407,5 +422,36 @@ mod tests {
             actions.is_empty(),
             "bot manager should not queue actions while waiting for street auto-advance"
         );
+    }
+
+    #[test]
+    fn test_collect_bot_actions_uses_identity_fallback_when_unregistered() {
+        let mgr = BotManager::new();
+        let table_id = "table_fallback".to_string();
+
+        let mut table = PokerTable::new(table_id.clone(), "Fallback Table".to_string(), 50, 100);
+        table
+            .take_seat("bot_like_user".to_string(), "Alice (Bot)".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 1, 5000)
+            .unwrap();
+
+        let bot_idx = table
+            .players
+            .iter()
+            .position(|p| p.user_id == "bot_like_user")
+            .expect("bot-like player should exist");
+        table.current_player = bot_idx;
+        table.last_phase_change_time =
+            Some(current_timestamp_ms().saturating_sub(BOT_ACTION_THINK_DELAY_MS + 1));
+
+        let mut tables = HashMap::new();
+        tables.insert(table_id.clone(), table);
+
+        let actions = mgr.collect_bot_actions(&tables);
+        assert_eq!(actions.len(), 1, "fallback should queue a bot action");
+        assert_eq!(actions[0].0, table_id);
+        assert_eq!(actions[0].1, "bot_like_user");
     }
 }

@@ -188,6 +188,80 @@ impl LifecycleService {
         Ok(())
     }
 
+    /// Cancel stale "running" tournaments after a process restart.
+    ///
+    /// Tournament hand state currently lives in memory. If the process restarts,
+    /// those hands cannot be resumed safely, leaving tournaments marked "running"
+    /// but effectively orphaned. To avoid permanent stuck state, cancel them on
+    /// startup without attempting balance/prize mutations.
+    pub(crate) async fn cancel_orphaned_running_tournaments_on_startup(&self) -> Result<usize> {
+        use crate::ws::messages::ServerMessage;
+
+        let running: Vec<Tournament> =
+            sqlx::query_as("SELECT * FROM tournaments WHERE status = 'running'")
+                .fetch_all(&*self.ctx.pool)
+                .await?;
+
+        if running.is_empty() {
+            return Ok(0);
+        }
+
+        let finished_at = Utc::now().to_rfc3339();
+        let reason =
+            "Server restarted while tournament was running; tournament state could not be recovered";
+        let mut cancelled = 0usize;
+
+        for tournament in running {
+            let updated = sqlx::query(
+                "UPDATE tournaments
+                 SET status = 'cancelled', cancel_reason = ?, finished_at = ?
+                 WHERE id = ? AND status = 'running'",
+            )
+            .bind(reason)
+            .bind(&finished_at)
+            .bind(&tournament.id)
+            .execute(&*self.ctx.pool)
+            .await?;
+
+            if updated.rows_affected() == 0 {
+                continue;
+            }
+
+            sqlx::query("UPDATE tournament_tables SET is_active = 0 WHERE tournament_id = ?")
+                .bind(&tournament.id)
+                .execute(&*self.ctx.pool)
+                .await?;
+
+            if let Some(state) = self.ctx.tournaments.write().await.get_mut(&tournament.id) {
+                state.tournament.status = "cancelled".to_string();
+                state.tournament.cancel_reason = Some(reason.to_string());
+                state.tournament.finished_at = Some(finished_at.clone());
+            }
+
+            tracing::warn!(
+                "Cancelled orphaned running tournament {} ({}) during startup recovery",
+                tournament.name,
+                tournament.id
+            );
+
+            self.ctx
+                .game_server
+                .broadcast_tournament_event(
+                    &tournament.id,
+                    ServerMessage::TournamentCancelled {
+                        tournament_id: tournament.id.clone(),
+                        tournament_name: tournament.name.clone(),
+                        reason: reason.to_string(),
+                    },
+                )
+                .await;
+
+            cancelled += 1;
+        }
+
+        Ok(cancelled)
+    }
+
     /// Cancel a tournament manually with a reason.
     pub(crate) async fn cancel_tournament(
         &self,
@@ -1424,5 +1498,127 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(new_start_table.as_deref(), Some(table_b.as_str()));
+    }
+
+    #[tokio::test]
+    async fn cancel_orphaned_running_tournaments_on_startup_marks_cancelled() {
+        let pool = Arc::new(crate::create_test_db().await);
+        let jwt_manager = Arc::new(crate::auth::JwtManager::new("test_secret".to_string()));
+        let game_server = Arc::new(GameServer::new(jwt_manager, pool.clone()));
+        let ctx = Arc::new(TournamentContext::new(pool.clone(), game_server.clone()));
+        let service = LifecycleService::new(ctx);
+
+        let club_id = Uuid::new_v4().to_string();
+        let admin_id = Uuid::new_v4().to_string();
+        let tournament_id = Uuid::new_v4().to_string();
+        let table_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES (?, ?, ?, ?)")
+            .bind(&admin_id)
+            .bind("admin")
+            .bind("admin@example.com")
+            .bind("password")
+            .execute(&*pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO clubs (id, name, admin_id) VALUES (?, ?, ?)")
+            .bind(&club_id)
+            .bind("Recovery Club")
+            .bind(&admin_id)
+            .execute(&*pool)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "INSERT INTO tournaments (
+                id, club_id, name, format_id, variant_id, buy_in, starting_stack, prize_pool,
+                max_players, min_players, registered_players, remaining_players, current_blind_level,
+                level_duration_secs, level_start_time, status, scheduled_start, pre_seat_secs,
+                actual_start, finished_at, cancel_reason, allow_rebuys, max_rebuys, rebuy_amount,
+                rebuy_stack, allow_addons, max_addons, addon_amount, addon_stack, late_registration_secs,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&tournament_id)
+        .bind(&club_id)
+        .bind("Orphaned Tournament")
+        .bind("mtt")
+        .bind("holdem")
+        .bind(100_i64)
+        .bind(1500_i64)
+        .bind(0_i64)
+        .bind(9_i32)
+        .bind(2_i32)
+        .bind(2_i32)
+        .bind(2_i32)
+        .bind(0_i32)
+        .bind(60_i64)
+        .bind(&now)
+        .bind("running")
+        .bind::<Option<String>>(None)
+        .bind(0_i64)
+        .bind(&now)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind(0_i32)
+        .bind(0_i32)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i32)
+        .bind(0_i32)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(&now)
+        .execute(&*pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO tournament_tables (tournament_id, table_id, table_number, is_active) VALUES (?, ?, ?, 1)",
+        )
+        .bind(&tournament_id)
+        .bind(&table_id)
+        .bind(1_i32)
+        .execute(&*pool)
+        .await
+        .unwrap();
+
+        let cancelled = service
+            .cancel_orphaned_running_tournaments_on_startup()
+            .await
+            .expect("startup recovery should succeed");
+        assert_eq!(cancelled, 1);
+
+        let status: String = sqlx::query_scalar("SELECT status FROM tournaments WHERE id = ?")
+            .bind(&tournament_id)
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "cancelled");
+
+        let cancel_reason: Option<String> =
+            sqlx::query_scalar("SELECT cancel_reason FROM tournaments WHERE id = ?")
+                .bind(&tournament_id)
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        assert!(
+            cancel_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Server restarted while tournament was running")
+        );
+
+        let active_tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM tournament_tables WHERE tournament_id = ? AND is_active = 1",
+        )
+        .bind(&tournament_id)
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+        assert_eq!(active_tables, 0);
     }
 }

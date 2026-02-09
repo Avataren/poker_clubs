@@ -545,6 +545,39 @@ class _GameScreenState extends State<GameScreen> {
     String tournamentName,
     List<TournamentWinner> winners,
   ) async {
+    var resolvedTournamentName = tournamentName;
+
+    // Probe path (winners empty): only show payouts once backend confirms
+    // the tournament has actually finished. Table closures/rebalances can put
+    // a table into Waiting with one player while the MTT/SNG is still running.
+    if (winners.isEmpty) {
+      try {
+        final detail = await context.read<ApiService>().getTournamentDetail(
+          tournamentId,
+        );
+        if (!mounted) return;
+        if (detail.tournament.status != 'finished') {
+          setState(() {
+            if (_waitingResultsProbeTournamentId == tournamentId &&
+                _finishedTournamentId != tournamentId) {
+              _waitingResultsProbeTournamentId = null;
+            }
+          });
+          return;
+        }
+        resolvedTournamentName = detail.tournament.name;
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          if (_waitingResultsProbeTournamentId == tournamentId &&
+              _finishedTournamentId != tournamentId) {
+            _waitingResultsProbeTournamentId = null;
+          }
+        });
+        return;
+      }
+    }
+
     final activeTournamentId =
         _gameState?.tournamentId ?? _tournamentInfo.tournamentId;
     if (activeTournamentId != null && activeTournamentId != tournamentId) {
@@ -562,12 +595,12 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
-    _recordFeedEvent('Tournament finished: $tournamentName');
+    _recordFeedEvent('Tournament finished: $resolvedTournamentName');
     setState(() {
       _isTableClosed = true;
       _waitingResultsProbeTournamentId = tournamentId;
       _finishedTournamentId = tournamentId;
-      _finishedTournamentName = tournamentName;
+      _finishedTournamentName = resolvedTournamentName;
       _showTournamentResultsOverlay = true;
       _loadingTournamentPlacements = true;
       _tournamentResultsError = null;

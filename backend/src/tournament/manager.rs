@@ -192,4 +192,12 @@ impl TournamentManager {
     pub async fn cleanup_finished_tournaments(&self) {
         self.ctx.cleanup_finished_tournaments().await;
     }
+
+    /// Startup recovery: cancel running tournaments whose in-memory hand state
+    /// was lost by a process restart.
+    pub async fn cancel_orphaned_running_tournaments_on_startup(&self) -> Result<usize> {
+        self.lifecycle
+            .cancel_orphaned_running_tournaments_on_startup()
+            .await
+    }
 }
