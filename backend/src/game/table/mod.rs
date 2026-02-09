@@ -12,7 +12,8 @@ pub use state::{PublicPlayerState, PublicPot, PublicTableState, TournamentInfo};
 use super::{
     constants::{
         DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS,
-        MIN_PLAYERS_TO_START, MTT_WAITING_REBALANCE_MS,
+        HEADS_UP_PLAYER_COUNT, MAX_RAISES_PER_ROUND, MIN_PLAYERS_TO_START,
+        MTT_WAITING_REBALANCE_MS,
     },
     deck::{Card, Deck},
     error::{GameError, GameResult},

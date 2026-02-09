@@ -22,7 +22,7 @@ impl PokerTable {
 
         let num_players = self.players.len();
 
-        if num_players == 2 {
+        if num_players == HEADS_UP_PLAYER_COUNT {
             // Heads-up special case: dealer posts SB, other player posts BB
             // Dealer is at self.dealer_seat
             let dealer_idx = self.dealer_seat;

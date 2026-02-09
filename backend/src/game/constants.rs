@@ -28,6 +28,12 @@ pub const DEFAULT_SHOWDOWN_DELAY_MS: u64 = 5000; // Delay to show results before
 /// Gives deferred tournament balancing moves a short window to apply before the next hand.
 pub const MTT_WAITING_REBALANCE_MS: u64 = 1000;
 
+/// Maximum number of raises allowed per betting round (fixed-limit rule)
+pub const MAX_RAISES_PER_ROUND: usize = 4;
+
+/// Number of players for heads-up special blind/button rules
+pub const HEADS_UP_PLAYER_COUNT: usize = 2;
+
 /// Broadcast channel capacity
 pub const BROADCAST_CHANNEL_CAPACITY: usize = 100;
 
