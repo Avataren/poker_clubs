@@ -155,6 +155,16 @@ impl Clone for PokerTable {
 }
 
 impl PokerTable {
+    /// Build the per-player bet vector used by pot calculations.
+    pub(crate) fn player_bets(&self) -> Vec<(usize, i64, bool)> {
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.total_bet_this_hand > 0)
+            .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
+            .collect()
+    }
+
     pub fn new(table_id: String, name: String, small_blind: i64, big_blind: i64) -> Self {
         Self::with_max_seats(table_id, name, small_blind, big_blind, DEFAULT_MAX_SEATS)
     }

@@ -125,18 +125,12 @@ impl PokerTable {
                 if !has_allin {
                     vec![]
                 } else {
-                    let player_bets: Vec<(usize, i64, bool)> = self
-                        .players
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, p)| p.total_bet_this_hand > 0)
-                        .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
-                        .collect();
-                    if player_bets.is_empty() {
+                    let bets = self.player_bets();
+                    if bets.is_empty() {
                         vec![]
                     } else {
                         self.pot
-                            .preview_side_pots(&player_bets)
+                            .preview_side_pots(&bets)
                             .iter()
                             .map(|p| PublicPot {
                                 amount: p.amount,

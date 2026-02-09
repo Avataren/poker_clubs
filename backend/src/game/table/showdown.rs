@@ -58,14 +58,7 @@ impl PokerTable {
         }
 
         // Calculate side pots based on each player's total contribution
-        let player_bets: Vec<(usize, i64, bool)> = self
-            .players
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.total_bet_this_hand > 0)
-            .map(|(idx, p)| (idx, p.total_bet_this_hand, p.is_active_in_hand()))
-            .collect();
-        let uncontested = self.pot.calculate_side_pots(&player_bets);
+        let uncontested = self.pot.calculate_side_pots(&self.player_bets());
 
         // Return uncontested amounts (e.g. uncalled overbets) immediately.
         // These are not showdown wins and should not mark winners.
