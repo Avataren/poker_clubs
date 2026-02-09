@@ -23,6 +23,8 @@ pub struct PublicTableState {
     pub pot_total: i64,
     pub pots: Vec<PublicPot>,
     pub current_bet: i64,
+    pub min_raise: i64,
+    pub big_blind: i64,
     pub ante: i64,
     pub current_player_seat: usize,
     pub players: Vec<PublicPlayerState>,
@@ -168,6 +170,8 @@ impl PokerTable {
             pot_total: self.pot.total(),
             pots: public_pots,
             current_bet: self.current_bet,
+            min_raise: self.min_raise,
+            big_blind: self.big_blind,
             ante: self.ante,
             current_player_seat,
             players: self

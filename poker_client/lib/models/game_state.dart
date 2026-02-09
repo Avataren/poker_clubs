@@ -32,6 +32,8 @@ class GameState {
   final int potTotal;
   final List<PotInfo> pots;
   final int currentBet;
+  final int minRaise;
+  final int bigBlind;
   final int currentPlayerSeat;
   final List<Player> players;
   final int maxSeats;
@@ -65,6 +67,8 @@ class GameState {
     required this.potTotal,
     required this.pots,
     required this.currentBet,
+    required this.minRaise,
+    required this.bigBlind,
     required this.currentPlayerSeat,
     required this.players,
     required this.maxSeats,
@@ -104,6 +108,8 @@ class GameState {
               .toList() ??
           [],
       currentBet: json['current_bet'] as int,
+      minRaise: json['min_raise'] as int? ?? 0,
+      bigBlind: json['big_blind'] as int? ?? 0,
       currentPlayerSeat: json['current_player_seat'] as int,
       players: (json['players'] as List)
           .map((p) => Player.fromJson(p))

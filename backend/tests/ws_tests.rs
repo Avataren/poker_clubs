@@ -1004,12 +1004,17 @@ async fn test_ws_game_completes_after_fold() {
     // Current player folds
     game.send_action_current_player(PlayerAction::Fold).await;
 
-    // Wait for hand to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-    game.drain_messages().await;
-
-    // Get updated state
-    let state = game.get_state_p1().await.unwrap();
+    // Wait for next hand to start (showdown delay keeps pot visible for animation,
+    // so stacks + pot_total would double-count during showdown phase)
+    let mut state = game.get_state_p1().await.unwrap();
+    for _ in 0..20 {
+        if !matches!(state.phase, GamePhase::Showdown) {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        game.drain_messages().await;
+        state = game.get_state_p1().await.unwrap();
+    }
 
     // Total chips should be conserved
     let final_total: i64 = state.players.iter().map(|p| p.stack).sum::<i64>() + state.pot_total;

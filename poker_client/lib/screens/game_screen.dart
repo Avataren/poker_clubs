@@ -10,6 +10,7 @@ import '../services/websocket_service.dart';
 import '../services/sound_service.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/bet_sizing_panel.dart';
 import '../widgets/table_seat_widget.dart';
 
 class GameScreen extends StatefulWidget {
@@ -32,6 +33,7 @@ class _GameScreenState extends State<GameScreen> {
   GameState? _gameState;
   GameState? _previousGameState;
   final _raiseController = TextEditingController(text: '200');
+  bool _showBetPanel = false;
   final _buyinController = TextEditingController(text: '5000');
   final _topUpController = TextEditingController(text: '5000');
   final List<_TableFeedEntry> _eventFeed = <_TableFeedEntry>[];
@@ -65,6 +67,7 @@ class _GameScreenState extends State<GameScreen> {
         final wasTableClosed = _isTableClosed;
         _previousGameState = _gameState;
         _gameState = gameState;
+        _showBetPanel = false;
         _updateTableClosedState(gameState);
         _checkIfSeated();
         if (!wasSeated && _isSeated) {
@@ -1133,7 +1136,7 @@ class _GameScreenState extends State<GameScreen> {
                     isShowdownPhase,
                     isUncontestedWin,
                   ),
-                  _buildActionButtons(isMyTurn),
+                  _buildActionButtons(isMyTurn, myPlayer),
                 ],
               ),
             ),
@@ -1230,64 +1233,92 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  Widget _buildActionButtons(bool isMyTurn) {
-    if (!_isSeated || _isTableClosed || !isMyTurn) {
+  Widget _buildActionButtons(bool isMyTurn, Player? myPlayer) {
+    if (!_isSeated || _isTableClosed || !isMyTurn || myPlayer == null) {
+      if (_showBetPanel) {
+        setState(() => _showBetPanel = false);
+      }
       return const SizedBox.shrink();
+    }
+
+    final gs = _gameState!;
+    final toCall = gs.currentBet - myPlayer.currentBet;
+    final canCheck = toCall <= 0;
+    final canRaise = myPlayer.stack > toCall;
+
+    if (_showBetPanel) {
+      return BetSizingPanel(
+        isPreflop: gs.phase.toLowerCase() == 'preflop',
+        bigBlind: gs.bigBlind > 0 ? gs.bigBlind : widget.table.bigBlind,
+        potTotal: gs.potTotal,
+        currentBet: gs.currentBet,
+        playerCurrentBet: myPlayer.currentBet,
+        playerStack: myPlayer.stack,
+        minRaise: gs.minRaise > 0 ? gs.minRaise : gs.bigBlind,
+        onConfirm: (amount) {
+          setState(() => _showBetPanel = false);
+          _playerAction('Raise', amount: amount);
+        },
+        onCancel: () => setState(() => _showBetPanel = false),
+      );
     }
 
     return Container(
       padding: const EdgeInsets.all(16),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        alignment: WrapAlignment.center,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          ElevatedButton(
-            onPressed: () => _playerAction('Fold'),
-            style: _actionButtonStyle(Colors.red),
-            child: const Text('Fold'),
-          ),
-          ElevatedButton(
-            onPressed: () => _playerAction('Check'),
-            style: _actionButtonStyle(Colors.blue),
-            child: const Text('Check'),
-          ),
-          ElevatedButton(
-            onPressed: () => _playerAction('Call'),
-            style: _actionButtonStyle(Colors.orange),
-            child: const Text('Call'),
-          ),
-          SizedBox(
-            width: 100,
-            child: TextField(
-              controller: _raiseController,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                hintText: 'Amount',
-                hintStyle: TextStyle(color: Colors.white54),
-                filled: true,
-                fillColor: Colors.black26,
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 8,
-                ),
+          // Fold
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: ElevatedButton(
+                onPressed: () => _playerAction('Fold'),
+                style: _actionButtonStyle(Colors.red),
+                child: const Text('Fold'),
               ),
             ),
           ),
-          ElevatedButton(
-            onPressed: () => _playerAction(
-              'Raise',
-              amount: int.tryParse(_raiseController.text),
+          // Check or Call
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: canCheck
+                  ? ElevatedButton(
+                      onPressed: () => _playerAction('Check'),
+                      style: _actionButtonStyle(Colors.blue),
+                      child: const Text('Check'),
+                    )
+                  : ElevatedButton(
+                      onPressed: () => _playerAction('Call'),
+                      style: _actionButtonStyle(Colors.orange),
+                      child: Text('Call \$$toCall'),
+                    ),
             ),
-            style: _actionButtonStyle(Colors.green),
-            child: const Text('Raise'),
           ),
-          ElevatedButton(
-            onPressed: () => _playerAction('AllIn'),
-            style: _actionButtonStyle(Colors.purple),
-            child: const Text('All In'),
-          ),
+          // Bet/Raise (opens panel) or All-In if can't raise
+          if (canRaise)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: ElevatedButton(
+                  onPressed: () => setState(() => _showBetPanel = true),
+                  style: _actionButtonStyle(Colors.green),
+                  child: Text(gs.currentBet > 0 ? 'Raise' : 'Bet'),
+                ),
+              ),
+            )
+          else
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: ElevatedButton(
+                  onPressed: () => _playerAction('AllIn'),
+                  style: _actionButtonStyle(Colors.purple),
+                  child: const Text('All In'),
+                ),
+              ),
+            ),
         ],
       ),
     );
