@@ -1073,6 +1073,44 @@ async fn test_ws_game_to_showdown() {
 }
 
 #[tokio::test]
+async fn test_ws_postflop_bet_fold_wins_without_showdown() {
+    let (addr, token1, token2) = spawn_server_with_two_users().await;
+    let (_club_id, table_id) = create_club_and_table(addr, &token1).await;
+
+    let mut game = TwoPlayerGame::setup(addr, &token1, &token2, table_id, 1000).await;
+
+    // Preflop: SB calls, BB checks -> advance to Flop
+    game.send_action_current_player(PlayerAction::Call).await;
+    game.send_action_current_player(PlayerAction::Check).await;
+
+    let state = game.get_state_p1().await.unwrap();
+    assert_eq!(state.phase, GamePhase::Flop, "Should be on flop");
+    let flop_cards = state.community_cards.len();
+    assert_eq!(flop_cards, 3, "Should have 3 community cards on flop");
+
+    // Flop: first player bets
+    game.send_action_current_player(PlayerAction::Raise(50))
+        .await;
+
+    // Other player folds
+    game.send_action_current_player(PlayerAction::Fold).await;
+
+    // Get state immediately - should be won_without_showdown
+    let state = game.get_state_p1().await.unwrap();
+    assert_eq!(
+        state.phase,
+        GamePhase::Showdown,
+        "Phase should be Showdown after fold"
+    );
+    assert!(state.won_without_showdown, "Should be won_without_showdown");
+    assert_eq!(
+        state.community_cards.len(),
+        3,
+        "No additional cards should be dealt after fold-win on flop"
+    );
+}
+
+#[tokio::test]
 async fn test_ws_allin_showdown() {
     let (addr, token1, token2) = spawn_server_with_two_users().await;
     let (_club_id, table_id) = create_club_and_table(addr, &token1).await;

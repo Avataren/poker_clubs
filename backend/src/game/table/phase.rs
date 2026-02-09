@@ -1,6 +1,19 @@
 use super::*;
 
 impl PokerTable {
+    fn fold_win_delay_ms(&self) -> u64 {
+        let winner_is_bot = self
+            .players
+            .iter()
+            .any(|p| p.is_winner && is_bot_identity(&p.user_id, &p.username));
+
+        if winner_is_bot {
+            0
+        } else {
+            DEFAULT_FOLD_WIN_DELAY_MS
+        }
+    }
+
     /// Attempt a phase transition. Silently ignores invalid transitions.
     pub(crate) fn try_transition(&mut self, target: GamePhase) {
         if let Ok(next) = self.phase.transition_to(target) {
@@ -172,7 +185,13 @@ impl PokerTable {
         // Determine delay for current phase
         let delay_ms = match self.phase {
             GamePhase::Flop | GamePhase::Turn | GamePhase::River => self.street_delay_ms,
-            GamePhase::Showdown => self.showdown_delay_ms,
+            GamePhase::Showdown => {
+                if self.won_without_showdown {
+                    self.fold_win_delay_ms()
+                } else {
+                    self.showdown_delay_ms
+                }
+            }
             _ => return false,
         };
 

@@ -11,8 +11,8 @@ pub use state::{PublicPlayerState, PublicPot, PublicTableState, TournamentInfo};
 
 use super::{
     constants::{
-        DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS, DEFAULT_STREET_DELAY_MS,
-        HEADS_UP_PLAYER_COUNT, MAX_RAISES_PER_ROUND, MIN_PLAYERS_TO_START,
+        DEFAULT_FOLD_WIN_DELAY_MS, DEFAULT_MAX_SEATS, DEFAULT_SHOWDOWN_DELAY_MS,
+        DEFAULT_STREET_DELAY_MS, HEADS_UP_PLAYER_COUNT, MAX_RAISES_PER_ROUND, MIN_PLAYERS_TO_START,
         MTT_WAITING_REBALANCE_MS,
     },
     deck::{Card, Deck},
@@ -36,6 +36,12 @@ pub(crate) fn current_timestamp_ms() -> u64 {
             tracing::error!("System clock error: {}", e);
             0
         })
+}
+
+pub(crate) fn is_bot_identity(user_id: &str, username: &str) -> bool {
+    user_id.starts_with("bot_")
+        || username.starts_with("Bot_")
+        || username.to_ascii_lowercase().contains("(bot)")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1391,6 +1397,115 @@ mod tests {
         let winners: Vec<&Player> = table.players.iter().filter(|p| p.is_winner).collect();
         assert_eq!(winners.len(), 1);
         assert_eq!(winners[0].user_id, bb_user);
+    }
+
+    #[test]
+    fn test_postflop_bet_fold_wins_immediately() {
+        // 2-player heads up: call preflop, get to flop, one bets, other folds
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 25, 50);
+        table
+            .take_seat("p1".to_string(), "Player 1".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "Player 2".to_string(), 1, 1000)
+            .unwrap();
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        // Preflop: SB calls, BB checks -> advance to Flop
+        let u = table.players[table.current_player].user_id.clone();
+        table.handle_action(&u, PlayerAction::Call).unwrap();
+        let u = table.players[table.current_player].user_id.clone();
+        table.handle_action(&u, PlayerAction::Check).unwrap();
+
+        assert_eq!(table.phase, GamePhase::Flop);
+        assert_eq!(table.community_cards.len(), 3);
+
+        // Flop: first player bets
+        let bettor = table.players[table.current_player].user_id.clone();
+        table
+            .handle_action(&bettor, PlayerAction::Raise(50))
+            .unwrap();
+
+        // Other player folds
+        let folder = table.players[table.current_player].user_id.clone();
+        assert_ne!(folder, bettor);
+        table.handle_action(&folder, PlayerAction::Fold).unwrap();
+
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(table.won_without_showdown, "Should be won_without_showdown");
+        assert_eq!(
+            table.community_cards.len(),
+            3,
+            "No more cards should be dealt after fold-win on flop"
+        );
+
+        let winners: Vec<_> = table.players.iter().filter(|p| p.is_winner).collect();
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].user_id, bettor);
+    }
+
+    #[test]
+    fn test_bot_fold_win_auto_advances_without_delay() {
+        // Heads-up: human folds preflop to a bot in BB.
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 25, 50);
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 1, 1000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        let to_act = table.players[table.current_player].user_id.clone();
+        assert_eq!(to_act, "human");
+        table.handle_action(&to_act, PlayerAction::Fold).unwrap();
+
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(table.won_without_showdown);
+        let winner = table
+            .players
+            .iter()
+            .find(|p| p.is_winner)
+            .expect("expected winner");
+        assert_eq!(winner.user_id, "bot_1");
+
+        assert!(
+            table.check_auto_advance(),
+            "bot uncontested win should auto-advance immediately"
+        );
+        assert_eq!(table.phase, GamePhase::PreFlop);
+    }
+
+    #[test]
+    fn test_human_fold_win_keeps_uncontested_delay() {
+        // Heads-up: bot folds preflop so human wins uncontested.
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 25, 50);
+        table
+            .take_seat("bot_1".to_string(), "Bot One".to_string(), 0, 1000)
+            .unwrap();
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 1, 1000)
+            .unwrap();
+
+        assert_eq!(table.phase, GamePhase::PreFlop);
+        let to_act = table.players[table.current_player].user_id.clone();
+        assert_eq!(to_act, "bot_1");
+        table.handle_action(&to_act, PlayerAction::Fold).unwrap();
+
+        assert_eq!(table.phase, GamePhase::Showdown);
+        assert!(table.won_without_showdown);
+        let winner = table
+            .players
+            .iter()
+            .find(|p| p.is_winner)
+            .expect("expected winner");
+        assert_eq!(winner.user_id, "human");
+
+        assert!(
+            !table.check_auto_advance(),
+            "human uncontested win should still respect fold-win delay"
+        );
+        assert_eq!(table.phase, GamePhase::Showdown);
     }
 
     #[test]
