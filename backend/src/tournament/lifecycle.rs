@@ -835,7 +835,12 @@ impl LifecycleService {
                     match self
                         .ctx
                         .game_server
-                        .move_tournament_player(source_table_id, &dest_table_id, player_id, Some(tournament_id))
+                        .move_tournament_player(
+                            source_table_id,
+                            &dest_table_id,
+                            player_id,
+                            Some(tournament_id),
+                        )
                         .await
                     {
                         Ok(()) => {

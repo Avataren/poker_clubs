@@ -1615,4 +1615,35 @@ mod tests {
             "bot avatar should resolve to visible non-zero fallback index"
         );
     }
+
+    #[test]
+    fn test_public_state_uses_fallback_avatar_for_tournament_named_bot_when_unset() {
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 50, 100);
+
+        table
+            .take_seat("human".to_string(), "Human".to_string(), 0, 5000)
+            .unwrap();
+        table
+            .take_seat("uuid_like_user".to_string(), "Bot_42".to_string(), 1, 5000)
+            .unwrap();
+
+        let bot = table
+            .players
+            .iter_mut()
+            .find(|p| p.user_id == "uuid_like_user")
+            .expect("bot should exist");
+        bot.avatar_index = 0;
+
+        let public = table.get_public_state(Some("human"));
+        let bot_public = public
+            .players
+            .iter()
+            .find(|p| p.user_id == "uuid_like_user")
+            .expect("bot should be present in public state");
+
+        assert!(
+            (1..=24).contains(&bot_public.avatar_index),
+            "tournament bot avatar should resolve to visible non-zero fallback index"
+        );
+    }
 }

@@ -71,6 +71,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final isCompact = MediaQuery.of(context).size.width < 520;
+    final avatarImageSize = isCompact ? 80.0 : 96.0;
+    final avatarTileSize = isCompact ? 84.0 : 100.0;
+    const avatarGridSpacing = 8.0;
+    final avatarGridWidth =
+        (avatarTileSize * AvatarSprite.cols) +
+        (avatarGridSpacing * (AvatarSprite.cols - 1));
 
     return Scaffold(
       appBar: AppBar(
@@ -144,50 +150,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   Center(
                     child: Container(
-                      width: isCompact ? 84 : 100,
-                      height: isCompact ? 84 : 100,
+                      width: avatarTileSize,
+                      height: avatarTileSize,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.greenAccent, width: 2),
                       ),
                       child: AvatarSprite(
                         avatarIndex: _avatarIndex,
-                        size: isCompact ? 80 : 96,
+                        size: avatarImageSize,
                       ),
                     ),
                   ),
 
                   const SizedBox(height: 16),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: AvatarSprite.totalAvatars,
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 5,
-                          crossAxisSpacing: 8,
-                          mainAxisSpacing: 8,
+                  Center(
+                    child: SizedBox(
+                      width: avatarGridWidth,
+                      child: GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: AvatarSprite.totalAvatars,
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: AvatarSprite.cols,
+                          crossAxisSpacing: avatarGridSpacing,
+                          mainAxisSpacing: avatarGridSpacing,
+                          mainAxisExtent: avatarTileSize,
                         ),
-                    itemBuilder: (context, index) {
-                      final selected = index == _avatarIndex;
-                      return InkWell(
-                        onTap: () => setState(() => _avatarIndex = index),
-                        borderRadius: BorderRadius.circular(999),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: selected
-                                  ? Colors.greenAccent
-                                  : Colors.white24,
-                              width: selected ? 2.5 : 1,
+                        itemBuilder: (context, index) {
+                          final selected = index == _avatarIndex;
+                          return InkWell(
+                            onTap: () => setState(() => _avatarIndex = index),
+                            borderRadius: BorderRadius.circular(999),
+                            child: Container(
+                              width: avatarTileSize,
+                              height: avatarTileSize,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: selected
+                                      ? Colors.greenAccent
+                                      : Colors.white24,
+                                  width: selected ? 2.5 : 1,
+                                ),
+                              ),
+                              padding: const EdgeInsets.all(2),
+                              child: AvatarSprite(
+                                avatarIndex: index,
+                                size: avatarImageSize,
+                              ),
                             ),
-                          ),
-                          padding: const EdgeInsets.all(2),
-                          child: AvatarSprite(avatarIndex: index, size: 48),
-                        ),
-                      );
-                    },
+                          );
+                        },
+                      ),
+                    ),
                   ),
                 ],
               ),

@@ -22,21 +22,30 @@ class AvatarSprite extends StatelessWidget {
     final safeIndex = avatarIndex.clamp(0, totalAvatars - 1);
     final row = safeIndex ~/ cols;
     final col = safeIndex % cols;
+    final sheetWidth = size * cols;
+    final sheetHeight = size * rows;
 
     return ClipOval(
       child: SizedBox(
         width: size,
         height: size,
         child: ClipRect(
-          child: Transform.translate(
-            offset: Offset(-col * size, -row * size),
-            child: SizedBox(
-              width: size * cols,
-              height: size * rows,
-              child: Image.asset(
-                spriteAsset,
-                fit: BoxFit.fill,
-                filterQuality: FilterQuality.high,
+          child: OverflowBox(
+            alignment: Alignment.topLeft,
+            minWidth: sheetWidth,
+            maxWidth: sheetWidth,
+            minHeight: sheetHeight,
+            maxHeight: sheetHeight,
+            child: Transform.translate(
+              offset: Offset(-col * size, -row * size),
+              child: SizedBox(
+                width: sheetWidth,
+                height: sheetHeight,
+                child: Image.asset(
+                  spriteAsset,
+                  fit: BoxFit.fill,
+                  filterQuality: FilterQuality.high,
+                ),
               ),
             ),
           ),
@@ -45,4 +54,3 @@ class AvatarSprite extends StatelessWidget {
     );
   }
 }
-

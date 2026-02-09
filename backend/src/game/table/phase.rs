@@ -136,9 +136,7 @@ impl PokerTable {
         let is_tournament_table = self.tournament_id.is_some() && self.format.eliminates_players();
 
         if is_tournament_table {
-            tracing::info!(
-                "Showdown delay complete on tournament table, transitioning to Waiting"
-            );
+            tracing::info!("Showdown delay complete on tournament table, transitioning to Waiting");
             self.try_transition(GamePhase::Waiting);
             self.check_eliminations();
             self.last_phase_change_time = Some(now);

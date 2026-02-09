@@ -245,7 +245,8 @@ impl PokerTable {
                         } else {
                             None
                         };
-                    let avatar_index = normalize_public_avatar_index(&p.user_id, p.avatar_index);
+                    let avatar_index =
+                        normalize_public_avatar_index(&p.user_id, &p.username, p.avatar_index);
 
                     PublicPlayerState {
                         user_id: p.user_id.clone(),
@@ -306,9 +307,13 @@ impl PokerTable {
     }
 }
 
-fn normalize_public_avatar_index(user_id: &str, avatar_index: i32) -> i32 {
+fn normalize_public_avatar_index(user_id: &str, username: &str, avatar_index: i32) -> i32 {
+    let is_bot = user_id.starts_with("bot_")
+        || username.starts_with("Bot_")
+        || username.to_ascii_lowercase().contains("(bot)");
+
     // Human users may intentionally use index 0.
-    if !user_id.starts_with("bot_") {
+    if !is_bot {
         return avatar_index.clamp(0, 24);
     }
 

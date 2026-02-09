@@ -1107,7 +1107,12 @@ async fn test_start_large_sng_creates_multiple_nine_max_tables_and_seats_all_pla
     let tables_body: Value = tables_response.json();
     let tables = tables_body["tables"].as_array().unwrap();
 
-    assert_eq!(tables.len(), 3, "Expected 3 SNG tables, got: {:?}", tables_body);
+    assert_eq!(
+        tables.len(),
+        3,
+        "Expected 3 SNG tables, got: {:?}",
+        tables_body
+    );
 
     let mut total_players = 0_i64;
     for table in tables {

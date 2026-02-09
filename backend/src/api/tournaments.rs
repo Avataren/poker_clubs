@@ -921,7 +921,9 @@ async fn fill_with_bots(
             if let Err(e) = sqlx::query(
                 "INSERT INTO users (id, username, email, password_hash, is_bot, avatar_index)
                  VALUES (?, ?, ?, ?, 1, ?)
-                 ON CONFLICT(username) DO NOTHING",
+                 ON CONFLICT(username) DO UPDATE SET
+                    is_bot = 1,
+                    avatar_index = excluded.avatar_index",
             )
             .bind(&bot_id)
             .bind(&bot_username)

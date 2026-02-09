@@ -67,7 +67,9 @@ impl PokerTable {
                     }
                     BettingStructure::FixedLimit { small_bet, big_bet } => {
                         if self.raises_this_round >= MAX_RAISES_PER_ROUND {
-                            return Err(GameError::MaxRaisesReached { max_raises: MAX_RAISES_PER_ROUND });
+                            return Err(GameError::MaxRaisesReached {
+                                max_raises: MAX_RAISES_PER_ROUND,
+                            });
                         }
                         // Early streets (PreFlop, Flop) use small_bet; later streets use big_bet
                         let required = match self.phase {
@@ -125,8 +127,12 @@ impl PokerTable {
                         // check the raise cap.
                         let current_bet = self.players[self.current_player].current_bet;
                         let desired_total = current_bet + stack;
-                        if desired_total > self.current_bet && self.raises_this_round >= MAX_RAISES_PER_ROUND {
-                            return Err(GameError::MaxRaisesReached { max_raises: MAX_RAISES_PER_ROUND });
+                        if desired_total > self.current_bet
+                            && self.raises_this_round >= MAX_RAISES_PER_ROUND
+                        {
+                            return Err(GameError::MaxRaisesReached {
+                                max_raises: MAX_RAISES_PER_ROUND,
+                            });
                         }
                     }
                     BettingStructure::NoLimit => {}
@@ -249,7 +255,11 @@ impl PokerTable {
         // If everyone but one player has folded, award the pot immediately.
         // This covers cases like "folds to the big blind" where the last
         // remaining player may not have acted in the round yet.
-        let active_in_hand_count = self.players.iter().filter(|p| p.is_active_in_hand()).count();
+        let active_in_hand_count = self
+            .players
+            .iter()
+            .filter(|p| p.is_active_in_hand())
+            .count();
         if active_in_hand_count == 1 {
             self.advance_phase();
             return;
