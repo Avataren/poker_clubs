@@ -101,6 +101,11 @@ pub enum ServerMessage {
         tournament_name: String,
         reason: String,
     },
+    TournamentTableChanged {
+        tournament_id: String,
+        table_id: String,
+        user_id: String,
+    },
     // Live tournament info broadcast (sent every second to tournament tables)
     TournamentInfo {
         tournament_id: String,

@@ -51,6 +51,8 @@ class WebSocketService {
   onTournamentFinished;
   Function(String tournamentId, String tournamentName, String reason)?
   onTournamentCancelled;
+  Function(String tournamentId, String tableId, String userId)?
+  onTournamentTableChanged;
   // Live tournament info broadcast (every second)
   Function(
     String tournamentId,
@@ -239,6 +241,15 @@ class WebSocketService {
             payload['reason'],
           );
           onGlobalUpdate?.call();
+          break;
+
+        case 'TournamentTableChanged':
+          final payload = data['payload'];
+          onTournamentTableChanged?.call(
+            payload['tournament_id'],
+            payload['table_id'],
+            payload['user_id'],
+          );
           break;
 
         case 'TournamentInfo':

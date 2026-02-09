@@ -584,6 +584,7 @@ impl LifecycleService {
                     &pending_move.source_table_id,
                     &dest_table_id,
                     &pending_move.user_id,
+                    Some(tournament_id),
                 )
                 .await
             {
@@ -834,7 +835,7 @@ impl LifecycleService {
                     match self
                         .ctx
                         .game_server
-                        .move_tournament_player(source_table_id, &dest_table_id, player_id)
+                        .move_tournament_player(source_table_id, &dest_table_id, player_id, Some(tournament_id))
                         .await
                     {
                         Ok(()) => {
@@ -996,7 +997,7 @@ impl LifecycleService {
                 match self
                     .ctx
                     .game_server
-                    .move_tournament_player(&max_id, &min_id, &player_id)
+                    .move_tournament_player(&max_id, &min_id, &player_id, Some(tournament_id))
                     .await
                 {
                     Ok(()) => {

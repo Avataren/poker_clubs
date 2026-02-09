@@ -491,7 +491,7 @@ mod tests {
         assert!(server.is_table_mid_hand(&source_table).await);
 
         let err = server
-            .move_tournament_player(&source_table, &dest_table, &moved_user)
+            .move_tournament_player(&source_table, &dest_table, &moved_user, None)
             .await
             .expect_err("move should be rejected while source table is mid-hand");
         assert!(err.contains("hand is in progress"));

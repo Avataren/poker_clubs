@@ -198,6 +198,7 @@ impl GameServer {
         from_table_id: &str,
         to_table_id: &str,
         user_id: &str,
+        tournament_id: Option<&str>,
     ) -> Result<(), String> {
         // Extract player info and move within a single tables lock
         let (username, stack) = {
@@ -257,6 +258,19 @@ impl GameServer {
         // Notify both tables
         self.notify_table_update(from_table_id).await;
         self.notify_table_update(to_table_id).await;
+
+        // Broadcast table change so the client can auto-switch
+        if let Some(tid) = tournament_id {
+            self.broadcast_tournament_event(
+                tid,
+                ServerMessage::TournamentTableChanged {
+                    tournament_id: tid.to_string(),
+                    table_id: to_table_id.to_string(),
+                    user_id: user_id.to_string(),
+                },
+            )
+            .await;
+        }
 
         tracing::info!(
             "Moved player {} ({}) with stack {} from table {} to table {}",

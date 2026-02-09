@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/club.dart';
 import '../models/game_state.dart';
+import '../models/tournament.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/sound_service.dart';
@@ -28,10 +29,19 @@ class _GameScreenState extends State<GameScreen> {
   final _buyinController = TextEditingController(text: '5000');
   final _topUpController = TextEditingController(text: '5000');
   final List<_TableFeedEntry> _eventFeed = <_TableFeedEntry>[];
+  final List<_TournamentPlacement> _tournamentPlacements =
+      <_TournamentPlacement>[];
   int _unreadFeedCount = 0;
   bool _isSeated = false;
   bool _hasSeenPlayersAtTable = false;
   bool _isTableClosed = false;
+  bool _showTournamentResultsOverlay = false;
+  bool _loadingTournamentPlacements = false;
+  String? _tournamentResultsError;
+  String? _finishedTournamentId;
+  String? _finishedTournamentName;
+  String? _waitingResultsProbeTournamentId;
+  DateTime? _singlePlayerWaitingSince;
 
   // Tournament info from live broadcast
   String? _tournamentId;
@@ -73,6 +83,7 @@ class _GameScreenState extends State<GameScreen> {
           _appendFeedEvent(event);
         }
       });
+      _maybeProbeTournamentCompletion(gameState);
     };
     _wsService.onTournamentInfo =
         (
@@ -105,6 +116,18 @@ class _GameScreenState extends State<GameScreen> {
             _nextBigBlind = nextBigBlind;
           });
         };
+    _wsService.onTournamentFinished = (tournamentId, tournamentName, winners) =>
+        _handleTournamentFinished(tournamentId, tournamentName, winners);
+    _wsService.onTournamentTableChanged = (tournamentId, tableId, userId) {
+      final myUserId = context.read<ApiService>().userId;
+      if (userId != myUserId) return;
+      _wsService.joinTable(tableId, 0);
+      _recordFeedEvent('Moved to new table.');
+      setState(() {
+        _isTableClosed = false;
+        _hasSeenPlayersAtTable = false;
+      });
+    };
     _wsService.onError = (error) {
       final normalized = error.toLowerCase();
       final tableGone =
@@ -571,6 +594,353 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
+  Future<void> _handleTournamentFinished(
+    String tournamentId,
+    String tournamentName,
+    List<TournamentWinner> winners,
+  ) async {
+    final activeTournamentId = _gameState?.tournamentId ?? _tournamentId;
+    if (activeTournamentId != null && activeTournamentId != tournamentId) {
+      return;
+    }
+
+    if (_finishedTournamentId == tournamentId &&
+        _showTournamentResultsOverlay) {
+      // The probe path may have fetched results before prizes were distributed,
+      // showing $0 for all entries. If the WS TournamentFinished message arrives
+      // with actual winner data, allow re-processing to get correct prizes.
+      final hasPrizes = _tournamentPlacements.any((p) => p.prize > 0);
+      if (hasPrizes || winners.isEmpty) {
+        return;
+      }
+    }
+
+    _recordFeedEvent('Tournament finished: $tournamentName');
+    setState(() {
+      _isTableClosed = true;
+      _waitingResultsProbeTournamentId = tournamentId;
+      _finishedTournamentId = tournamentId;
+      _finishedTournamentName = tournamentName;
+      _showTournamentResultsOverlay = true;
+      _loadingTournamentPlacements = true;
+      _tournamentResultsError = null;
+      _tournamentPlacements.clear();
+    });
+
+    List<_TournamentPlacement> placements = const [];
+    String? fetchError;
+
+    try {
+      final results = await context.read<ApiService>().getTournamentResults(
+        tournamentId,
+      );
+      placements = _placementsFromResults(results);
+    } catch (e) {
+      fetchError = e.toString();
+    }
+
+    // Fall back to WS winners if the API returned no results, or if the API
+    // returned results but none have prizes yet (race: prizes not distributed).
+    final apiHasPrizes = placements.any((p) => p.prize > 0);
+    if (placements.isEmpty || (!apiHasPrizes && winners.isNotEmpty)) {
+      final wsPlacements = _placementsFromWinners(winners);
+      if (wsPlacements.isNotEmpty) {
+        placements = wsPlacements;
+      }
+    }
+
+    if (!mounted || _finishedTournamentId != tournamentId) {
+      return;
+    }
+
+    setState(() {
+      _loadingTournamentPlacements = false;
+      _tournamentPlacements
+        ..clear()
+        ..addAll(placements);
+      _tournamentResultsError = placements.isEmpty
+          ? 'Could not load tournament payouts.'
+          : null;
+    });
+
+    if (fetchError != null) {
+      _recordFeedEvent('Results lookup failed: $fetchError');
+    }
+  }
+
+  void _maybeProbeTournamentCompletion(GameState gameState) {
+    final tournamentId = gameState.tournamentId;
+    if (tournamentId == null) {
+      _singlePlayerWaitingSince = null;
+      return;
+    }
+
+    final isWaiting = gameState.phase.toLowerCase() == 'waiting';
+    final activePlayers = gameState.players
+        .where((p) => !p.isEliminated)
+        .length;
+    final singlePlayerRemaining = activePlayers <= 1;
+
+    if (!isWaiting || !singlePlayerRemaining || _showTournamentResultsOverlay) {
+      _singlePlayerWaitingSince = null;
+      return;
+    }
+
+    final now = DateTime.now();
+    _singlePlayerWaitingSince ??= now;
+    if (now.difference(_singlePlayerWaitingSince!).inSeconds < 2) {
+      return;
+    }
+
+    if (_loadingTournamentPlacements ||
+        _finishedTournamentId == tournamentId ||
+        _waitingResultsProbeTournamentId == tournamentId) {
+      return;
+    }
+
+    _waitingResultsProbeTournamentId = tournamentId;
+    _handleTournamentFinished(tournamentId, widget.table.name, const []);
+  }
+
+  List<_TournamentPlacement> _placementsFromResults(
+    List<TournamentResult> results,
+  ) {
+    final placements =
+        results
+            .map(
+              (result) => _TournamentPlacement(
+                username: result.username,
+                position: result.finishPosition,
+                prize: result.prizeAmount,
+              ),
+            )
+            .where((result) => result.position > 0)
+            .toList()
+          ..sort((a, b) => a.position.compareTo(b.position));
+
+    return placements;
+  }
+
+  List<_TournamentPlacement> _placementsFromWinners(
+    List<TournamentWinner> winners,
+  ) {
+    final placements =
+        winners
+            .map(
+              (winner) => _TournamentPlacement(
+                username: winner.username,
+                position: winner.position.toInt(),
+                prize: winner.prize.toInt(),
+              ),
+            )
+            .where((winner) => winner.position > 0)
+            .toList()
+          ..sort((a, b) => a.position.compareTo(b.position));
+
+    return placements;
+  }
+
+  List<_TournamentPlacement> _displayedPlacements() {
+    if (_tournamentPlacements.isEmpty) {
+      return const <_TournamentPlacement>[];
+    }
+
+    final paidPlaces = _tournamentPlacements.where((p) => p.prize > 0).length;
+    final targetCount = paidPlaces > 3 ? paidPlaces : 3;
+    final count = targetCount > _tournamentPlacements.length
+        ? _tournamentPlacements.length
+        : targetCount;
+
+    return _tournamentPlacements.take(count).toList();
+  }
+
+  String _placementBadge(int position) {
+    switch (position) {
+      case 1:
+        return '1st';
+      case 2:
+        return '2nd';
+      case 3:
+        return '3rd';
+      default:
+        return '#$position';
+    }
+  }
+
+  String _formatPayout(int value) {
+    final sign = value < 0 ? '-' : '';
+    final digits = value.abs().toString();
+    final buffer = StringBuffer();
+    for (int i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) {
+        buffer.write(',');
+      }
+      buffer.write(digits[i]);
+    }
+    return '$sign\$${buffer.toString()}';
+  }
+
+  Widget _buildTournamentResultsOverlay() {
+    final placements = _displayedPlacements();
+
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.82),
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 560,
+                maxHeight: MediaQuery.of(context).size.height * 0.84,
+              ),
+              child: Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF16213e),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.amber.shade300, width: 1.6),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Tournament Finished',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (_finishedTournamentName != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _finishedTournamentName!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: _loadingTournamentPlacements
+                          ? const Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.amber,
+                              ),
+                            )
+                          : placements.isEmpty
+                          ? Center(
+                              child: Text(
+                                _tournamentResultsError ??
+                                    'No tournament results available.',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: placements.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final placement = placements[index];
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black26,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      SizedBox(
+                                        width: 48,
+                                        child: Text(
+                                          _placementBadge(placement.position),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          placement.username,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        _formatPayout(placement.prize),
+                                        style: const TextStyle(
+                                          color: Colors.lightGreenAccent,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        if (!_loadingTournamentPlacements &&
+                            placements.isEmpty &&
+                            _finishedTournamentId != null)
+                          OutlinedButton(
+                            onPressed: () {
+                              final tid = _finishedTournamentId;
+                              final tname =
+                                  _finishedTournamentName ?? 'Tournament';
+                              if (tid == null) return;
+                              _handleTournamentFinished(tid, tname, const []);
+                            },
+                            child: const Text('Retry'),
+                          ),
+                        ElevatedButton(
+                          onPressed: () {
+                            setState(() {
+                              _showTournamentResultsOverlay = false;
+                            });
+                          },
+                          child: const Text('Close'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            _wsService.leaveTable();
+                            _wsService.disconnect();
+                            Navigator.pop(context);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade700,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Leave Table'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTableStack({
     required BoxConstraints constraints,
     required String? myUserId,
@@ -732,196 +1102,207 @@ class _GameScreenState extends State<GameScreen> {
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [const Color(0xFF1a1a2e), const Color(0xFF16213e)],
-          ),
-        ),
-        child: Column(
-          children: [
-            // Phase and game type indicator
-            Container(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                children: [
-                  // Variant and format info
-                  if (_gameState != null)
-                    Text(
-                      _gameState!.gameTypeDescription,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.8),
-                        fontSize: 14,
+      body: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [const Color(0xFF1a1a2e), const Color(0xFF16213e)],
+              ),
+            ),
+            child: Column(
+              children: [
+                // Phase and game type indicator
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    children: [
+                      // Variant and format info
+                      if (_gameState != null)
+                        Text(
+                          _gameState!.gameTypeDescription,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.8),
+                            fontSize: 14,
+                          ),
+                        ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _gameState?.phase.toUpperCase() ?? 'WAITING',
+                        style: const TextStyle(
+                          color: Colors.amber,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _gameState?.phase.toUpperCase() ?? 'WAITING',
-                    style: const TextStyle(
-                      color: Colors.amber,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+                    ],
+                  ),
+                ),
+
+                // Poker table with seats
+                Expanded(
+                  child: Center(
+                    child: _gameState != null
+                        ? LayoutBuilder(
+                            builder: (context, constraints) {
+                              if (!isPortrait) {
+                                return _buildTableStack(
+                                  constraints: constraints,
+                                  myUserId: myUserId,
+                                  isShowdown: isShowdown,
+                                );
+                              }
+
+                              return FittedBox(
+                                fit: BoxFit.contain,
+                                child: SizedBox(
+                                  width: constraints.maxHeight,
+                                  height: constraints.maxWidth,
+                                  child: RotatedBox(
+                                    quarterTurns: 1,
+                                    child: LayoutBuilder(
+                                      builder: (context, rotatedConstraints) {
+                                        return _buildTableStack(
+                                          constraints: rotatedConstraints,
+                                          myUserId: myUserId,
+                                          isShowdown: isShowdown,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          )
+                        : const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                            ),
+                          ),
+                  ),
+                ),
+
+                // Show Cards buttons (fold-win showdown: winner can reveal cards)
+                if (_isSeated &&
+                    !_isTableClosed &&
+                    isShowdown &&
+                    myPlayer != null &&
+                    myPlayer.isWinner &&
+                    !myPlayer.isBot &&
+                    myPlayer.shownCards != null &&
+                    _gameState?.winningHand == null)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.black45,
+                    child: Wrap(
+                      spacing: 8,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        for (
+                          int i = 0;
+                          i < (myPlayer.holeCards?.length ?? 0);
+                          i++
+                        )
+                          if (myPlayer.shownCards != null &&
+                              i < myPlayer.shownCards!.length &&
+                              !myPlayer.shownCards![i])
+                            ElevatedButton(
+                              onPressed: () => _wsService.showCards([i]),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.teal,
+                              ),
+                              child: Text('Show Card ${i + 1}'),
+                            ),
+                        if (myPlayer.shownCards != null &&
+                            myPlayer.shownCards!.any((s) => !s))
+                          ElevatedButton(
+                            onPressed: () {
+                              final indices = <int>[];
+                              for (
+                                int i = 0;
+                                i < myPlayer.shownCards!.length;
+                                i++
+                              ) {
+                                if (!myPlayer.shownCards![i]) indices.add(i);
+                              }
+                              _wsService.showCards(indices);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber[700],
+                            ),
+                            child: const Text('Show All'),
+                          ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
 
-            // Poker table with seats
-            Expanded(
-              child: Center(
-                child: _gameState != null
-                    ? LayoutBuilder(
-                        builder: (context, constraints) {
-                          if (!isPortrait) {
-                            return _buildTableStack(
-                              constraints: constraints,
-                              myUserId: myUserId,
-                              isShowdown: isShowdown,
-                            );
-                          }
-
-                          return FittedBox(
-                            fit: BoxFit.contain,
-                            child: SizedBox(
-                              width: constraints.maxHeight,
-                              height: constraints.maxWidth,
-                              child: RotatedBox(
-                                quarterTurns: 1,
-                                child: LayoutBuilder(
-                                  builder: (context, rotatedConstraints) {
-                                    return _buildTableStack(
-                                      constraints: rotatedConstraints,
-                                      myUserId: myUserId,
-                                      isShowdown: isShowdown,
-                                    );
-                                  },
-                                ),
+                // Action buttons (only show if seated and it's my turn)
+                if (_isSeated && !_isTableClosed && isMyTurn)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        ElevatedButton(
+                          onPressed: () => _playerAction('Fold'),
+                          style: _actionButtonStyle(Colors.red),
+                          child: const Text('Fold'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () => _playerAction('Check'),
+                          style: _actionButtonStyle(Colors.blue),
+                          child: const Text('Check'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () => _playerAction('Call'),
+                          style: _actionButtonStyle(Colors.orange),
+                          child: const Text('Call'),
+                        ),
+                        SizedBox(
+                          width: 100,
+                          child: TextField(
+                            controller: _raiseController,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              hintText: 'Amount',
+                              hintStyle: TextStyle(color: Colors.white54),
+                              filled: true,
+                              fillColor: Colors.black26,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 8,
                               ),
                             ),
-                          );
-                        },
-                      )
-                    : const Center(
-                        child: CircularProgressIndicator(color: Colors.white),
-                      ),
-              ),
-            ),
-
-            // Show Cards buttons (fold-win showdown: winner can reveal cards)
-            if (_isSeated &&
-                !_isTableClosed &&
-                isShowdown &&
-                myPlayer != null &&
-                myPlayer.isWinner &&
-                !myPlayer.isBot &&
-                myPlayer.shownCards != null &&
-                _gameState?.winningHand == null)
-              Container(
-                padding: const EdgeInsets.all(12),
-                color: Colors.black45,
-                child: Wrap(
-                  spacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    for (int i = 0; i < (myPlayer.holeCards?.length ?? 0); i++)
-                      if (myPlayer.shownCards != null &&
-                          i < myPlayer.shownCards!.length &&
-                          !myPlayer.shownCards![i])
+                          ),
+                        ),
                         ElevatedButton(
-                          onPressed: () => _wsService.showCards([i]),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.teal,
+                          onPressed: () => _playerAction(
+                            'Raise',
+                            amount: int.tryParse(_raiseController.text),
                           ),
-                          child: Text('Show Card ${i + 1}'),
+                          style: _actionButtonStyle(Colors.green),
+                          child: const Text('Raise'),
                         ),
-                    if (myPlayer.shownCards != null &&
-                        myPlayer.shownCards!.any((s) => !s))
-                      ElevatedButton(
-                        onPressed: () {
-                          final indices = <int>[];
-                          for (
-                            int i = 0;
-                            i < myPlayer.shownCards!.length;
-                            i++
-                          ) {
-                            if (!myPlayer.shownCards![i]) indices.add(i);
-                          }
-                          _wsService.showCards(indices);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.amber[700],
+                        ElevatedButton(
+                          onPressed: () => _playerAction('AllIn'),
+                          style: _actionButtonStyle(Colors.purple),
+                          child: const Text('All In'),
                         ),
-                        child: const Text('Show All'),
-                      ),
-                  ],
-                ),
-              ),
-
-            // Action buttons (only show if seated and it's my turn)
-            if (_isSeated && !_isTableClosed && isMyTurn)
-              Container(
-                padding: const EdgeInsets.all(16),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    ElevatedButton(
-                      onPressed: () => _playerAction('Fold'),
-                      style: _actionButtonStyle(Colors.red),
-                      child: const Text('Fold'),
+                      ],
                     ),
-                    ElevatedButton(
-                      onPressed: () => _playerAction('Check'),
-                      style: _actionButtonStyle(Colors.blue),
-                      child: const Text('Check'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _playerAction('Call'),
-                      style: _actionButtonStyle(Colors.orange),
-                      child: const Text('Call'),
-                    ),
-                    SizedBox(
-                      width: 100,
-                      child: TextField(
-                        controller: _raiseController,
-                        keyboardType: TextInputType.number,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          hintText: 'Amount',
-                          hintStyle: TextStyle(color: Colors.white54),
-                          filled: true,
-                          fillColor: Colors.black26,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 8,
-                          ),
-                        ),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _playerAction(
-                        'Raise',
-                        amount: int.tryParse(_raiseController.text),
-                      ),
-                      style: _actionButtonStyle(Colors.green),
-                      child: const Text('Raise'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _playerAction('AllIn'),
-                      style: _actionButtonStyle(Colors.purple),
-                      child: const Text('All In'),
-                    ),
-                  ],
-                ),
-              )
-            else
-              const SizedBox.shrink(),
-          ],
-        ),
+                  )
+                else
+                  const SizedBox.shrink(),
+              ],
+            ),
+          ),
+          if (_showTournamentResultsOverlay) _buildTournamentResultsOverlay(),
+        ],
       ),
     );
   }
@@ -1031,6 +1412,8 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   void dispose() {
+    _wsService.onTournamentFinished = null;
+    _wsService.onTournamentTableChanged = null;
     _wsService.disconnect();
     _raiseController.dispose();
     _buyinController.dispose();
@@ -1044,4 +1427,16 @@ class _TableFeedEntry {
   final String message;
 
   const _TableFeedEntry({required this.time, required this.message});
+}
+
+class _TournamentPlacement {
+  final String username;
+  final int position;
+  final int prize;
+
+  const _TournamentPlacement({
+    required this.username,
+    required this.position,
+    required this.prize,
+  });
 }
