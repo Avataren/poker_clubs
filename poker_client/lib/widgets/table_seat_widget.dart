@@ -5,6 +5,106 @@ import '../models/player.dart';
 import 'card_widget.dart';
 import 'chip_stack_widget.dart';
 
+class _SeatVisualLayout {
+  static const double playerScale = 1.6;
+  static const double cardAspectRatio = 1.4;
+  static const double _fanSpread = 0.34;
+  static const double _fanRotation = 0.16;
+
+  static double seatSizeForTable(double tableWidth) {
+    final baseSeatSize = (tableWidth * 0.13).clamp(60.0, 90.0).toDouble();
+    return baseSeatSize * playerScale;
+  }
+
+  static double cardWidthForTable(double tableWidth) {
+    final baseCardWidth = (tableWidth * 0.058).clamp(28.0, 42.0).toDouble();
+    return baseCardWidth * playerScale;
+  }
+
+  static double cardHeightForWidth(double cardWidth) {
+    return cardWidth * cardAspectRatio;
+  }
+
+  static double frameWidth(double seatSize, double cardWidth) {
+    return max(seatSize * 1.5, cardWidth * 2.45);
+  }
+
+  static double frameHeight(double seatSize, double cardHeight) {
+    return max(seatSize * 2.0, seatSize * 1.4 + cardHeight);
+  }
+
+  static double seatVerticalOffset(double tableHeight) => tableHeight * 0.015;
+
+  static double avatarSize(double seatSize) => seatSize * 0.58;
+
+  static double avatarTop(double seatSize) => seatSize * 0.18;
+
+  static double avatarCenterYInFrame(double seatSize) {
+    final size = avatarSize(seatSize);
+    return avatarTop(seatSize) + (size / 2);
+  }
+
+  static double namePlateTop(double seatSize, double avatarSize) {
+    return avatarTop(seatSize) + (avatarSize * 0.78);
+  }
+
+  static double cardsTop(
+    double seatSize,
+    double avatarSize,
+    double cardHeight,
+  ) {
+    final centerY = avatarTop(seatSize) + (avatarSize * 0.58);
+    return centerY - (cardHeight / 2);
+  }
+
+  static double cardLeftInFrame(
+    int cardIndex,
+    int totalCards,
+    double frameWidth,
+    double cardWidth,
+  ) {
+    return (frameWidth - cardWidth) / 2 +
+        cardFanOffsetX(cardIndex, totalCards, cardWidth);
+  }
+
+  static double cardFanOffsetX(
+    int cardIndex,
+    int totalCards,
+    double cardWidth,
+  ) {
+    if (totalCards <= 1) return 0;
+    final centerIndex = (totalCards - 1) / 2.0;
+    return (cardIndex - centerIndex) * (cardWidth * _fanSpread);
+  }
+
+  static double cardFanRotation(int cardIndex, int totalCards) {
+    if (totalCards <= 1) return 0;
+    final centerIndex = (totalCards - 1) / 2.0;
+    final spread = max(centerIndex, 1.0);
+    return (cardIndex - centerIndex) * (_fanRotation / spread);
+  }
+}
+
+class _SeatGeometry {
+  final double seatSize;
+  final double cardWidth;
+  final double cardHeight;
+  final double frameWidth;
+  final double frameHeight;
+  final double left;
+  final double top;
+
+  const _SeatGeometry({
+    required this.seatSize,
+    required this.cardWidth,
+    required this.cardHeight,
+    required this.frameWidth,
+    required this.frameHeight,
+    required this.left,
+    required this.top,
+  });
+}
+
 class TableSeatWidget extends StatelessWidget {
   final int seatNumber;
   final Player? player;
@@ -60,156 +160,188 @@ class TableSeatWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final isEmpty = player == null;
 
-    final usernameFontSize = (seatSize * 0.14).clamp(9.0, 13.0);
-    final stackFontSize = (seatSize * 0.13).clamp(9.0, 12.0);
-    final badgeFontSize = (seatSize * 0.11).clamp(8.0, 11.0);
-    final avatarSize = seatSize * 0.55;
+    final usernameFontSize = (seatSize * 0.14).clamp(12.0, 24.0);
+    final stackFontSize = (seatSize * 0.13).clamp(11.0, 22.0);
+    final badgeFontSize = (seatSize * 0.11).clamp(10.0, 20.0);
+    final avatarSize = _SeatVisualLayout.avatarSize(seatSize);
+    final frameWidth = _SeatVisualLayout.frameWidth(seatSize, cardWidth);
+    final frameHeight = _SeatVisualLayout.frameHeight(seatSize, cardHeight);
+    final avatarTop = _SeatVisualLayout.avatarTop(seatSize);
+    final avatarLeft = (frameWidth - avatarSize) / 2;
+    final namePlateTop = _SeatVisualLayout.namePlateTop(seatSize, avatarSize);
+    final cardsTop = _SeatVisualLayout.cardsTop(
+      seatSize,
+      avatarSize,
+      cardHeight,
+    );
 
     if (isEmpty) {
-      return _buildEmptySeat(avatarSize, usernameFontSize);
+      return _buildEmptySeat(
+        frameWidth,
+        frameHeight,
+        avatarSize,
+        avatarTop,
+        usernameFontSize,
+      );
     }
 
     return Opacity(
       opacity: _isDimmed ? 0.5 : 1.0,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Cards above the seat
-              SizedBox(
-                height: cardHeight,
-                child: _hasCards
-                    ? Opacity(
-                        opacity: isDealingCards ? 0.0 : 1.0,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: player!.holeCards!
-                              .map(
-                                (card) => CardWidget(
-                                  card: card,
-                                  width: cardWidth,
-                                  height: cardHeight,
-                                  isShowdown: showingDown,
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      )
-                    : null,
+      child: SizedBox(
+        width: frameWidth,
+        height: frameHeight,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              top: avatarTop,
+              left: avatarLeft,
+              child: _buildAvatar(avatarSize),
+            ),
+
+            Positioned(
+              top: namePlateTop,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _buildNamePlate(
+                  usernameFontSize,
+                  stackFontSize,
+                  avatarSize,
+                ),
               ),
+            ),
 
-              SizedBox(height: seatSize * 0.04),
+            // Cards are rendered in front of the avatar with a slight fan.
+            if (_hasCards)
+              ...List.generate(player!.holeCards!.length, (index) {
+                final card = player!.holeCards![index];
+                final totalCards = player!.holeCards!.length;
 
-              // Avatar + name plate stack
-              Stack(
-                clipBehavior: Clip.none,
-                alignment: Alignment.topCenter,
-                children: [
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Avatar circle
-                      _buildAvatar(avatarSize),
-                      // Name plate (overlaps bottom of avatar slightly)
-                      Transform.translate(
-                        offset: Offset(0, -(avatarSize * 0.12)),
-                        child: _buildNamePlate(
-                          usernameFontSize,
-                          stackFontSize,
-                          avatarSize,
-                        ),
-                      ),
-                    ],
+                return Positioned(
+                  left: _SeatVisualLayout.cardLeftInFrame(
+                    index,
+                    totalCards,
+                    frameWidth,
+                    cardWidth,
                   ),
-
-                  // Dealer / Blind badge — right side of avatar
-                  if (isDealer || isSmallBlind || isBigBlind)
-                    Positioned(
-                      top: avatarSize * 0.05,
-                      right: -(seatSize * 0.15),
-                      child: _buildDealerBlindBadge(badgeFontSize),
-                    ),
-
-                  // Bot indicator — top-right of avatar
-                  if (player!.isBot)
-                    Positioned(
-                      top: -(avatarSize * 0.08),
-                      right: -(seatSize * 0.08),
-                      child: Container(
-                        padding: EdgeInsets.all(seatSize * 0.025),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[800],
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white54, width: 1),
-                        ),
-                        child: Icon(
-                          Icons.smart_toy,
-                          size: seatSize * 0.13,
-                          color: Colors.white70,
-                        ),
+                  top: cardsTop,
+                  child: Opacity(
+                    opacity: isDealingCards ? 0.0 : 1.0,
+                    child: Transform.rotate(
+                      angle: _SeatVisualLayout.cardFanRotation(
+                        index,
+                        totalCards,
+                      ),
+                      child: CardWidget(
+                        card: card,
+                        width: cardWidth,
+                        height: cardHeight,
+                        isShowdown: showingDown,
                       ),
                     ),
+                  ),
+                );
+              }),
 
-                  // Last action badge — above name plate
-                  if (lastAction != null && lastAction!.isNotEmpty)
-                    Positioned(
-                      top: avatarSize + (avatarSize * -0.12) - (seatSize * 0.16),
-                      child: _buildLastActionBadge(badgeFontSize),
-                    ),
-
-                  // Winner badge overlay
-                  if (player!.isWinner && showingDown)
-                    Positioned(
-                      top: avatarSize * 0.2,
-                      child: _buildWinnerBadge(badgeFontSize),
-                    ),
-                ],
+            if (isDealer || isSmallBlind || isBigBlind)
+              Positioned(
+                top: avatarTop + (avatarSize * 0.06),
+                left: avatarLeft + avatarSize * 0.9,
+                child: _buildDealerBlindBadge(badgeFontSize),
               ),
-            ],
-          ),
-        ],
+
+            if (player!.isBot)
+              Positioned(
+                top: avatarTop - (avatarSize * 0.18),
+                left: avatarLeft + avatarSize * 0.78,
+                child: Container(
+                  padding: EdgeInsets.all(seatSize * 0.025),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[800],
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white54, width: 1),
+                  ),
+                  child: Icon(
+                    Icons.smart_toy,
+                    size: seatSize * 0.13,
+                    color: Colors.white70,
+                  ),
+                ),
+              ),
+
+            if (lastAction != null && lastAction!.isNotEmpty)
+              Positioned(
+                top: namePlateTop - (seatSize * 0.22),
+                left: 0,
+                right: 0,
+                child: Center(child: _buildLastActionBadge(badgeFontSize)),
+              ),
+
+            if (player!.isWinner && showingDown)
+              Positioned(
+                top: avatarTop + avatarSize * 0.2,
+                left: 0,
+                right: 0,
+                child: Center(child: _buildWinnerBadge(badgeFontSize)),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildEmptySeat(double avatarSize, double fontSize) {
+  Widget _buildEmptySeat(
+    double frameWidth,
+    double frameHeight,
+    double avatarSize,
+    double avatarTop,
+    double fontSize,
+  ) {
+    final avatarLeft = (frameWidth - avatarSize) / 2;
+
     return GestureDetector(
       onTap: onTakeSeat,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(height: cardHeight),
-          SizedBox(height: seatSize * 0.04),
-          Container(
-            width: avatarSize,
-            height: avatarSize,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white24,
-                width: 1.5,
+      child: SizedBox(
+        width: frameWidth,
+        height: frameHeight,
+        child: Stack(
+          children: [
+            Positioned(
+              top: avatarTop,
+              left: avatarLeft,
+              child: Container(
+                width: avatarSize,
+                height: avatarSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24, width: 1.5),
+                ),
+                child: Center(
+                  child: Icon(
+                    Icons.add,
+                    color: Colors.white30,
+                    size: avatarSize * 0.4,
+                  ),
+                ),
               ),
             ),
-            child: Center(
-              child: Icon(
-                Icons.add,
-                color: Colors.white30,
-                size: avatarSize * 0.4,
+            Positioned(
+              top: avatarTop + avatarSize + (seatSize * 0.08),
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  'Seat ${seatNumber + 1}',
+                  style: TextStyle(
+                    color: Colors.white30,
+                    fontSize: fontSize * 0.9,
+                  ),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Seat ${seatNumber + 1}',
-            style: TextStyle(
-              color: Colors.white30,
-              fontSize: fontSize * 0.9,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -261,12 +393,12 @@ class TableSeatWidget extends StatelessWidget {
     double avatarSize,
   ) {
     return Container(
-      constraints: BoxConstraints(maxWidth: seatSize * 1.1),
+      constraints: BoxConstraints(maxWidth: seatSize * 1.25),
       padding: EdgeInsets.only(
-        left: seatSize * 0.08,
-        right: seatSize * 0.08,
-        top: avatarSize * 0.14,
-        bottom: seatSize * 0.04,
+        left: seatSize * 0.1,
+        right: seatSize * 0.1,
+        top: avatarSize * 0.16,
+        bottom: seatSize * 0.05,
       ),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.7),
@@ -286,7 +418,7 @@ class TableSeatWidget extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 1),
+          const SizedBox(height: 2),
           Text(
             '\$${player!.stack}',
             style: TextStyle(
@@ -391,7 +523,7 @@ class TableSeatWidget extends StatelessWidget {
 
   Widget _buildWinnerBadge(double fontSize) {
     return Container(
-      constraints: BoxConstraints(maxWidth: seatSize * 0.95),
+      constraints: BoxConstraints(maxWidth: seatSize * 1.15),
       padding: EdgeInsets.symmetric(
         horizontal: seatSize * 0.075,
         vertical: seatSize * 0.025,
@@ -399,10 +531,7 @@ class TableSeatWidget extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.amber[600],
         borderRadius: BorderRadius.circular(seatSize * 0.1),
-        border: Border.all(
-          color: Colors.amber[900]!,
-          width: 1.5,
-        ),
+        border: Border.all(color: Colors.amber[900]!, width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.4),
@@ -678,7 +807,6 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         });
       }
     }
-
   }
 
   @override
@@ -851,9 +979,9 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       final parts = <String>[];
       for (int i = 0; i < pots.length; i++) {
         if (pots[i].amount > 0) {
-          parts.add(i == 0
-              ? 'Main: \$${pots[i].amount}'
-              : 'Side: \$${pots[i].amount}');
+          parts.add(
+            i == 0 ? 'Main: \$${pots[i].amount}' : 'Side: \$${pots[i].amount}',
+          );
         }
       }
       potText = parts.join('  |  ');
@@ -892,21 +1020,44 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     ];
   }
 
+  _SeatGeometry _seatGeometryForIndex(
+    int seatIndex,
+    double tableWidth,
+    double tableHeight,
+  ) {
+    final angle = (2 * pi * seatIndex / widget.maxSeats) - pi / 2;
+    final radiusX = (tableWidth / 2) * 0.96;
+    final radiusY = (tableHeight / 2) * 0.98;
+    final x = radiusX * cos(angle);
+    final y = radiusY * sin(angle);
+
+    final seatSize = _SeatVisualLayout.seatSizeForTable(tableWidth);
+    final cardWidth = _SeatVisualLayout.cardWidthForTable(tableWidth);
+    final cardHeight = _SeatVisualLayout.cardHeightForWidth(cardWidth);
+    final frameWidth = _SeatVisualLayout.frameWidth(seatSize, cardWidth);
+    final frameHeight = _SeatVisualLayout.frameHeight(seatSize, cardHeight);
+
+    return _SeatGeometry(
+      seatSize: seatSize,
+      cardWidth: cardWidth,
+      cardHeight: cardHeight,
+      frameWidth: frameWidth,
+      frameHeight: frameHeight,
+      left: (tableWidth / 2) + x - (frameWidth / 2),
+      top:
+          (tableHeight / 2) +
+          y -
+          _SeatVisualLayout.avatarCenterYInFrame(seatSize) -
+          _SeatVisualLayout.seatVerticalOffset(tableHeight),
+    );
+  }
+
   Widget _buildSeatAtPosition(
     int seatIndex,
     double tableWidth,
     double tableHeight,
   ) {
-    // Calculate position around oval
-    final angle =
-        (2 * pi * seatIndex / widget.maxSeats) - pi / 2; // Start from top
-
-    // Oval dimensions - seats positioned outside the table surface
-    final radiusX = (tableWidth / 2) * 0.96;
-    final radiusY = (tableHeight / 2) * 0.98;
-
-    final x = radiusX * cos(angle);
-    final y = radiusY * sin(angle);
+    final geometry = _seatGeometryForIndex(seatIndex, tableWidth, tableHeight);
 
     // Find player at this seat - exclude eliminated players (they're invisible)
     final player = widget.players
@@ -917,24 +1068,12 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
         widget.gamePhase.toLowerCase() != 'waiting' &&
         widget.currentPlayerSeat == seatIndex;
 
-    // Calculate responsive seat size
-    final seatSize = (tableWidth * 0.13).clamp(60.0, 90.0);
-    final cardWidth = (tableWidth * 0.058).clamp(28.0, 42.0);
-    final cardHeight = (tableHeight * 0.095).clamp(40.0, 60.0);
-
     return Positioned(
-      left: (tableWidth / 2) + x - (seatSize / 2),
-      top:
-          (tableHeight / 2) +
-          y -
-          (seatSize + cardHeight + 8) / 2 -
-          (tableHeight * 0.03),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: seatSize * 1.2,
-          maxHeight:
-              seatSize + cardHeight + 50, // Extra space for badges and text
-        ),
+      left: geometry.left,
+      top: geometry.top,
+      child: SizedBox(
+        width: geometry.frameWidth,
+        height: geometry.frameHeight,
         child: TableSeatWidget(
           seatNumber: seatIndex,
           player: player,
@@ -954,9 +1093,9 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           smallBlind: widget.smallBlind,
           isDealingCards:
               player != null && _dealingCardsTo.containsKey(player.userId),
-          seatSize: seatSize,
-          cardWidth: cardWidth,
-          cardHeight: cardHeight,
+          seatSize: geometry.seatSize,
+          cardWidth: geometry.cardWidth,
+          cardHeight: geometry.cardHeight,
           lastAction: player?.lastAction,
           avatarUrl: player?.avatarUrl,
         ),
@@ -1029,21 +1168,28 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       return const SizedBox.shrink();
     }
 
-    // Calculate target position (same as seat position but offset for cards)
-    final angle = (2 * pi * seatIndex / widget.maxSeats) - pi / 2;
-    final radiusX = (tableWidth / 2) * 0.96;
-    final radiusY = (tableHeight / 2) * 0.98;
-
-    final targetX = radiusX * cos(angle);
-    final targetY = radiusY * sin(angle);
-
-    // Calculate responsive card dimensions
-    final cardWidth = (tableWidth * 0.058).clamp(28.0, 42.0);
-    final cardHeight = (tableHeight * 0.095).clamp(40.0, 60.0);
-    final seatSize = (tableWidth * 0.13).clamp(60.0, 90.0);
-
-    // Offset second card slightly to the right
-    final cardOffset = (cardNumber - 1) * (cardWidth * 0.57);
+    final geometry = _seatGeometryForIndex(seatIndex, tableWidth, tableHeight);
+    final totalCards = player.holeCards?.length ?? 2;
+    final cardIndex = (cardNumber - 1).clamp(0, totalCards - 1).toInt();
+    final targetCardLeft =
+        geometry.left +
+        _SeatVisualLayout.cardLeftInFrame(
+          cardIndex,
+          totalCards,
+          geometry.frameWidth,
+          geometry.cardWidth,
+        );
+    final targetCardTop =
+        geometry.top +
+        _SeatVisualLayout.cardsTop(
+          geometry.seatSize,
+          _SeatVisualLayout.avatarSize(geometry.seatSize),
+          geometry.cardHeight,
+        );
+    final targetRotation = _SeatVisualLayout.cardFanRotation(
+      cardIndex,
+      totalCards,
+    );
 
     // Check if animation has started (determines position)
     final bool animationStarted = _cardAnimationStarted[player.userId] ?? false;
@@ -1051,21 +1197,23 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeOut,
-      // Start from center, move to player position after animation starts
       left: animationStarted
-          ? (tableWidth / 2) + targetX - (seatSize / 2) + cardOffset
-          : (tableWidth / 2) - (cardWidth / 2),
+          ? targetCardLeft
+          : (tableWidth / 2) - (geometry.cardWidth / 2),
       top: animationStarted
-          ? (tableHeight / 2) + targetY - (seatSize + cardHeight + 8) / 2
-          : (tableHeight / 2) - (cardHeight / 2),
+          ? targetCardTop
+          : (tableHeight / 2) - (geometry.cardHeight / 2),
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 100),
         opacity: 1.0,
-        child: CardWidget(
-          card: card,
-          width: cardWidth,
-          height: cardHeight,
-          isShowdown: false,
+        child: Transform.rotate(
+          angle: targetRotation,
+          child: CardWidget(
+            card: card,
+            width: geometry.cardWidth,
+            height: geometry.cardHeight,
+            isShowdown: false,
+          ),
         ),
       ),
     );

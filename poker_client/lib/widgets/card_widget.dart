@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/card.dart';
 
@@ -15,18 +16,30 @@ class CardWidget extends StatelessWidget {
     this.isShowdown = false,
   });
 
+  static const double _targetAspectRatio = 1.4;
+
   Color get _suitColor => card.isRed ? Colors.red[700]! : Colors.black87;
+
+  double get _resolvedWidth {
+    final widthFromHeight = height > 0 ? height / _targetAspectRatio : width;
+    final resolvedWidth = math.min(width, widthFromHeight);
+    return resolvedWidth > 0 ? resolvedWidth : width;
+  }
+
+  double get _resolvedHeight => _resolvedWidth * _targetAspectRatio;
 
   @override
   Widget build(BuildContext context) {
     final opacity = isShowdown && !card.highlighted ? 0.3 : 1.0;
-    final borderRadius = BorderRadius.circular(width * 0.12);
+    final cardWidth = _resolvedWidth;
+    final cardHeight = _resolvedHeight;
+    final borderRadius = BorderRadius.circular(cardWidth * 0.12);
 
     return Opacity(
       opacity: opacity,
       child: Container(
-        width: width,
-        height: height,
+        width: cardWidth,
+        height: cardHeight,
         margin: const EdgeInsets.symmetric(horizontal: 2),
         decoration: BoxDecoration(
           color: card.faceUp ? Colors.white : null,
@@ -45,10 +58,7 @@ class CardWidget extends StatelessWidget {
           border: card.faceUp
               ? (card.highlighted && isShowdown
                     ? Border.all(color: Colors.amber, width: 2.5)
-                    : Border.all(
-                        color: Colors.grey[300]!,
-                        width: 0.5,
-                      ))
+                    : Border.all(color: Colors.grey[300]!, width: 0.5))
               : Border.all(color: Colors.white70, width: 1),
           boxShadow: [
             BoxShadow(
@@ -59,22 +69,24 @@ class CardWidget extends StatelessWidget {
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: card.faceUp ? _buildFaceUp() : _buildFaceDown(),
+        child: card.faceUp
+            ? _buildFaceUp(cardWidth, cardHeight)
+            : _buildFaceDown(cardWidth),
       ),
     );
   }
 
-  Widget _buildFaceUp() {
-    final rankFontSize = (width * 0.26).clamp(8.0, 18.0);
-    final suitFontSize = (width * 0.22).clamp(7.0, 15.0);
-    final centerSuitSize = (width * 0.45).clamp(14.0, 32.0);
+  Widget _buildFaceUp(double cardWidth, double cardHeight) {
+    final rankFontSize = (cardWidth * 0.26).clamp(8.0, 18.0);
+    final suitFontSize = (cardWidth * 0.22).clamp(7.0, 15.0);
+    final centerSuitSize = (cardWidth * 0.45).clamp(14.0, 32.0);
 
     return Stack(
       children: [
         // Top-left rank + suit
         Positioned(
-          top: height * 0.04,
-          left: width * 0.08,
+          top: cardHeight * 0.04,
+          left: cardWidth * 0.08,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -102,16 +114,13 @@ class CardWidget extends StatelessWidget {
         Center(
           child: Text(
             card.suitStr,
-            style: TextStyle(
-              color: _suitColor,
-              fontSize: centerSuitSize,
-            ),
+            style: TextStyle(color: _suitColor, fontSize: centerSuitSize),
           ),
         ),
         // Bottom-right rank + suit (rotated)
         Positioned(
-          bottom: height * 0.04,
-          right: width * 0.08,
+          bottom: cardHeight * 0.04,
+          right: cardWidth * 0.08,
           child: Transform.rotate(
             angle: 3.14159,
             child: Column(
@@ -142,11 +151,11 @@ class CardWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildFaceDown() {
+  Widget _buildFaceDown(double cardWidth) {
     return Container(
-      margin: EdgeInsets.all(width * 0.08),
+      margin: EdgeInsets.all(cardWidth * 0.08),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(width * 0.06),
+        borderRadius: BorderRadius.circular(cardWidth * 0.06),
         border: Border.all(
           color: Colors.white.withValues(alpha: 0.2),
           width: 0.5,
@@ -154,15 +163,10 @@ class CardWidget extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF303f9f),
-            Color(0xFF1a237e),
-          ],
+          colors: [Color(0xFF303f9f), Color(0xFF1a237e)],
         ),
       ),
-      child: CustomPaint(
-        painter: _DiamondPatternPainter(),
-      ),
+      child: CustomPaint(painter: _DiamondPatternPainter()),
     );
   }
 }
