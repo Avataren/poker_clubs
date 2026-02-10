@@ -96,23 +96,26 @@ python scripts/train.py --num-players 2 --device cuda
 python scripts/train.py --num-players 2 --device cpu
 ```
 
-### Full options
+### Recommended Long Run (Heads-Up, 24GB GPU)
 
 ```bash
 python scripts/train.py \
   --num-players 2 \
-  --num-envs 64 \
-  --episodes 10000000 \
+  --num-envs 512 \
+  --episodes 100000000 \
   --device cuda \
   --batch-size 4096 \
-  --br-train-steps 16 \
-  --as-train-steps 8 \
+  --br-train-steps 12 \
+  --as-train-steps 6 \
   --eta 0.1 \
   --br-lr 0.0001 \
   --as-lr 0.0005 \
-  --eval-every 50000 \
-  --eval-hands 1000 \
-  --checkpoint-every 100000 \
+  --epsilon-start 0.06 \
+  --epsilon-end 0.003 \
+  --epsilon-decay-steps 300000000 \
+  --eval-every 200000 \
+  --eval-hands 5000 \
+  --checkpoint-every 200000 \
   --checkpoint-dir checkpoints \
   --log-dir logs
 ```
@@ -126,6 +129,31 @@ python scripts/train.py --num-players 2 --device cuda --no-amp
 
 ```bash
 python scripts/train.py --resume checkpoints/checkpoint_latest.pt --device cuda
+```
+
+### Milestone Evaluation (High Confidence)
+
+Use lightweight in-training eval for trend tracking, then run high-sample
+milestone eval on 1M-episode checkpoints:
+
+```bash
+python scripts/milestone_eval.py \
+  --checkpoint-dir checkpoints \
+  --device cuda \
+  --num-hands 100000 \
+  --milestone-every 1000000 \
+  --min-episode 1000000 \
+  --csv logs/milestones.csv \
+  --best-path checkpoints/checkpoint_best.pt \
+  --min-tag-lb95-for-promotion 0.0
+```
+
+You can re-run this command while training; it skips milestones already written
+to the CSV and only evaluates new checkpoints.
+
+If you are using `run_eval.sh`, run it in a second terminal while training:
+```bash
+./run_eval.sh
 ```
 
 ### Recommended training progression
