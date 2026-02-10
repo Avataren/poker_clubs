@@ -42,15 +42,24 @@ class ActionHistoryLSTM(nn.Module):
         embedded = self.embed(action_seq)  # (batch, seq, embed_dim)
 
         if lengths is not None:
+            # pack_padded_sequence requires all lengths > 0.
+            # For entries with length 0, clamp to 1 and zero-out the result.
+            zero_mask = lengths <= 0  # (batch,)
+            safe_lengths = lengths.clamp(min=1)
+
             packed = nn.utils.rnn.pack_padded_sequence(
-                embedded, lengths.cpu(), batch_first=True, enforce_sorted=False
+                embedded, safe_lengths.cpu(), batch_first=True, enforce_sorted=False
             )
             _, (h_n, _) = self.lstm(packed)
+            result = h_n[-1]  # (batch, hidden_dim)
+
+            # Zero out entries that had no history
+            if zero_mask.any():
+                result = result.masked_fill(zero_mask.unsqueeze(-1), 0.0)
+            return result
         else:
             _, (h_n, _) = self.lstm(embedded)
-
-        # h_n: (num_layers, batch, hidden_dim) -> take last layer
-        return h_n[-1]
+            return h_n[-1]
 
 
 class ResidualBlock(nn.Module):

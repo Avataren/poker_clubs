@@ -74,6 +74,7 @@ class SelfPlayWorker:
 
         # Per-env state tracking
         self.prev_obs = [None] * config.num_envs
+        self.prev_mask = [None] * config.num_envs
         self.prev_action = [None] * config.num_envs
         self.prev_player = [None] * config.num_envs
         self.action_histories: list[list[list[np.ndarray]]] = [
@@ -99,6 +100,7 @@ class SelfPlayWorker:
             self.action_histories[i] = [[] for _ in range(self.config.num_players)]
             player, obs, mask = results[i]
             self.prev_obs[i] = obs
+            self.prev_mask[i] = mask
             self.prev_player[i] = player
             self.prev_action[i] = None
 
@@ -120,8 +122,8 @@ class SelfPlayWorker:
                 ah_t = torch.tensor(ah_padded, device=self.device).unsqueeze(0)
                 ah_len_t = torch.tensor([ah_len], device=self.device)
 
-                # Get legal mask from env
-                mask = self._get_legal_mask(env_idx)
+                # Get legal mask from tracked state
+                mask = self.prev_mask[env_idx]
                 mask_t = torch.tensor(mask, device=self.device).unsqueeze(0)
 
                 # Select action based on strategy assignment
@@ -190,27 +192,17 @@ class SelfPlayWorker:
 
                 if done:
                     env_done[env_idx] = True
-                    # Reset for next episode
+                    # Prepare env for next call (reset state)
                     player, obs, mask = self.env.reset_env(env_idx)
                     self.action_histories[env_idx] = [[] for _ in range(self.config.num_players)]
                     self.prev_obs[env_idx] = obs
+                    self.prev_mask[env_idx] = mask
                     self.prev_player[env_idx] = player
                     self.prev_action[env_idx] = None
-                    # Re-assign strategies
-                    self.use_as[env_idx] = np.random.random(self.config.num_players) < self.config.eta
-                    env_done[env_idx] = False  # allow continued play
                 else:
                     self.prev_obs[env_idx] = next_obs
+                    self.prev_mask[env_idx] = next_mask
                     self.prev_player[env_idx] = next_player
                     self.prev_action[env_idx] = action
 
         return total_steps
-
-    def _get_legal_mask(self, env_idx: int) -> np.ndarray:
-        """Get legal actions mask for current state of env."""
-        # The mask was returned from the last step/reset
-        # We store it in prev_obs tracking - but actually we need it separately
-        # For simplicity, we'll just pass the mask through the step result
-        # This is already handled by the prev obs / reset flow
-        # Return a default all-legal mask (actual masking is done in step returns)
-        return np.ones(8, dtype=bool)
