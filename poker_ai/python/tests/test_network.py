@@ -52,7 +52,7 @@ def test_br_net_action_selection():
     net = BestResponseNet(config)
 
     obs = torch.randn(1, 441)
-    action_history = torch.randn(1, 10, 7)
+    action_history = torch.randn(1, config.max_history_len, 7)
     history_lengths = torch.tensor([10])
     legal_mask = torch.tensor([[False, True, False, False, True, False, False, True]])
 
@@ -69,7 +69,7 @@ def test_as_net_action_probs():
     net = AverageStrategyNet(config)
 
     obs = torch.randn(1, 441)
-    action_history = torch.randn(1, 5, 7)
+    action_history = torch.randn(1, config.max_history_len, 7)
     history_lengths = torch.tensor([5])
     legal_mask = torch.ones(1, config.num_actions, dtype=torch.bool)
 
@@ -80,19 +80,18 @@ def test_as_net_action_probs():
     assert (probs >= 0).all()
 
 
-def test_lstm_empty_sequence():
-    """Test LSTM handles empty sequences."""
+def test_history_encoder_zero_input():
+    """Test history MLP handles zero-padded input."""
     from poker_ai.config.hyperparams import NFSPConfig
-    from poker_ai.model.network import ActionHistoryLSTM
+    from poker_ai.model.network import ActionHistoryMLP
 
     config = NFSPConfig()
-    lstm = ActionHistoryLSTM(config)
+    mlp = ActionHistoryMLP(config)
 
-    empty_seq = torch.zeros(2, 0, 7)
-    output = lstm(empty_seq)
+    zero_seq = torch.zeros(2, config.max_history_len, 7)
+    output = mlp(zero_seq)
 
     assert output.shape == (2, config.lstm_hidden_dim)
-    assert torch.allclose(output, torch.zeros_like(output))
 
 
 def test_parameter_count():

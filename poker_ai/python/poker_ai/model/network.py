@@ -7,22 +7,22 @@ import torch.nn.functional as F
 from poker_ai.config.hyperparams import NFSPConfig
 
 
-class ActionHistoryLSTM(nn.Module):
-    """LSTM for encoding action history sequences."""
+class ActionHistoryMLP(nn.Module):
+    """MLP for encoding flattened action history."""
 
     def __init__(self, config: NFSPConfig):
         super().__init__()
-        self.embed = nn.Sequential(
-            nn.Linear(config.lstm_input_dim, config.lstm_embed_dim),
+        flat_input = config.max_history_len * config.lstm_input_dim  # 30 * 7 = 210
+        hidden = config.lstm_hidden_dim  # reuse same output dim (256)
+        self.net = nn.Sequential(
+            nn.Linear(flat_input, hidden),
+            nn.LayerNorm(hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.LayerNorm(hidden),
             nn.ReLU(),
         )
-        self.lstm = nn.LSTM(
-            input_size=config.lstm_embed_dim,
-            hidden_size=config.lstm_hidden_dim,
-            num_layers=config.lstm_layers,
-            batch_first=True,
-        )
-        self.hidden_dim = config.lstm_hidden_dim
+        self.hidden_dim = hidden
 
     def forward(
         self, action_seq: torch.Tensor, lengths: torch.Tensor | None = None
@@ -31,35 +31,12 @@ class ActionHistoryLSTM(nn.Module):
 
         Args:
             action_seq: (batch, max_seq_len, 7) action features
-            lengths: (batch,) actual sequence lengths for packing
+            lengths: ignored (kept for API compatibility)
 
         Returns:
-            (batch, lstm_hidden_dim) final hidden state
+            (batch, hidden_dim) encoded history
         """
-        if action_seq.size(1) == 0:
-            return torch.zeros(action_seq.size(0), self.hidden_dim, device=action_seq.device)
-
-        embedded = self.embed(action_seq)  # (batch, seq, embed_dim)
-
-        if lengths is not None:
-            # pack_padded_sequence requires all lengths > 0.
-            # For entries with length 0, clamp to 1 and zero-out the result.
-            zero_mask = lengths <= 0  # (batch,)
-            safe_lengths = lengths.clamp(min=1)
-
-            packed = nn.utils.rnn.pack_padded_sequence(
-                embedded, safe_lengths.cpu(), batch_first=True, enforce_sorted=False
-            )
-            _, (h_n, _) = self.lstm(packed)
-            result = h_n[-1]  # (batch, hidden_dim)
-
-            # Zero out entries that had no history
-            if zero_mask.any():
-                result = result.masked_fill(zero_mask.unsqueeze(-1), 0.0)
-            return result
-        else:
-            _, (h_n, _) = self.lstm(embedded)
-            return h_n[-1]
+        return self.net(action_seq.reshape(action_seq.size(0), -1))
 
 
 class ResidualBlock(nn.Module):
@@ -93,7 +70,7 @@ class PokerNet(nn.Module):
         # 364 (cards) + 25 (game state) + 52 (hand strength) = 441
         static_input = 441
 
-        # Input layer combines static features + LSTM output
+        # Input layer combines static features + history encoding
         total_input = static_input + config.lstm_hidden_dim
 
         # Shared trunk
@@ -184,7 +161,7 @@ class BestResponseNet(nn.Module):
     def __init__(self, config: NFSPConfig):
         super().__init__()
         self.net = PokerNet(config)
-        self.lstm = ActionHistoryLSTM(config)
+        self.history_encoder = ActionHistoryMLP(config)
 
     def forward(
         self,
@@ -193,7 +170,7 @@ class BestResponseNet(nn.Module):
         history_lengths: torch.Tensor | None,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
-        lstm_hidden = self.lstm(action_history, history_lengths)
+        lstm_hidden = self.history_encoder(action_history, history_lengths)
         return self.net.q_values(obs, lstm_hidden, legal_mask)
 
     def select_action(
@@ -226,7 +203,7 @@ class AverageStrategyNet(nn.Module):
     def __init__(self, config: NFSPConfig):
         super().__init__()
         self.net = PokerNet(config)
-        self.lstm = ActionHistoryLSTM(config)
+        self.history_encoder = ActionHistoryMLP(config)
 
     def forward(
         self,
@@ -236,7 +213,7 @@ class AverageStrategyNet(nn.Module):
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Returns action probabilities."""
-        lstm_hidden = self.lstm(action_history, history_lengths)
+        lstm_hidden = self.history_encoder(action_history, history_lengths)
         return self.net.policy(obs, lstm_hidden, legal_mask)
 
     def forward_logits(
@@ -247,7 +224,7 @@ class AverageStrategyNet(nn.Module):
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Returns raw masked logits (for numerically stable cross-entropy)."""
-        lstm_hidden = self.lstm(action_history, history_lengths)
+        lstm_hidden = self.history_encoder(action_history, history_lengths)
         logits, _ = self.net.forward(obs, lstm_hidden, legal_mask)
         return logits
 
