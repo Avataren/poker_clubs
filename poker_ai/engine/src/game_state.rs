@@ -31,6 +31,7 @@ impl Phase {
 #[derive(Debug, Clone)]
 pub struct SimTable {
     pub num_players: usize,
+    pub starting_stack: i64,
     pub stacks: Vec<i64>,
     pub hole_cards: Vec<[Card; 2]>,
     pub community_cards: Vec<Card>,
@@ -59,6 +60,7 @@ impl SimTable {
         assert!(num_players >= 2 && num_players <= 9);
         Self {
             num_players,
+            starting_stack,
             stacks: vec![starting_stack; num_players],
             hole_cards: Vec::new(),
             community_cards: Vec::new(),
@@ -80,6 +82,15 @@ impl SimTable {
             players_acted_this_round: vec![false; num_players],
             rewards: vec![0.0; num_players],
             initial_stacks: vec![starting_stack; num_players],
+        }
+    }
+
+    /// Rebuy busted players to the configured starting stack.
+    pub fn rebuy_busted_players(&mut self) {
+        for i in 0..self.num_players {
+            if self.stacks[i] <= 0 {
+                self.stacks[i] = self.starting_stack;
+            }
         }
     }
 
@@ -639,5 +650,22 @@ impl SimTable {
             .iter()
             .map(|ar| ar.encode(self.num_players))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SimTable;
+
+    #[test]
+    fn test_rebuy_busted_players() {
+        let mut table = SimTable::new(2, 10000, 50, 100);
+        table.stacks[0] = 0;
+        table.stacks[1] = 25000;
+
+        table.rebuy_busted_players();
+
+        assert_eq!(table.stacks[0], 10000);
+        assert_eq!(table.stacks[1], 25000);
     }
 }

@@ -10,8 +10,8 @@ from poker_ai.model.state_encoder import (
     GAME_STATE_START, GAME_STATE_END,
     HAND_STRENGTH_START, HAND_STRENGTH_END,
 )
-from poker_ai.training.circular_buffer import CircularBuffer, Transition
-from poker_ai.training.reservoir import ReservoirBuffer, SLTransition
+from poker_ai.training.circular_buffer import CircularBuffer
+from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.config.hyperparams import NFSPConfig
 
 
@@ -91,6 +91,7 @@ class SelfPlayWorker:
         self.num_players = config.num_players
         self.num_envs = config.num_envs
         self.max_hist = config.max_history_len
+        self.use_cuda_transfer = self.device.type == "cuda"
 
         # Per-env state (always active)
         self.use_as = np.zeros((config.num_envs, config.num_players), dtype=bool)
@@ -105,37 +106,71 @@ class SelfPlayWorker:
         self.ah_lens = np.zeros(
             (config.num_envs, config.num_players), dtype=np.int64
         )
+        # Next write slot per env/player in the ring.
+        self.ah_pos = np.zeros(
+            (config.num_envs, config.num_players), dtype=np.int64
+        )
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
         """Get (padded_history, length) for an env/player."""
-        return self.ah_arrays[env, player], int(self.ah_lens[env, player])
+        env_idx = np.array([env], dtype=np.intp)
+        player_idx = np.array([player], dtype=np.intp)
+        histories, lengths = self._gather_histories(env_idx, player_idx)
+        return histories[0], int(lengths[0])
+
+    def _to_device(self, array: np.ndarray) -> torch.Tensor:
+        """Move a numpy array to device, enabling async copies on CUDA via pinned memory."""
+        tensor = torch.from_numpy(array)
+        if self.use_cuda_transfer:
+            tensor = tensor.pin_memory()
+        return tensor.to(self.device, non_blocking=self.use_cuda_transfer)
+
+    def _gather_histories(
+        self, env_indices: np.ndarray, players: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Gather chronological [max_hist, 7] histories for env/player pairs."""
+        n = len(env_indices)
+        max_hist = self.max_hist
+        out = np.zeros((n, max_hist, 7), dtype=np.float32)
+        lengths = self.ah_lens[env_indices, players].astype(np.int64, copy=True)
+        if n == 0:
+            return out, lengths
+
+        starts = (self.ah_pos[env_indices, players] - lengths) % max_hist
+        offsets = np.arange(max_hist, dtype=np.int64)
+        gather_idx = (starts[:, None] + offsets[None, :]) % max_hist
+        ring = self.ah_arrays[env_indices, players]
+        gathered = ring[np.arange(n)[:, None], gather_idx]
+        valid = offsets[None, :] < lengths[:, None]
+        out[valid] = gathered[valid]
+        return out, lengths
 
     def _append_actions_all(self, action_records: np.ndarray):
-        """Append action records for all envs. action_records: (n, 7)."""
+        """Append action records for all envs in O(n * players) time."""
         max_hist = self.max_hist
         num_players = self.num_players
         for i in range(len(action_records)):
             rec = action_records[i]
             for p in range(num_players):
-                length = int(self.ah_lens[i, p])
-                if length < max_hist:
-                    self.ah_arrays[i, p, length] = rec
-                    self.ah_lens[i, p] = length + 1
-                else:
-                    self.ah_arrays[i, p, :-1] = self.ah_arrays[i, p, 1:]
-                    self.ah_arrays[i, p, -1] = rec
+                pos = int(self.ah_pos[i, p])
+                self.ah_arrays[i, p, pos] = rec
+                if self.ah_lens[i, p] < max_hist:
+                    self.ah_lens[i, p] += 1
+                self.ah_pos[i, p] = (pos + 1) % max_hist
 
     def _reset_history(self, env: int):
         """Reset action histories for an env."""
         self.ah_arrays[env] = 0.0
         self.ah_lens[env] = 0
+        self.ah_pos[env] = 0
 
     def _init_envs(self):
         results = self.env.reset_all()
         self.use_as[:] = np.random.random((self.num_envs, self.num_players)) < self.config.eta
         self.ah_arrays[:] = 0.0
         self.ah_lens[:] = 0
+        self.ah_pos[:] = 0
         for i in range(self.num_envs):
             player, obs, mask = results[i]
             self.prev_obs[i] = obs
@@ -151,6 +186,7 @@ class SelfPlayWorker:
         n = self.num_envs
         num_players = self.num_players
         max_hist = self.max_hist
+        env_idx = np.arange(n, dtype=np.intp)
         total_steps = 0
         completed_episodes = 0
 
@@ -160,22 +196,21 @@ class SelfPlayWorker:
             static_obs = extract_static_features_batch(self.prev_obs)
 
             # Build action history batch: (n, max_hist, 7)
-            ah_batch = self.ah_arrays[np.arange(n), players]  # (n, max_hist, 7)
-            ah_lens_batch = self.ah_lens[np.arange(n), players]  # (n,)
+            ah_batch, ah_lens_batch = self._gather_histories(env_idx, players)
 
-            obs_t = torch.from_numpy(static_obs).to(self.device, non_blocking=True)
-            ah_t = torch.from_numpy(ah_batch).to(self.device, non_blocking=True)
-            ah_len_t = torch.from_numpy(ah_lens_batch).to(self.device, non_blocking=True)
-            mask_t = torch.from_numpy(self.prev_mask.copy()).to(self.device, non_blocking=True)
+            obs_t = self._to_device(static_obs)
+            ah_t = self._to_device(ah_batch)
+            ah_len_t = self._to_device(ah_lens_batch)
+            mask_t = self._to_device(self.prev_mask.copy())
 
             # Classify AS vs BR
-            is_as = self.use_as[np.arange(n), players]
+            is_as = self.use_as[env_idx, players]
             as_idx = np.where(is_as)[0]
             br_idx = np.where(~is_as)[0]
 
             # Batched GPU inference
             actions_np = np.empty(n, dtype=np.int64)
-            with torch.no_grad():
+            with torch.inference_mode():
                 if len(as_idx) > 0:
                     actions_np[as_idx] = self.as_net.select_action(
                         obs_t[as_idx], ah_t[as_idx], ah_len_t[as_idx], mask_t[as_idx]
@@ -203,6 +238,11 @@ class SelfPlayWorker:
             # Compute next static features in batch
             next_static = extract_static_features_batch(next_obs_batch)
 
+            # Update action histories with the just-taken action before computing next state histories.
+            action_records = _ACTION_TEMPLATES[actions_np].copy()  # (n, 7)
+            action_records[:, 0] = pre_players / max(1, num_players - 1)
+            self._append_actions_all(action_records)
+
             # Build next action history arrays (vectorized where possible)
             dones_arr = np.array(dones, dtype=bool)
             next_ah_all = np.zeros((n, max_hist, 7), dtype=np.float32)
@@ -211,11 +251,14 @@ class SelfPlayWorker:
             if alive.any():
                 alive_idx = np.where(alive)[0]
                 alive_next_p = next_players_arr[alive_idx]
-                next_ah_all[alive_idx] = self.ah_arrays[alive_idx, alive_next_p]
-                next_ah_lens_all[alive_idx] = self.ah_lens[alive_idx, alive_next_p]
+                alive_histories, alive_lengths = self._gather_histories(
+                    alive_idx, alive_next_p
+                )
+                next_ah_all[alive_idx] = alive_histories
+                next_ah_lens_all[alive_idx] = alive_lengths
 
             # Gather per-player rewards
-            player_rewards = rewards_batch[np.arange(n), pre_players]
+            player_rewards = rewards_batch[env_idx, pre_players]
 
             # Push BR transitions in batch (for non-AS envs)
             br_mask = ~is_as
@@ -235,22 +278,14 @@ class SelfPlayWorker:
                     legal_mask=pre_mask[br_sel],
                 )
 
-            # Push AS transitions in batch
-            as_mask_arr = is_as
-            if as_mask_arr.any():
-                as_sel = np.where(as_mask_arr)[0]
+                # NFSP supervised buffer should train on BR behavior-policy actions.
                 self.as_buffer.push_batch(
-                    obs=pre_static[as_sel],
-                    action_history=pre_ah[as_sel],
-                    history_length=pre_ah_lens[as_sel],
-                    actions=actions_np[as_sel],
-                    legal_mask=pre_mask[as_sel],
+                    obs=pre_static[br_sel],
+                    action_history=pre_ah[br_sel],
+                    history_length=pre_ah_lens[br_sel],
+                    actions=actions_np[br_sel],
+                    legal_mask=pre_mask[br_sel],
                 )
-
-            # Update action histories for all envs (vectorized)
-            action_records = _ACTION_TEMPLATES[actions_np].copy()  # (n, 7)
-            action_records[:, 0] = pre_players / max(1, num_players - 1)
-            self._append_actions_all(action_records)
 
             # Update state for alive envs
             if alive.any():

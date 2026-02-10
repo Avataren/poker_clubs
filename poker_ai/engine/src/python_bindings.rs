@@ -35,6 +35,7 @@ impl PokerEnv {
     /// Reset and start a new hand. Returns (current_player, observation, legal_actions_mask).
     fn reset(&mut self) -> PyResult<(usize, Vec<f32>, Vec<bool>)> {
         self.table.advance_dealer();
+        self.table.rebuy_busted_players();
         let current = self.table.start_hand(&mut self.rng);
         let obs = self.table.encode_observation(current);
         let mask = self.table.legal_actions_mask();
@@ -214,13 +215,7 @@ impl BatchPokerEnv {
     fn reset_env(&mut self, env_idx: usize) -> PyResult<(usize, Vec<f32>, Vec<bool>)> {
         let (table, rng) = &mut self.envs[env_idx];
         table.advance_dealer();
-        // Reset stacks if busted
-        let starting_stack = table.initial_stacks[0]; // use first player's initial
-        for i in 0..table.num_players {
-            if table.stacks[i] <= 0 {
-                table.stacks[i] = starting_stack;
-            }
-        }
+        table.rebuy_busted_players();
         let current = table.start_hand(rng);
         let obs = table.encode_observation(current);
         let mask = table.legal_actions_mask().to_vec();
@@ -284,12 +279,7 @@ impl BatchPokerEnv {
         for env_idx in env_indices {
             let (table, rng) = &mut self.envs[env_idx];
             table.advance_dealer();
-            let starting_stack = table.initial_stacks[0];
-            for i in 0..table.num_players {
-                if table.stacks[i] <= 0 {
-                    table.stacks[i] = starting_stack;
-                }
-            }
+            table.rebuy_busted_players();
             let current = table.start_hand(rng);
             let obs = table.encode_observation(current);
             let mask = table.legal_actions_mask();

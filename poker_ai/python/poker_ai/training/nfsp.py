@@ -13,8 +13,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from poker_ai.config.hyperparams import NFSPConfig
 from poker_ai.model.network import BestResponseNet, AverageStrategyNet
-from poker_ai.training.circular_buffer import CircularBuffer, Transition
-from poker_ai.training.reservoir import ReservoirBuffer, SLTransition
+from poker_ai.training.circular_buffer import CircularBuffer
+from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record
 from poker_ai.env.poker_env import PokerEnv
 
@@ -25,8 +25,15 @@ class NFSPTrainer:
     def __init__(self, config: NFSPConfig):
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
+        self.use_cuda_transfer = self.device.type == "cuda"
+        self.use_amp = self.device.type == "cuda"
+        self.amp_dtype = (
+            torch.bfloat16 if self.use_amp and torch.cuda.is_bf16_supported() else torch.float16
+        )
         torch.set_float32_matmul_precision("high")
         print(f"Using device: {self.device}")
+        if self.use_amp:
+            print(f"AMP enabled: dtype={self.amp_dtype}")
         print(f"Model: hidden={config.hidden_dim}, residual={config.residual_dim}, "
               f"lstm_hidden={config.lstm_hidden_dim}, batch={config.batch_size}")
 
@@ -53,6 +60,8 @@ class NFSPTrainer:
         # Optimizers
         self.br_optimizer = torch.optim.Adam(self.br_net.parameters(), lr=config.br_lr)
         self.as_optimizer = torch.optim.Adam(self.as_net.parameters(), lr=config.as_lr)
+        self.br_scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.as_scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
         # Replay buffers
         self.br_buffer = CircularBuffer(config.br_buffer_size, max_seq_len=config.max_history_len)
@@ -81,6 +90,13 @@ class NFSPTrainer:
             self.config.epsilon_end - self.config.epsilon_start
         )
 
+    def _to_device(self, array: np.ndarray) -> torch.Tensor:
+        """Move numpy array to training device with optional pinned-memory staging."""
+        tensor = torch.from_numpy(array)
+        if self.use_cuda_transfer:
+            tensor = tensor.pin_memory()
+        return tensor.to(self.device, non_blocking=self.use_cuda_transfer)
+
     def train_br_step(self) -> float:
         """One DQN training step on Best Response network."""
         if len(self.br_buffer) < self.config.batch_size:
@@ -91,36 +107,48 @@ class NFSPTrainer:
          next_ah_np, next_ah_len_np, next_mask_np, dones_np, masks_np
         ) = self.br_buffer.sample_arrays(self.config.batch_size)
 
-        obs = torch.from_numpy(obs_np).to(self.device, non_blocking=True)
-        ah = torch.from_numpy(ah_np).to(self.device, non_blocking=True)
-        ah_len = torch.from_numpy(ah_len_np).to(self.device, non_blocking=True)
-        actions = torch.from_numpy(actions_np).to(self.device, non_blocking=True)
-        rewards = torch.from_numpy(rewards_np).to(self.device, non_blocking=True)
-        next_obs = torch.from_numpy(next_obs_np).to(self.device, non_blocking=True)
-        next_ah = torch.from_numpy(next_ah_np).to(self.device, non_blocking=True)
-        next_ah_len = torch.from_numpy(next_ah_len_np).to(self.device, non_blocking=True)
-        next_mask = torch.from_numpy(next_mask_np).to(self.device, non_blocking=True)
-        dones = torch.from_numpy(dones_np).to(self.device, non_blocking=True)
-        masks = torch.from_numpy(masks_np).to(self.device, non_blocking=True)
+        obs = self._to_device(obs_np)
+        ah = self._to_device(ah_np)
+        ah_len = self._to_device(ah_len_np)
+        actions = self._to_device(actions_np)
+        rewards = self._to_device(rewards_np)
+        next_obs = self._to_device(next_obs_np)
+        next_ah = self._to_device(next_ah_np)
+        next_ah_len = self._to_device(next_ah_len_np)
+        next_mask = self._to_device(next_mask_np)
+        dones = self._to_device(dones_np)
+        masks = self._to_device(masks_np)
 
-        # Current Q-values
-        q_values = self.br_net(obs, ah, ah_len, masks)
-        q_taken = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        with torch.autocast(
+            device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
+        ):
+            # Current Q-values
+            q_values = self.br_net(obs, ah, ah_len, masks)
+            q_taken = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        # Target Q-values (Double DQN)
-        with torch.no_grad():
-            next_q_online = self.br_net(next_obs, next_ah, next_ah_len, next_mask)
-            next_actions = next_q_online.argmax(dim=-1)
-            next_q_target = self.br_target(next_obs, next_ah, next_ah_len, next_mask)
-            next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            target = rewards + self.config.gamma * next_q * (1 - dones)
+            # Target Q-values (Double DQN)
+            with torch.no_grad():
+                next_q_online = self.br_net(next_obs, next_ah, next_ah_len, next_mask)
+                next_actions = next_q_online.argmax(dim=-1)
+                next_q_target = self.br_target(next_obs, next_ah, next_ah_len, next_mask)
+                next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
+                # Terminal states have no bootstrap term; avoid (-inf * 0) -> NaN.
+                next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
+                target = rewards + self.config.gamma * next_q
 
-        loss = F.smooth_l1_loss(q_taken, target)
+            loss = F.smooth_l1_loss(q_taken, target)
 
-        self.br_optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0)
-        self.br_optimizer.step()
+        self.br_optimizer.zero_grad(set_to_none=True)
+        if self.use_amp:
+            self.br_scaler.scale(loss).backward()
+            self.br_scaler.unscale_(self.br_optimizer)
+            torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0)
+            self.br_scaler.step(self.br_optimizer)
+            self.br_scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0)
+            self.br_optimizer.step()
 
         self.br_updates += 1
         return loss.item()
@@ -133,19 +161,29 @@ class NFSPTrainer:
         # Sample directly as numpy arrays
         obs_np, ah_np, ah_len_np, actions_np, masks_np = self.as_buffer.sample_arrays(self.config.batch_size)
 
-        obs = torch.from_numpy(obs_np).to(self.device, non_blocking=True)
-        ah = torch.from_numpy(ah_np).to(self.device, non_blocking=True)
-        ah_len = torch.from_numpy(ah_len_np).to(self.device, non_blocking=True)
-        actions = torch.from_numpy(actions_np).to(self.device, non_blocking=True)
-        masks = torch.from_numpy(masks_np).to(self.device, non_blocking=True)
+        obs = self._to_device(obs_np)
+        ah = self._to_device(ah_np)
+        ah_len = self._to_device(ah_len_np)
+        actions = self._to_device(actions_np)
+        masks = self._to_device(masks_np)
 
-        logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
-        loss = F.cross_entropy(logits, actions)
+        with torch.autocast(
+            device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
+        ):
+            logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
+            loss = F.cross_entropy(logits, actions)
 
-        self.as_optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0)
-        self.as_optimizer.step()
+        self.as_optimizer.zero_grad(set_to_none=True)
+        if self.use_amp:
+            self.as_scaler.scale(loss).backward()
+            self.as_scaler.unscale_(self.as_optimizer)
+            torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0)
+            self.as_scaler.step(self.as_optimizer)
+            self.as_scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0)
+            self.as_optimizer.step()
 
         self.as_updates += 1
         return loss.item()
@@ -162,7 +200,14 @@ class NFSPTrainer:
         print(f"BR buffer: {self.config.br_buffer_size}, AS buffer: {self.config.as_buffer_size}")
 
         start_time = time.time()
-        episode_count = 0
+        episode_count = self.total_episodes
+        log_every = 10000
+        next_log = ((episode_count // log_every) + 1) * log_every
+        next_eval = ((episode_count // self.config.eval_every) + 1) * self.config.eval_every
+        next_checkpoint = (
+            ((episode_count // self.config.checkpoint_every) + 1) * self.config.checkpoint_every
+        )
+        train_rounds = episode_count // self.config.num_envs
 
         while episode_count < self.config.total_episodes:
             epsilon = self.get_epsilon()
@@ -186,12 +231,12 @@ class NFSPTrainer:
                 self.writer.add_scalar("loss/as", as_loss, self.total_steps)
 
             # Update target network
-            train_rounds = episode_count // self.config.num_envs
+            train_rounds += 1
             if train_rounds % self.config.target_update_every == 0:
                 self.update_target_network()
 
             # Logging
-            if episode_count % 10000 == 0:
+            if episode_count >= next_log:
                 elapsed = time.time() - start_time
                 eps_per_sec = episode_count / max(elapsed, 1)
                 print(
@@ -203,14 +248,18 @@ class NFSPTrainer:
                 self.writer.add_scalar("meta/episodes", episode_count, self.total_steps)
                 self.writer.add_scalar("buffer/br_size", len(self.br_buffer), self.total_steps)
                 self.writer.add_scalar("buffer/as_size", len(self.as_buffer), self.total_steps)
+                while episode_count >= next_log:
+                    next_log += log_every
 
             # Evaluation
-            if episode_count % self.config.eval_every == 0:
-                self.evaluate(episode_count)
+            while episode_count >= next_eval:
+                self.evaluate(next_eval)
+                next_eval += self.config.eval_every
 
             # Checkpointing
-            if episode_count % self.config.checkpoint_every == 0:
-                self.save_checkpoint(episode_count)
+            while episode_count >= next_checkpoint:
+                self.save_checkpoint(next_checkpoint)
+                next_checkpoint += self.config.checkpoint_every
 
         print(f"Training complete! Total episodes: {episode_count:,}")
         self.save_checkpoint(episode_count)
@@ -300,6 +349,9 @@ class NFSPTrainer:
             "br_optimizer": self.br_optimizer.state_dict(),
             "as_optimizer": self.as_optimizer.state_dict(),
         }
+        if self.use_amp:
+            checkpoint["br_scaler"] = self.br_scaler.state_dict()
+            checkpoint["as_scaler"] = self.as_scaler.state_dict()
         torch.save(checkpoint, path / f"checkpoint_{episode}.pt")
         torch.save(checkpoint, path / "checkpoint_latest.pt")
         print(f"  Saved checkpoint at episode {episode:,}")
@@ -311,6 +363,11 @@ class NFSPTrainer:
         self._unwrap(self.as_net).load_state_dict(checkpoint["as_net"])
         self.br_optimizer.load_state_dict(checkpoint["br_optimizer"])
         self.as_optimizer.load_state_dict(checkpoint["as_optimizer"])
+        if self.use_amp:
+            if "br_scaler" in checkpoint:
+                self.br_scaler.load_state_dict(checkpoint["br_scaler"])
+            if "as_scaler" in checkpoint:
+                self.as_scaler.load_state_dict(checkpoint["as_scaler"])
         self.total_steps = checkpoint["total_steps"]
         self.total_episodes = checkpoint["episode"]
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
