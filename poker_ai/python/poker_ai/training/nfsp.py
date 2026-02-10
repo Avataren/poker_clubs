@@ -285,13 +285,16 @@ class NFSPTrainer:
         """Evaluate AS network vs baselines."""
         vs_random = self._eval_vs_random(num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs_caller(num_hands=self.config.eval_hands)
+        vs_tag = self._eval_vs_tag(num_hands=self.config.eval_hands)
 
         print(
             f"  Eval @ {episode:,}: "
             f"vs Random: {vs_random.bb100:+.2f} +/- {vs_random.ci95:.2f} bb/100 "
             f"(95% CI, n={vs_random.num_hands}) | "
             f"vs Caller: {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f} bb/100 "
-            f"(95% CI, n={vs_caller.num_hands})"
+            f"(95% CI, n={vs_caller.num_hands}) | "
+            f"vs TAG: {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100 "
+            f"(95% CI, n={vs_tag.num_hands})"
         )
         self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
         self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
@@ -301,6 +304,10 @@ class NFSPTrainer:
         self.writer.add_scalar("eval/vs_caller_ci95", vs_caller.ci95, episode)
         self.writer.add_scalar("eval/vs_caller_seat0_bb100", vs_caller.seat0_bb100, episode)
         self.writer.add_scalar("eval/vs_caller_seat1_bb100", vs_caller.seat1_bb100, episode)
+        self.writer.add_scalar("eval/vs_tag_bb100", vs_tag.bb100, episode)
+        self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
+        self.writer.add_scalar("eval/vs_tag_seat0_bb100", vs_tag.seat0_bb100, episode)
+        self.writer.add_scalar("eval/vs_tag_seat1_bb100", vs_tag.seat1_bb100, episode)
 
     def _eval_vs_random(self, num_hands: int = 1000) -> EvalStats:
         """Evaluate AS network vs random player (heads-up)."""
@@ -309,6 +316,68 @@ class NFSPTrainer:
     def _eval_vs_caller(self, num_hands: int = 1000) -> EvalStats:
         """Evaluate AS network vs calling station."""
         return self._eval_heads_up(opponent="caller", num_hands=num_hands)
+
+    def _eval_vs_tag(self, num_hands: int = 1000) -> EvalStats:
+        """Evaluate AS network vs tight-aggressive scripted baseline."""
+        return self._eval_heads_up(opponent="tag", num_hands=num_hands)
+
+    def _select_baseline_action(self, opponent: str, obs: np.ndarray, mask: np.ndarray) -> int:
+        """Select action for baseline opponent policy."""
+        legal = np.where(mask)[0]
+        if len(legal) == 0:
+            return 1
+
+        if opponent == "random":
+            return int(np.random.choice(legal))
+        if opponent == "caller":
+            return 1 if mask[1] else int(legal[0])
+        if opponent != "tag":
+            raise ValueError(f"Unknown opponent policy: {opponent}")
+
+        # Tight-aggressive baseline:
+        # - folds weak hands to pressure,
+        # - calls medium hands,
+        # - raises strong hands with larger sizes when available.
+        phase_oh = obs[364:370]
+        phase = int(np.argmax(phase_oh))  # 0=preflop
+        to_call_ratio = float(obs[376])  # normalized to [0, 1] from internal [0, 5]
+        hand_rank = float(obs[517])      # postflop normalized hand rank
+        preflop_strength = float(obs[518])
+
+        if phase == 0:
+            strength = preflop_strength
+        else:
+            strength = max(hand_rank, 0.6 * preflop_strength)
+
+        if strength >= 0.72:
+            for action in (6, 5, 4, 3, 2, 7, 1):
+                if mask[action]:
+                    return action
+        elif strength >= 0.58:
+            if to_call_ratio <= 0.20:
+                for action in (4, 3, 2, 1):
+                    if mask[action]:
+                        return action
+            if mask[1]:
+                return 1
+            if mask[0]:
+                return 0
+        elif strength >= 0.48:
+            if to_call_ratio <= 0.08 and mask[1]:
+                return 1
+            if mask[0]:
+                return 0
+            if mask[1]:
+                return 1
+        else:
+            if to_call_ratio <= 0.02 and mask[1]:
+                return 1
+            if mask[0]:
+                return 0
+            if mask[1]:
+                return 1
+
+        return int(legal[0])
 
     def _eval_heads_up(self, opponent: str, num_hands: int) -> EvalStats:
         """Run heads-up evaluation."""
@@ -341,11 +410,7 @@ class NFSPTrainer:
                     with torch.no_grad():
                         action = self.as_net.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
                 else:
-                    if opponent == "random":
-                        legal = np.where(mask)[0]
-                        action = np.random.choice(legal) if len(legal) > 0 else 1
-                    else:
-                        action = 1  # caller
+                    action = self._select_baseline_action(opponent, obs, mask)
 
                 action_record = make_action_record(player, action, 2)
                 for p in range(2):

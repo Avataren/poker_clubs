@@ -23,6 +23,7 @@ def main():
 
     vs_random = trainer._eval_vs_random(num_hands=args.num_hands)
     vs_caller = trainer._eval_vs_caller(num_hands=args.num_hands)
+    vs_tag = trainer._eval_vs_tag(num_hands=args.num_hands)
 
     print(f"Results:")
     print(
@@ -32,6 +33,10 @@ def main():
     print(
         f"  vs Caller:  {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f} bb/100 "
         f"(95% CI, n={vs_caller.num_hands})"
+    )
+    print(
+        f"  vs TAG:     {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100 "
+        f"(95% CI, n={vs_tag.num_hands})"
     )
 
 

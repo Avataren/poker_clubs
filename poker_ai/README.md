@@ -141,6 +141,7 @@ python scripts/evaluate.py checkpoints/checkpoint_latest.pt --num-hands 10000 --
 ```
 
 Reports bb/100 win rate against random and calling-station baselines.
+Evaluation output also includes a tight-aggressive (TAG) scripted baseline and 95% confidence intervals.
 
 ## ONNX Export
 
