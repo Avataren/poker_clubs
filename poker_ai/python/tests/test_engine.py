@@ -118,6 +118,32 @@ def test_batch_env_step():
     assert next_obs.shape == (569,)
 
 
+def test_batch_env_dense_api():
+    """Dense batch API should return correctly-shaped arrays."""
+    from poker_ai.env.poker_env import BatchPokerEnv
+
+    env = BatchPokerEnv(num_envs=4, num_players=2, base_seed=42)
+    results = env.reset_all()
+    actions = np.zeros(4, dtype=np.int64)
+    for i, (_, _, mask) in enumerate(results):
+        legal = np.where(mask)[0]
+        actions[i] = int(legal[0]) if len(legal) > 0 else 1
+
+    players, obs, masks, rewards, dones = env.step_batch_dense(actions)
+    assert players.shape == (4,)
+    assert obs.shape == (4, 569)
+    assert masks.shape == (4, 8)
+    assert rewards.shape == (4, 2)
+    assert dones.shape == (4,)
+
+    done_idx = np.where(dones)[0]
+    if len(done_idx) > 0:
+        r_players, r_obs, r_masks = env.reset_batch_dense(done_idx)
+        assert r_players.shape == (len(done_idx),)
+        assert r_obs.shape == (len(done_idx), 569)
+        assert r_masks.shape == (len(done_idx), 8)
+
+
 def test_legal_mask_validity():
     """Test that legal mask is always valid (at least one action)."""
     from poker_ai.env.poker_env import PokerEnv

@@ -97,6 +97,10 @@ class BatchPokerEnv:
         )
         self.num_envs = num_envs
         self.num_players = num_players
+        self._has_dense_api = (
+            hasattr(self.env, "step_batch_dense")
+            and hasattr(self.env, "reset_batch_dense")
+        )
 
     def reset_all(self) -> list[tuple[int, np.ndarray, np.ndarray]]:
         results = self.env.reset_all()
@@ -137,6 +141,46 @@ class BatchPokerEnv:
         rewards = np.array(rewards_flat, dtype=np.float64).reshape(n, self.num_players)
         return players, obs, masks, rewards, dones
 
+    def step_batch_dense(
+        self, actions: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Dense self-play stepping path.
+
+        Args:
+            actions: action indices for all envs, shape (num_envs,)
+
+        Returns:
+            (players[intp], obs[n,569] float32, masks[n,8] bool, rewards[n,p] float32, dones[n] bool)
+        """
+        actions_arr = np.asarray(actions, dtype=np.int64)
+        n = int(actions_arr.shape[0])
+        if self._has_dense_api:
+            players, obs_bytes, masks_bytes, rewards_bytes, dones_bytes = self.env.step_batch_dense(
+                actions_arr.tolist()
+            )
+            players_arr = np.asarray(players, dtype=np.intp)
+            obs = np.frombuffer(obs_bytes, dtype=np.float32).reshape(n, 569)
+            masks = (
+                np.frombuffer(masks_bytes, dtype=np.uint8)
+                .reshape(n, 8)
+                .astype(bool, copy=False)
+            )
+            rewards = np.frombuffer(rewards_bytes, dtype=np.float32).reshape(
+                n, self.num_players
+            )
+            dones = np.frombuffer(dones_bytes, dtype=np.uint8).astype(bool, copy=False)
+            return players_arr, obs, masks, rewards, dones
+
+        action_pairs = [(i, int(actions_arr[i])) for i in range(n)]
+        players, obs, masks, rewards, dones = self.step_batch(action_pairs)
+        return (
+            np.asarray(players, dtype=np.intp),
+            obs,
+            masks,
+            rewards.astype(np.float32, copy=False),
+            np.asarray(dones, dtype=bool),
+        )
+
     def reset_batch(
         self, env_indices: list[int]
     ) -> tuple[list[int], np.ndarray, np.ndarray]:
@@ -150,3 +194,29 @@ class BatchPokerEnv:
         obs = np.array(obs_flat, dtype=np.float32).reshape(n, 569)
         masks = np.array(masks_flat, dtype=bool).reshape(n, 8)
         return players, obs, masks
+
+    def reset_batch_dense(
+        self, env_indices: np.ndarray | list[int]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Dense self-play reset path.
+
+        Returns:
+            (players[intp], obs[n,569] float32, masks[n,8] bool)
+        """
+        env_idx_arr = np.asarray(env_indices, dtype=np.intp)
+        n = int(env_idx_arr.shape[0])
+        if self._has_dense_api:
+            players, obs_bytes, masks_bytes = self.env.reset_batch_dense(
+                env_idx_arr.tolist()
+            )
+            players_arr = np.asarray(players, dtype=np.intp)
+            obs = np.frombuffer(obs_bytes, dtype=np.float32).reshape(n, 569)
+            masks = (
+                np.frombuffer(masks_bytes, dtype=np.uint8)
+                .reshape(n, 8)
+                .astype(bool, copy=False)
+            )
+            return players_arr, obs, masks
+
+        players, obs, masks = self.reset_batch(env_idx_arr.tolist())
+        return np.asarray(players, dtype=np.intp), obs, masks

@@ -24,6 +24,7 @@ class ReservoirBuffer:
         self.capacity = capacity
         self.size = 0
         self.total_seen = 0
+        self.rng = np.random.default_rng()
 
         # Pre-allocated arrays
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
@@ -38,7 +39,7 @@ class ReservoirBuffer:
             i = self.size
             self.size += 1
         else:
-            idx = np.random.randint(0, self.total_seen)
+            idx = int(self.rng.integers(0, self.total_seen))
             if idx >= self.capacity:
                 return
             i = idx
@@ -61,23 +62,54 @@ class ReservoirBuffer:
         n = len(obs)
         if n == 0:
             return
+        if self.capacity <= 0:
+            self.total_seen += n
+            return
 
-        for j in range(n):
-            self.total_seen += 1
-            if self.size < self.capacity:
-                i = self.size
-                self.size += 1
-            else:
-                idx = np.random.randint(0, self.total_seen)
-                if idx >= self.capacity:
-                    continue
-                i = idx
+        # Fill any remaining capacity with contiguous writes.
+        fill = min(self.capacity - self.size, n)
+        if fill > 0:
+            dest = slice(self.size, self.size + fill)
+            self.obs[dest] = obs[:fill]
+            self.action_history[dest] = action_history[:fill]
+            self.history_length[dest] = history_length[:fill]
+            self.actions[dest] = actions[:fill]
+            self.legal_mask[dest] = legal_mask[:fill]
+            self.size += fill
 
-            self.obs[i] = obs[j]
-            self.action_history[i] = action_history[j]
-            self.history_length[i] = history_length[j]
-            self.actions[i] = actions[j]
-            self.legal_mask[i] = legal_mask[j]
+        # Once full, perform vectorized reservoir replacement for the remainder.
+        remaining = n - fill
+        if remaining <= 0:
+            self.total_seen += n
+            return
+
+        start_seen = self.total_seen + fill
+        highs = np.arange(start_seen + 1, start_seen + remaining + 1, dtype=np.int64)
+        replace_idx = self.rng.integers(0, highs, size=remaining)
+        keep = replace_idx < self.capacity
+        self.total_seen += n
+        if not np.any(keep):
+            return
+
+        target = replace_idx[keep]
+        source = np.flatnonzero(keep) + fill
+
+        # Preserve sequential semantics when multiple updates hit the same slot:
+        # the last seen sample for a slot should win.
+        if target.size > 1:
+            order = np.argsort(target, kind="stable")
+            target_sorted = target[order]
+            source_sorted = source[order]
+            last = np.ones(target_sorted.shape[0], dtype=bool)
+            last[:-1] = target_sorted[:-1] != target_sorted[1:]
+            target = target_sorted[last]
+            source = source_sorted[last]
+
+        self.obs[target] = obs[source]
+        self.action_history[target] = action_history[source]
+        self.history_length[target] = history_length[source]
+        self.actions[target] = actions[source]
+        self.legal_mask[target] = legal_mask[source]
 
     def sample_arrays(self, batch_size: int) -> tuple:
         """Sample and return raw numpy arrays.

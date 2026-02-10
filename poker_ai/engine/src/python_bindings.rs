@@ -1,8 +1,16 @@
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use std::mem::size_of_val;
+use std::slice;
 
 use crate::game_state::SimTable;
+
+fn f32_as_pybytes<'py>(py: Python<'py>, data: &[f32]) -> Bound<'py, PyBytes> {
+    let bytes = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, size_of_val(data)) };
+    PyBytes::new(py, bytes)
+}
 
 /// Python-facing poker environment.
 #[pyclass]
@@ -266,6 +274,69 @@ impl BatchPokerEnv {
         Ok((players, obs_flat, masks_flat, rewards_flat, dones))
     }
 
+    /// Dense stepping API for training hot-path.
+    /// Takes one action per environment, ordered by env index.
+    /// Returns bytes for fast NumPy decode:
+    /// (players, obs_f32_bytes, masks_u8_bytes, rewards_f32_bytes, dones_u8_bytes)
+    fn step_batch_dense<'py>(
+        &mut self,
+        py: Python<'py>,
+        actions: Vec<usize>,
+    ) -> PyResult<(
+        Vec<usize>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+    )> {
+        let n = actions.len();
+        if n != self.envs.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "actions length must match num_envs",
+            ));
+        }
+        let num_players = if self.envs.is_empty() { 0 } else { self.envs[0].0.num_players };
+
+        let mut players = Vec::with_capacity(n);
+        let mut obs_flat = Vec::with_capacity(n * 569);
+        let mut masks_flat = Vec::with_capacity(n * 8);
+        let mut rewards_flat = Vec::with_capacity(n * num_players);
+        let mut dones = Vec::with_capacity(n);
+
+        for (env_idx, action_idx) in actions.into_iter().enumerate() {
+            let (table, _) = &mut self.envs[env_idx];
+            let (done, next_player) = table.apply_action(action_idx);
+
+            players.push(next_player);
+            dones.push(u8::from(done));
+
+            if done {
+                obs_flat.extend(std::iter::repeat(0.0f32).take(569));
+                masks_flat.extend(std::iter::repeat(0u8).take(8));
+                rewards_flat.extend(
+                    table
+                        .rewards
+                        .iter()
+                        .map(|r| (*r as f32) / table.big_blind as f32),
+                );
+            } else {
+                let obs = table.encode_observation(next_player);
+                obs_flat.extend(obs);
+                let mask = table.legal_actions_mask();
+                masks_flat.extend(mask.into_iter().map(u8::from));
+                rewards_flat.extend(std::iter::repeat(0.0f32).take(num_players));
+            }
+        }
+
+        Ok((
+            players,
+            f32_as_pybytes(py, &obs_flat),
+            PyBytes::new(py, &masks_flat),
+            f32_as_pybytes(py, &rewards_flat),
+            PyBytes::new(py, &dones),
+        ))
+    }
+
     /// Reset multiple environments at once. Returns (players, obs_flat, masks_flat).
     fn reset_batch(
         &mut self,
@@ -289,6 +360,37 @@ impl BatchPokerEnv {
         }
 
         Ok((players, obs_flat, masks_flat))
+    }
+
+    /// Dense reset API for training hot-path.
+    /// Returns bytes for fast NumPy decode: (players, obs_f32_bytes, masks_u8_bytes)
+    fn reset_batch_dense<'py>(
+        &mut self,
+        py: Python<'py>,
+        env_indices: Vec<usize>,
+    ) -> PyResult<(Vec<usize>, Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        let n = env_indices.len();
+        let mut players = Vec::with_capacity(n);
+        let mut obs_flat = Vec::with_capacity(n * 569);
+        let mut masks_flat = Vec::with_capacity(n * 8);
+
+        for env_idx in env_indices {
+            let (table, rng) = &mut self.envs[env_idx];
+            table.advance_dealer();
+            table.rebuy_busted_players();
+            let current = table.start_hand(rng);
+            let obs = table.encode_observation(current);
+            let mask = table.legal_actions_mask();
+            players.push(current);
+            obs_flat.extend(obs);
+            masks_flat.extend(mask.into_iter().map(u8::from));
+        }
+
+        Ok((
+            players,
+            f32_as_pybytes(py, &obs_flat),
+            PyBytes::new(py, &masks_flat),
+        ))
     }
 
     fn num_envs(&self) -> usize {
