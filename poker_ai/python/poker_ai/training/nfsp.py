@@ -1,8 +1,10 @@
 """NFSP (Neural Fictitious Self-Play) training loop."""
 
 import copy
+import math
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +21,17 @@ from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_
 from poker_ai.env.poker_env import PokerEnv
 
 
+@dataclass
+class EvalStats:
+    """Summary statistics for heads-up evaluation."""
+    bb100: float
+    ci95: float
+    std_bb100: float
+    num_hands: int
+    seat0_bb100: float
+    seat1_bb100: float
+
+
 class NFSPTrainer:
     """NFSP training manager."""
 
@@ -26,7 +39,10 @@ class NFSPTrainer:
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.use_cuda_transfer = self.device.type == "cuda"
-        self.use_amp = self.device.type == "cuda"
+        if config.use_amp is None:
+            self.use_amp = self.device.type == "cuda"
+        else:
+            self.use_amp = bool(config.use_amp) and self.device.type == "cuda"
         self.amp_dtype = (
             torch.bfloat16 if self.use_amp and torch.cuda.is_bf16_supported() else torch.float16
         )
@@ -60,8 +76,9 @@ class NFSPTrainer:
         # Optimizers
         self.br_optimizer = torch.optim.Adam(self.br_net.parameters(), lr=config.br_lr)
         self.as_optimizer = torch.optim.Adam(self.as_net.parameters(), lr=config.as_lr)
-        self.br_scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
-        self.as_scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        scaler_device = "cuda" if self.use_amp else "cpu"
+        self.br_scaler = torch.amp.GradScaler(scaler_device, enabled=self.use_amp)
+        self.as_scaler = torch.amp.GradScaler(scaler_device, enabled=self.use_amp)
 
         # Replay buffers
         self.br_buffer = CircularBuffer(config.br_buffer_size, max_seq_len=config.max_history_len)
@@ -266,26 +283,34 @@ class NFSPTrainer:
 
     def evaluate(self, episode: int):
         """Evaluate AS network vs baselines."""
-        wins_vs_random = self._eval_vs_random(num_hands=1000)
-        wins_vs_caller = self._eval_vs_caller(num_hands=1000)
+        vs_random = self._eval_vs_random(num_hands=self.config.eval_hands)
+        vs_caller = self._eval_vs_caller(num_hands=self.config.eval_hands)
 
         print(
             f"  Eval @ {episode:,}: "
-            f"vs Random: {wins_vs_random:+.2f} bb/100 | "
-            f"vs Caller: {wins_vs_caller:+.2f} bb/100"
+            f"vs Random: {vs_random.bb100:+.2f} +/- {vs_random.ci95:.2f} bb/100 "
+            f"(95% CI, n={vs_random.num_hands}) | "
+            f"vs Caller: {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f} bb/100 "
+            f"(95% CI, n={vs_caller.num_hands})"
         )
-        self.writer.add_scalar("eval/vs_random_bb100", wins_vs_random, episode)
-        self.writer.add_scalar("eval/vs_caller_bb100", wins_vs_caller, episode)
+        self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
+        self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
+        self.writer.add_scalar("eval/vs_random_seat0_bb100", vs_random.seat0_bb100, episode)
+        self.writer.add_scalar("eval/vs_random_seat1_bb100", vs_random.seat1_bb100, episode)
+        self.writer.add_scalar("eval/vs_caller_bb100", vs_caller.bb100, episode)
+        self.writer.add_scalar("eval/vs_caller_ci95", vs_caller.ci95, episode)
+        self.writer.add_scalar("eval/vs_caller_seat0_bb100", vs_caller.seat0_bb100, episode)
+        self.writer.add_scalar("eval/vs_caller_seat1_bb100", vs_caller.seat1_bb100, episode)
 
-    def _eval_vs_random(self, num_hands: int = 1000) -> float:
-        """Evaluate AS network vs random player (heads-up). Returns bb/100."""
+    def _eval_vs_random(self, num_hands: int = 1000) -> EvalStats:
+        """Evaluate AS network vs random player (heads-up)."""
         return self._eval_heads_up(opponent="random", num_hands=num_hands)
 
-    def _eval_vs_caller(self, num_hands: int = 1000) -> float:
-        """Evaluate AS network vs calling station. Returns bb/100."""
+    def _eval_vs_caller(self, num_hands: int = 1000) -> EvalStats:
+        """Evaluate AS network vs calling station."""
         return self._eval_heads_up(opponent="caller", num_hands=num_hands)
 
-    def _eval_heads_up(self, opponent: str, num_hands: int) -> float:
+    def _eval_heads_up(self, opponent: str, num_hands: int) -> EvalStats:
         """Run heads-up evaluation."""
         env = PokerEnv(
             num_players=2,
@@ -295,10 +320,11 @@ class NFSPTrainer:
         )
 
         max_hist = self.config.max_history_len
-        total_reward = 0.0
-        hero_seat = 0
+        hand_returns_bb100 = np.zeros(num_hands, dtype=np.float64)
+        seat_returns_bb100: list[list[float]] = [[], []]
 
-        for _ in range(num_hands):
+        for hand_idx in range(num_hands):
+            hero_seat = hand_idx % 2  # balance positional bias across buttons/blinds
             player, obs, mask = env.reset()
             action_history: list[list[np.ndarray]] = [[], []]
             done = False
@@ -328,9 +354,25 @@ class NFSPTrainer:
                 player, obs, mask, rewards, done = env.step(action)
 
                 if done:
-                    total_reward += rewards[hero_seat]
+                    hand_bb100 = float(rewards[hero_seat]) * 100.0
+                    hand_returns_bb100[hand_idx] = hand_bb100
+                    seat_returns_bb100[hero_seat].append(hand_bb100)
 
-        return (total_reward / num_hands) * 100
+        mean_bb100 = float(hand_returns_bb100.mean()) if num_hands > 0 else 0.0
+        std_bb100 = float(hand_returns_bb100.std(ddof=1)) if num_hands > 1 else 0.0
+        stderr = std_bb100 / math.sqrt(num_hands) if num_hands > 1 else 0.0
+        ci95 = 1.96 * stderr
+
+        seat0 = float(np.mean(seat_returns_bb100[0])) if seat_returns_bb100[0] else 0.0
+        seat1 = float(np.mean(seat_returns_bb100[1])) if seat_returns_bb100[1] else 0.0
+        return EvalStats(
+            bb100=mean_bb100,
+            ci95=ci95,
+            std_bb100=std_bb100,
+            num_hands=num_hands,
+            seat0_bb100=seat0,
+            seat1_bb100=seat1,
+        )
 
     def _unwrap(self, model: nn.Module) -> nn.Module:
         """Get underlying module from torch.compile wrapper."""

@@ -104,13 +104,22 @@ python scripts/train.py \
   --num-envs 64 \
   --episodes 10000000 \
   --device cuda \
+  --batch-size 4096 \
+  --br-train-steps 16 \
+  --as-train-steps 8 \
   --eta 0.1 \
   --br-lr 0.0001 \
   --as-lr 0.0005 \
   --eval-every 50000 \
+  --eval-hands 1000 \
   --checkpoint-every 100000 \
   --checkpoint-dir checkpoints \
   --log-dir logs
+```
+
+Disable mixed precision:
+```bash
+python scripts/train.py --num-players 2 --device cuda --no-amp
 ```
 
 ### Resume from checkpoint

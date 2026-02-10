@@ -25,8 +25,14 @@ def main():
     vs_caller = trainer._eval_vs_caller(num_hands=args.num_hands)
 
     print(f"Results:")
-    print(f"  vs Random:  {vs_random:+.2f} bb/100")
-    print(f"  vs Caller:  {vs_caller:+.2f} bb/100")
+    print(
+        f"  vs Random:  {vs_random.bb100:+.2f} +/- {vs_random.ci95:.2f} bb/100 "
+        f"(95% CI, n={vs_random.num_hands})"
+    )
+    print(
+        f"  vs Caller:  {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f} bb/100 "
+        f"(95% CI, n={vs_caller.num_hands})"
+    )
 
 
 if __name__ == "__main__":

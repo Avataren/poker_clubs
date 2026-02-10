@@ -2,7 +2,6 @@
 """NFSP training entry point."""
 
 import argparse
-import sys
 
 from poker_ai.config.hyperparams import NFSPConfig
 from poker_ai.training.nfsp import NFSPTrainer
@@ -18,13 +17,18 @@ def main():
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     parser.add_argument("--log-dir", type=str, default="logs")
     parser.add_argument("--eval-every", type=int, default=50_000)
+    parser.add_argument("--eval-hands", type=int, default=1_000, help="Hands per evaluation run")
     parser.add_argument("--checkpoint-every", type=int, default=100_000)
     parser.add_argument("--eta", type=float, default=0.1, help="Anticipatory parameter")
     parser.add_argument("--br-lr", type=float, default=1e-4)
     parser.add_argument("--as-lr", type=float, default=5e-4)
+    parser.add_argument("--batch-size", type=int, default=None, help="Training batch size")
+    parser.add_argument("--br-train-steps", type=int, default=None, help="BR gradient steps per rollout")
+    parser.add_argument("--as-train-steps", type=int, default=None, help="AS gradient steps per rollout")
+    parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision on CUDA")
     args = parser.parse_args()
 
-    config = NFSPConfig(
+    config_kwargs = dict(
         num_players=args.num_players,
         num_envs=args.num_envs,
         total_episodes=args.episodes,
@@ -32,11 +36,22 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         log_dir=args.log_dir,
         eval_every=args.eval_every,
+        eval_hands=args.eval_hands,
         checkpoint_every=args.checkpoint_every,
         eta=args.eta,
         br_lr=args.br_lr,
         as_lr=args.as_lr,
     )
+    if args.batch_size is not None:
+        config_kwargs["batch_size"] = args.batch_size
+    if args.br_train_steps is not None:
+        config_kwargs["br_train_steps"] = args.br_train_steps
+    if args.as_train_steps is not None:
+        config_kwargs["as_train_steps"] = args.as_train_steps
+    if args.no_amp:
+        config_kwargs["use_amp"] = False
+
+    config = NFSPConfig(**config_kwargs)
 
     trainer = NFSPTrainer(config)
 

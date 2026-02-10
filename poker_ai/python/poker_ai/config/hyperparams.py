@@ -1,6 +1,7 @@
 """NFSP hyperparameters."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -44,6 +45,7 @@ class NFSPConfig:
 
     # Evaluation
     eval_every: int = 50_000
+    eval_hands: int = 1_000
     checkpoint_every: int = 100_000
 
     # Epsilon-greedy for BR exploration
@@ -53,6 +55,7 @@ class NFSPConfig:
 
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda
+    use_amp: Optional[bool] = None  # None=auto (on for CUDA), False disables AMP
 
     # Paths
     checkpoint_dir: str = "checkpoints"
