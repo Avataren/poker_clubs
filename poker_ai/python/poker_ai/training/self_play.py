@@ -163,10 +163,10 @@ class SelfPlayWorker:
             ah_batch = self.ah_arrays[np.arange(n), players]  # (n, max_hist, 7)
             ah_lens_batch = self.ah_lens[np.arange(n), players]  # (n,)
 
-            obs_t = torch.from_numpy(static_obs).to(self.device)
-            ah_t = torch.from_numpy(ah_batch).to(self.device)
-            ah_len_t = torch.from_numpy(ah_lens_batch).to(self.device)
-            mask_t = torch.from_numpy(self.prev_mask.copy()).to(self.device)
+            obs_t = torch.from_numpy(static_obs).to(self.device, non_blocking=True)
+            ah_t = torch.from_numpy(ah_batch).to(self.device, non_blocking=True)
+            ah_len_t = torch.from_numpy(ah_lens_batch).to(self.device, non_blocking=True)
+            mask_t = torch.from_numpy(self.prev_mask.copy()).to(self.device, non_blocking=True)
 
             # Classify AS vs BR
             is_as = self.use_as[np.arange(n), players]

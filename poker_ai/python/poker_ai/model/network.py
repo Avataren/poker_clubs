@@ -94,7 +94,7 @@ class PokerNet(nn.Module):
         static_input = 441
 
         # Input layer combines static features + LSTM output
-        total_input = static_input + config.lstm_hidden_dim  # 441 + 128 = 569
+        total_input = static_input + config.lstm_hidden_dim
 
         # Shared trunk
         self.trunk = nn.Sequential(
@@ -108,18 +108,21 @@ class PokerNet(nn.Module):
             ResidualBlock(config.residual_dim),
         )
 
+        # Head hidden dim scales with residual dim
+        head_dim = config.residual_dim // 2  # 256 for residual_dim=512
+
         # Policy head (for AS: outputs action probabilities)
         self.policy_head = nn.Sequential(
-            nn.Linear(config.residual_dim, 128),
+            nn.Linear(config.residual_dim, head_dim),
             nn.ReLU(),
-            nn.Linear(128, config.num_actions),
+            nn.Linear(head_dim, config.num_actions),
         )
 
         # Value head (for BR: outputs Q-value per action)
         self.value_head = nn.Sequential(
-            nn.Linear(config.residual_dim, 128),
+            nn.Linear(config.residual_dim, head_dim),
             nn.ReLU(),
-            nn.Linear(128, config.num_actions),
+            nn.Linear(head_dim, config.num_actions),
         )
 
     def forward(

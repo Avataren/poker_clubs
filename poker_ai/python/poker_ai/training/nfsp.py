@@ -25,13 +25,30 @@ class NFSPTrainer:
     def __init__(self, config: NFSPConfig):
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
+        torch.set_float32_matmul_precision("high")
         print(f"Using device: {self.device}")
+        print(f"Model: hidden={config.hidden_dim}, residual={config.residual_dim}, "
+              f"lstm_hidden={config.lstm_hidden_dim}, batch={config.batch_size}")
 
         # Networks
         self.br_net = BestResponseNet(config).to(self.device)
         self.br_target = copy.deepcopy(self.br_net).to(self.device)
         self.br_target.eval()
         self.as_net = AverageStrategyNet(config).to(self.device)
+
+        br_params = sum(p.numel() for p in self.br_net.parameters())
+        as_params = sum(p.numel() for p in self.as_net.parameters())
+        print(f"Parameters: BR={br_params:,}, AS={as_params:,}, Total={br_params+as_params:,}")
+
+        # torch.compile for kernel fusion (ROCm/CUDA)
+        if self.device.type == "cuda":
+            try:
+                self.br_net = torch.compile(self.br_net)
+                self.br_target = torch.compile(self.br_target)
+                self.as_net = torch.compile(self.as_net)
+                print("torch.compile enabled for all networks")
+            except Exception as e:
+                print(f"torch.compile not available: {e}")
 
         # Optimizers
         self.br_optimizer = torch.optim.Adam(self.br_net.parameters(), lr=config.br_lr)
@@ -74,17 +91,17 @@ class NFSPTrainer:
          next_ah_np, next_ah_len_np, next_mask_np, dones_np, masks_np
         ) = self.br_buffer.sample_arrays(self.config.batch_size)
 
-        obs = torch.from_numpy(obs_np).to(self.device)
-        ah = torch.from_numpy(ah_np).to(self.device)
-        ah_len = torch.from_numpy(ah_len_np).to(self.device)
-        actions = torch.from_numpy(actions_np).to(self.device)
-        rewards = torch.from_numpy(rewards_np).to(self.device)
-        next_obs = torch.from_numpy(next_obs_np).to(self.device)
-        next_ah = torch.from_numpy(next_ah_np).to(self.device)
-        next_ah_len = torch.from_numpy(next_ah_len_np).to(self.device)
-        next_mask = torch.from_numpy(next_mask_np).to(self.device)
-        dones = torch.from_numpy(dones_np).to(self.device)
-        masks = torch.from_numpy(masks_np).to(self.device)
+        obs = torch.from_numpy(obs_np).to(self.device, non_blocking=True)
+        ah = torch.from_numpy(ah_np).to(self.device, non_blocking=True)
+        ah_len = torch.from_numpy(ah_len_np).to(self.device, non_blocking=True)
+        actions = torch.from_numpy(actions_np).to(self.device, non_blocking=True)
+        rewards = torch.from_numpy(rewards_np).to(self.device, non_blocking=True)
+        next_obs = torch.from_numpy(next_obs_np).to(self.device, non_blocking=True)
+        next_ah = torch.from_numpy(next_ah_np).to(self.device, non_blocking=True)
+        next_ah_len = torch.from_numpy(next_ah_len_np).to(self.device, non_blocking=True)
+        next_mask = torch.from_numpy(next_mask_np).to(self.device, non_blocking=True)
+        dones = torch.from_numpy(dones_np).to(self.device, non_blocking=True)
+        masks = torch.from_numpy(masks_np).to(self.device, non_blocking=True)
 
         # Current Q-values
         q_values = self.br_net(obs, ah, ah_len, masks)
@@ -116,11 +133,11 @@ class NFSPTrainer:
         # Sample directly as numpy arrays
         obs_np, ah_np, ah_len_np, actions_np, masks_np = self.as_buffer.sample_arrays(self.config.batch_size)
 
-        obs = torch.from_numpy(obs_np).to(self.device)
-        ah = torch.from_numpy(ah_np).to(self.device)
-        ah_len = torch.from_numpy(ah_len_np).to(self.device)
-        actions = torch.from_numpy(actions_np).to(self.device)
-        masks = torch.from_numpy(masks_np).to(self.device)
+        obs = torch.from_numpy(obs_np).to(self.device, non_blocking=True)
+        ah = torch.from_numpy(ah_np).to(self.device, non_blocking=True)
+        ah_len = torch.from_numpy(ah_len_np).to(self.device, non_blocking=True)
+        actions = torch.from_numpy(actions_np).to(self.device, non_blocking=True)
+        masks = torch.from_numpy(masks_np).to(self.device, non_blocking=True)
 
         logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
         loss = F.cross_entropy(logits, actions)
@@ -135,7 +152,9 @@ class NFSPTrainer:
 
     def update_target_network(self):
         """Copy BR network weights to target network."""
-        self.br_target.load_state_dict(self.br_net.state_dict())
+        self._unwrap(self.br_target).load_state_dict(
+            self._unwrap(self.br_net).state_dict()
+        )
 
     def train(self):
         """Main training loop."""
@@ -264,6 +283,10 @@ class NFSPTrainer:
 
         return (total_reward / num_hands) * 100
 
+    def _unwrap(self, model: nn.Module) -> nn.Module:
+        """Get underlying module from torch.compile wrapper."""
+        return getattr(model, "_orig_mod", model)
+
     def save_checkpoint(self, episode: int):
         path = Path(self.config.checkpoint_dir)
         path.mkdir(parents=True, exist_ok=True)
@@ -271,9 +294,9 @@ class NFSPTrainer:
         checkpoint = {
             "episode": episode,
             "total_steps": self.total_steps,
-            "br_net": self.br_net.state_dict(),
-            "br_target": self.br_target.state_dict(),
-            "as_net": self.as_net.state_dict(),
+            "br_net": self._unwrap(self.br_net).state_dict(),
+            "br_target": self._unwrap(self.br_target).state_dict(),
+            "as_net": self._unwrap(self.as_net).state_dict(),
             "br_optimizer": self.br_optimizer.state_dict(),
             "as_optimizer": self.as_optimizer.state_dict(),
         }
@@ -283,9 +306,9 @@ class NFSPTrainer:
 
     def load_checkpoint(self, path: str):
         checkpoint = torch.load(path, map_location=self.device, weights_only=True)
-        self.br_net.load_state_dict(checkpoint["br_net"])
-        self.br_target.load_state_dict(checkpoint["br_target"])
-        self.as_net.load_state_dict(checkpoint["as_net"])
+        self._unwrap(self.br_net).load_state_dict(checkpoint["br_net"])
+        self._unwrap(self.br_target).load_state_dict(checkpoint["br_target"])
+        self._unwrap(self.as_net).load_state_dict(checkpoint["as_net"])
         self.br_optimizer.load_state_dict(checkpoint["br_optimizer"])
         self.as_optimizer.load_state_dict(checkpoint["as_optimizer"])
         self.total_steps = checkpoint["total_steps"]
