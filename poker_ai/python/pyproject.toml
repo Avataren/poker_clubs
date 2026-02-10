@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "poker-ai"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+    "onnx>=1.14",
+    "onnxruntime>=1.16",
+    "tqdm",
+    "tensorboard",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-benchmark"]
+
+[tool.maturin]
+manifest-path = "../engine/Cargo.toml"
+python-source = "."
+module-name = "poker_ai.engine"

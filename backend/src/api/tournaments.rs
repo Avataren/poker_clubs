@@ -792,16 +792,6 @@ async fn get_tournament_results(
 
     verify_club_member(&state.pool, &tournament.club_id, &auth_user.user_id).await?;
 
-    // Only expose tournament payout results after the tournament is complete.
-    // While running, many players may already have finish positions but still
-    // have prize_amount=0, which should not be shown as final payouts.
-    if tournament.status != "finished" {
-        return Ok(Json(TournamentResultsResponse {
-            tournament,
-            results: vec![],
-        }));
-    }
-
     let results: Vec<PlayerResult> = sqlx::query_as(
         "SELECT tr.user_id, u.username, tr.finish_position, tr.prize_amount, tr.eliminated_at
          FROM tournament_registrations tr

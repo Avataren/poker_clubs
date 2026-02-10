@@ -1,0 +1,10 @@
+engine/target/
+python/.venv/
+python/.pytest_cache/
+__pycache__/
+*.pyc
+*.so
+*.pyd
+checkpoints/
+logs/
+*.onnx

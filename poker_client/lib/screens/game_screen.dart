@@ -45,6 +45,7 @@ class _GameScreenState extends State<GameScreen> {
   bool _isTableClosed = false;
   bool _showTournamentResultsOverlay = false;
   bool _loadingTournamentPlacements = false;
+  bool _tournamentResultIsFinal = false;
   String? _tournamentResultsError;
   String? _finishedTournamentId;
   String? _finishedTournamentName;
@@ -546,35 +547,22 @@ class _GameScreenState extends State<GameScreen> {
     List<TournamentWinner> winners,
   ) async {
     var resolvedTournamentName = tournamentName;
+    var isFinalTournamentResult = winners.isNotEmpty;
 
-    // Probe path (winners empty): only show payouts once backend confirms
-    // the tournament has actually finished. Table closures/rebalances can put
-    // a table into Waiting with one player while the MTT/SNG is still running.
+    // Probe path (winners empty): still show the dialog so table closures/
+    // rebalances are visible, but hide payouts until the tournament is truly
+    // finished.
     if (winners.isEmpty) {
       try {
         final detail = await context.read<ApiService>().getTournamentDetail(
           tournamentId,
         );
         if (!mounted) return;
-        if (detail.tournament.status != 'finished') {
-          setState(() {
-            if (_waitingResultsProbeTournamentId == tournamentId &&
-                _finishedTournamentId != tournamentId) {
-              _waitingResultsProbeTournamentId = null;
-            }
-          });
-          return;
-        }
         resolvedTournamentName = detail.tournament.name;
+        isFinalTournamentResult = detail.tournament.status == 'finished';
       } catch (_) {
-        if (!mounted) return;
-        setState(() {
-          if (_waitingResultsProbeTournamentId == tournamentId &&
-              _finishedTournamentId != tournamentId) {
-            _waitingResultsProbeTournamentId = null;
-          }
-        });
-        return;
+        // If lookup fails, keep showing the dialog without payouts.
+        isFinalTournamentResult = false;
       }
     }
 
@@ -601,6 +589,7 @@ class _GameScreenState extends State<GameScreen> {
       _waitingResultsProbeTournamentId = tournamentId;
       _finishedTournamentId = tournamentId;
       _finishedTournamentName = resolvedTournamentName;
+      _tournamentResultIsFinal = isFinalTournamentResult;
       _showTournamentResultsOverlay = true;
       _loadingTournamentPlacements = true;
       _tournamentResultsError = null;
@@ -639,7 +628,9 @@ class _GameScreenState extends State<GameScreen> {
         ..clear()
         ..addAll(placements);
       _tournamentResultsError = placements.isEmpty
-          ? 'Could not load tournament payouts.'
+          ? (isFinalTournamentResult
+                ? 'Could not load tournament payouts.'
+                : 'No current standings available.')
           : null;
     });
 
@@ -762,6 +753,8 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildTournamentResultsOverlay() {
     final placements = _displayedPlacements();
+    final showPayouts = _tournamentResultIsFinal;
+    final title = showPayouts ? 'Tournament Finished' : 'Table Closed';
 
     return Positioned.fill(
       child: Container(
@@ -783,8 +776,8 @@ class _GameScreenState extends State<GameScreen> {
                 ),
                 child: Column(
                   children: [
-                    const Text(
-                      'Tournament Finished',
+                    Text(
+                      title,
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 24,
@@ -797,6 +790,14 @@ class _GameScreenState extends State<GameScreen> {
                         _finishedTournamentName!,
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                    if (!showPayouts) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Tournament still running. Payouts show after the final table.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ],
                     const SizedBox(height: 16),
@@ -856,14 +857,15 @@ class _GameScreenState extends State<GameScreen> {
                                           ),
                                         ),
                                       ),
-                                      Text(
-                                        _formatPayout(placement.prize),
-                                        style: const TextStyle(
-                                          color: Colors.lightGreenAccent,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
+                                      if (showPayouts)
+                                        Text(
+                                          _formatPayout(placement.prize),
+                                          style: const TextStyle(
+                                            color: Colors.lightGreenAccent,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                          ),
                                         ),
-                                      ),
                                     ],
                                   ),
                                 );
