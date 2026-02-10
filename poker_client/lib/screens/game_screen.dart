@@ -313,6 +313,7 @@ class _GameScreenState extends State<GameScreen> {
                     value: 'calling_station',
                     child: Text('Calling Station'),
                   ),
+                  DropdownMenuItem(value: 'model', child: Text('Model (ONNX)')),
                 ],
                 onChanged: (value) {
                   setDialogState(() => selectedStrategy = value!);

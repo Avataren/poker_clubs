@@ -5,12 +5,15 @@
 //! the game engine directly (no WebSocket needed).
 
 pub mod evaluate;
+pub mod model;
 pub mod strategy;
 
 use crate::game::constants::BOT_ACTION_THINK_DELAY_MS;
 use crate::game::table::{current_timestamp_ms, is_bot_identity, PokerTable};
 use crate::game::{GamePhase, PlayerAction};
 use std::collections::HashMap;
+use std::env;
+use std::path::Path;
 use strategy::{BotGameView, BotPosition, BotStrategy, SimpleStrategy};
 use uuid::Uuid;
 
@@ -31,8 +34,13 @@ impl BotPlayer {
     }
 
     /// Decide what action to take given the current table state.
-    pub fn decide(&self, view: &BotGameView) -> PlayerAction {
-        self.strategy.decide(view)
+    pub fn decide(
+        &self,
+        view: &BotGameView,
+        table: &PokerTable,
+        player_idx: usize,
+    ) -> PlayerAction {
+        self.strategy.decide_with_table(view, table, player_idx)
     }
 }
 
@@ -75,12 +83,7 @@ impl BotManager {
             format!("{} (Bot)", base)
         });
 
-        let strategy: Box<dyn BotStrategy> = match strategy_name {
-            Some("tight") => Box::new(SimpleStrategy::tight()),
-            Some("aggressive") => Box::new(SimpleStrategy::aggressive()),
-            Some("calling_station") => Box::new(strategy::CallingStation),
-            _ => Box::new(SimpleStrategy::balanced()),
-        };
+        let strategy = build_strategy(strategy_name);
 
         let bot = BotPlayer::new(user_id.clone(), username.clone(), strategy);
         self.bots.entry(table_id.to_string()).or_default().push(bot);
@@ -96,12 +99,7 @@ impl BotManager {
         username: String,
         strategy_name: Option<&str>,
     ) {
-        let strategy: Box<dyn BotStrategy> = match strategy_name {
-            Some("tight") => Box::new(SimpleStrategy::tight()),
-            Some("aggressive") => Box::new(SimpleStrategy::aggressive()),
-            Some("calling_station") => Box::new(strategy::CallingStation),
-            _ => Box::new(SimpleStrategy::balanced()),
-        };
+        let strategy = build_strategy(strategy_name);
 
         let bot = BotPlayer::new(user_id, username, strategy);
         self.bots.entry(table_id.to_string()).or_default().push(bot);
@@ -200,7 +198,7 @@ impl BotManager {
 
             if let Some(bot) = self.get_bot(&current.user_id) {
                 let view = build_bot_view(table, table.current_player);
-                let action = bot.decide(&view);
+                let action = bot.decide(&view, table, table.current_player);
                 tracing::info!(
                     "Bot {} at table {} decides: {:?} (phase={:?}, pot={}, bet={})",
                     bot.username,
@@ -230,6 +228,52 @@ impl BotManager {
         }
 
         actions
+    }
+}
+
+fn build_strategy(strategy_name: Option<&str>) -> Box<dyn BotStrategy> {
+    match strategy_name {
+        Some("tight") => Box::new(SimpleStrategy::tight()),
+        Some("aggressive") => Box::new(SimpleStrategy::aggressive()),
+        Some("calling_station") => Box::new(strategy::CallingStation),
+        Some("model") => match env::var("POKER_BOT_MODEL_ONNX") {
+            Ok(path) if !path.trim().is_empty() => load_model_strategy(&path),
+            _ => {
+                tracing::warn!(
+                    "Bot strategy `model` requested but POKER_BOT_MODEL_ONNX is not set; falling back to balanced strategy"
+                );
+                Box::new(SimpleStrategy::balanced())
+            }
+        },
+        Some(name) if name.starts_with("model:") => {
+            let path = name.trim_start_matches("model:").trim();
+            if path.is_empty() {
+                tracing::warn!(
+                    "Bot strategy `model:` requested with empty path; falling back to balanced strategy"
+                );
+                Box::new(SimpleStrategy::balanced())
+            } else {
+                load_model_strategy(path)
+            }
+        }
+        _ => Box::new(SimpleStrategy::balanced()),
+    }
+}
+
+fn load_model_strategy(path: &str) -> Box<dyn BotStrategy> {
+    match model::ModelStrategy::from_path(Path::new(path)) {
+        Ok(strategy) => {
+            tracing::info!("Loaded ONNX model bot strategy from {}", path);
+            Box::new(strategy)
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed to load ONNX model bot strategy from {}: {}. Falling back to balanced strategy.",
+                path,
+                err
+            );
+            Box::new(SimpleStrategy::balanced())
+        }
     }
 }
 
@@ -431,7 +475,12 @@ mod tests {
 
         let mut table = PokerTable::new(table_id.clone(), "Fallback Table".to_string(), 50, 100);
         table
-            .take_seat("bot_like_user".to_string(), "Alice (Bot)".to_string(), 0, 5000)
+            .take_seat(
+                "bot_like_user".to_string(),
+                "Alice (Bot)".to_string(),
+                0,
+                5000,
+            )
             .unwrap();
         table
             .take_seat("human".to_string(), "Human".to_string(), 1, 5000)

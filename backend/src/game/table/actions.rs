@@ -59,6 +59,11 @@ impl PokerTable {
 
         tracing::debug!("Processing action: {:?}", action);
         let betting_structure = self.variant.betting_structure();
+        let actor_idx = self.current_player;
+        let to_call_before = (self.current_bet - self.players[actor_idx].current_bet).max(0);
+        let pot_before_action = self.pot.total().max(0);
+        let stack_before_action = self.players[actor_idx].stack.max(0);
+
         // Process action
         match action {
             PlayerAction::Fold => {
@@ -195,6 +200,15 @@ impl PokerTable {
                 // ShowCards is handled via handle_show_cards, not through handle_action
                 return self.handle_show_cards(user_id, card_indices);
             }
+        }
+
+        if let Some(action_idx) = action_to_history_index(
+            &action,
+            to_call_before,
+            pot_before_action,
+            stack_before_action,
+        ) {
+            self.record_hand_action(actor_idx, action_idx);
         }
 
         // Record last action for display
@@ -383,4 +397,53 @@ impl PokerTable {
 
         all_acted && all_matched
     }
+}
+
+const DISCRETE_RAISE_TARGETS: &[(usize, f32)] =
+    &[(2, 0.5), (3, 0.75), (4, 1.0), (5, 1.5), (6, 2.0)];
+
+fn action_to_history_index(
+    action: &PlayerAction,
+    to_call_before: i64,
+    pot_before_action: i64,
+    stack_before_action: i64,
+) -> Option<usize> {
+    match action {
+        PlayerAction::Fold => Some(0),
+        PlayerAction::Check | PlayerAction::Call => Some(1),
+        PlayerAction::Raise(amount) => Some(raise_to_history_index(
+            *amount,
+            to_call_before.max(0),
+            pot_before_action.max(0),
+            stack_before_action.max(0),
+        )),
+        PlayerAction::AllIn => Some(7),
+        PlayerAction::ShowCards(_) => None,
+    }
+}
+
+fn raise_to_history_index(
+    raise_amount: i64,
+    to_call_before: i64,
+    pot_before_action: i64,
+    stack_before_action: i64,
+) -> usize {
+    let max_raise = stack_before_action.saturating_sub(to_call_before);
+    if max_raise > 0 && raise_amount >= max_raise {
+        return 7;
+    }
+
+    let effective_pot = pot_before_action.saturating_add(to_call_before).max(1) as f32;
+    let ratio = raise_amount.max(0) as f32 / effective_pot;
+
+    let mut best_idx = 2;
+    let mut best_dist = f32::INFINITY;
+    for (idx, target) in DISCRETE_RAISE_TARGETS {
+        let dist = (ratio - *target).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best_idx = *idx;
+        }
+    }
+    best_idx
 }

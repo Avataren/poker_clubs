@@ -5,6 +5,7 @@ impl PokerTable {
         self.last_winner_message = None;
         self.winning_hand = None;
         self.won_without_showdown = false;
+        self.clear_hand_action_history();
 
         // In cash games, a stand-up requested mid-hand is finalized here.
         if self.format.can_cash_out() {

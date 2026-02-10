@@ -1,0 +1,621 @@
+//! ONNX-backed bot strategy.
+//!
+//! This strategy mirrors the poker_ai discrete 8-action policy interface and
+//! falls back to a balanced heuristic strategy if model inference fails.
+
+use super::strategy::{BotGameView, BotStrategy, SimpleStrategy};
+use crate::game::deck::Card;
+use crate::game::hand::evaluate_hand;
+use crate::game::player::PlayerState;
+use crate::game::table::PokerTable;
+use crate::game::{GamePhase, PlayerAction};
+use std::cmp::Ordering;
+use std::path::Path;
+use std::sync::Mutex;
+use tract_onnx::prelude::*;
+
+const OBS_DIM: usize = 441;
+const HISTORY_DIM: usize = 7;
+const MAX_HISTORY_LEN: usize = 30;
+const NUM_ACTIONS: usize = 8;
+
+type OnnxPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, TypedModel>;
+
+struct ModelRuntime {
+    plan: OnnxPlan,
+}
+
+impl ModelRuntime {
+    fn load(path: &Path) -> Result<Self, String> {
+        let plan = tract_onnx::onnx()
+            .model_for_path(path)
+            .map_err(|e| format!("failed to read ONNX model {}: {e}", path.display()))?
+            .into_optimized()
+            .map_err(|e| format!("failed to optimize ONNX model {}: {e}", path.display()))?
+            .into_runnable()
+            .map_err(|e| format!("failed to compile ONNX model {}: {e}", path.display()))?;
+        Ok(Self { plan })
+    }
+
+    fn infer_action_probs(
+        &self,
+        obs: Vec<f32>,
+        history_flat: Vec<f32>,
+        history_len: i64,
+        legal_mask: [bool; NUM_ACTIONS],
+    ) -> Result<[f32; NUM_ACTIONS], String> {
+        if obs.len() != OBS_DIM {
+            return Err(format!(
+                "invalid observation size {}, expected {}",
+                obs.len(),
+                OBS_DIM
+            ));
+        }
+        if history_flat.len() != MAX_HISTORY_LEN * HISTORY_DIM {
+            return Err(format!(
+                "invalid action history size {}, expected {}",
+                history_flat.len(),
+                MAX_HISTORY_LEN * HISTORY_DIM
+            ));
+        }
+        if !(0..=MAX_HISTORY_LEN as i64).contains(&history_len) {
+            return Err(format!(
+                "invalid action history length {}, expected 0..={}",
+                history_len, MAX_HISTORY_LEN
+            ));
+        }
+
+        let obs_tensor = tract_ndarray::Array2::from_shape_vec((1, OBS_DIM), obs)
+            .map_err(|e| format!("failed to build obs tensor: {e}"))?
+            .into_tensor();
+        let history_tensor =
+            tract_ndarray::Array3::from_shape_vec((1, MAX_HISTORY_LEN, HISTORY_DIM), history_flat)
+                .map_err(|e| format!("failed to build action history tensor: {e}"))?
+                .into_tensor();
+        let lengths_tensor = tract_ndarray::Array1::from_vec(vec![history_len]).into_tensor();
+        let legal_tensor =
+            tract_ndarray::Array2::from_shape_vec((1, NUM_ACTIONS), legal_mask.to_vec())
+                .map_err(|e| format!("failed to build legal mask tensor: {e}"))?
+                .into_tensor();
+
+        let outputs = self
+            .plan
+            .run(tvec![
+                obs_tensor.into(),
+                history_tensor.into(),
+                lengths_tensor.into(),
+                legal_tensor.into()
+            ])
+            .map_err(|e| format!("ONNX inference failed: {e}"))?;
+
+        if outputs.is_empty() {
+            return Err("ONNX inference returned no outputs".to_string());
+        }
+
+        let probs_view = outputs[0]
+            .to_array_view::<f32>()
+            .map_err(|e| format!("failed to read ONNX output tensor: {e}"))?;
+
+        if probs_view.shape().len() != 2 || probs_view.shape()[1] != NUM_ACTIONS {
+            return Err(format!(
+                "unexpected ONNX output shape {:?}, expected [batch, {}]",
+                probs_view.shape(),
+                NUM_ACTIONS
+            ));
+        }
+
+        let mut probs = [0.0_f32; NUM_ACTIONS];
+        for (i, out) in probs.iter_mut().enumerate() {
+            *out = probs_view[[0, i]];
+        }
+        Ok(probs)
+    }
+}
+
+/// Strategy that selects actions using the exported average-strategy ONNX model.
+pub struct ModelStrategy {
+    runtime: Mutex<ModelRuntime>,
+    fallback: SimpleStrategy,
+}
+
+impl ModelStrategy {
+    pub fn from_path(path: &Path) -> Result<Self, String> {
+        let runtime = ModelRuntime::load(path)?;
+        Ok(Self {
+            runtime: Mutex::new(runtime),
+            fallback: SimpleStrategy::balanced(),
+        })
+    }
+}
+
+impl BotStrategy for ModelStrategy {
+    fn name(&self) -> &str {
+        "model"
+    }
+
+    fn decide(&self, view: &BotGameView) -> PlayerAction {
+        // Fallback path if table context is not available.
+        self.fallback.decide(view)
+    }
+
+    fn decide_with_table(
+        &self,
+        view: &BotGameView,
+        table: &PokerTable,
+        player_idx: usize,
+    ) -> PlayerAction {
+        let legal_mask = legal_actions_mask(table, player_idx);
+        if !legal_mask.iter().any(|&legal| legal) {
+            tracing::warn!(
+                "Model bot had no legal actions at table {} player_idx {}; using fallback",
+                table.table_id,
+                player_idx
+            );
+            return self.fallback.decide(view);
+        }
+
+        let obs = encode_static_observation(table, player_idx);
+        let (history_flat, history_len) = encode_action_history(table);
+        let probs = match self.runtime.lock() {
+            Ok(runtime) => runtime.infer_action_probs(obs, history_flat, history_len, legal_mask),
+            Err(_) => Err("model runtime lock poisoned".to_string()),
+        };
+
+        match probs {
+            Ok(probs) => {
+                for action_idx in rank_actions(&probs, &legal_mask) {
+                    if let Some(action) = discrete_to_player_action(action_idx, table, player_idx) {
+                        return action;
+                    }
+                }
+                safe_fallback_action(table, player_idx)
+                    .unwrap_or_else(|| self.fallback.decide(view))
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Model bot inference failed at table {}: {}. Falling back to heuristic strategy.",
+                    table.table_id,
+                    err
+                );
+                self.fallback.decide(view)
+            }
+        }
+    }
+}
+
+fn rank_actions(probs: &[f32; NUM_ACTIONS], legal_mask: &[bool; NUM_ACTIONS]) -> Vec<usize> {
+    let mut candidates: Vec<usize> = (0..NUM_ACTIONS).filter(|&idx| legal_mask[idx]).collect();
+    candidates.sort_by(|&a, &b| {
+        let pa = sanitize_prob(probs[a]);
+        let pb = sanitize_prob(probs[b]);
+        pb.partial_cmp(&pa).unwrap_or(Ordering::Equal)
+    });
+    candidates
+}
+
+fn sanitize_prob(p: f32) -> f32 {
+    if p.is_finite() {
+        p
+    } else {
+        f32::NEG_INFINITY
+    }
+}
+
+fn safe_fallback_action(table: &PokerTable, player_idx: usize) -> Option<PlayerAction> {
+    let player = table.players.get(player_idx)?;
+    let to_call = (table.current_bet - player.current_bet).max(0);
+    if to_call <= 0 {
+        Some(PlayerAction::Check)
+    } else if player.stack > 0 {
+        Some(PlayerAction::Call)
+    } else {
+        Some(PlayerAction::Fold)
+    }
+}
+
+fn legal_actions_mask(table: &PokerTable, player_idx: usize) -> [bool; NUM_ACTIONS] {
+    let mut mask = [false; NUM_ACTIONS];
+    let player = match table.players.get(player_idx) {
+        Some(player) => player,
+        None => return mask,
+    };
+
+    if !player.can_act() {
+        return mask;
+    }
+
+    let to_call = (table.current_bet - player.current_bet).max(0);
+    let stack = player.stack.max(0);
+
+    // Fold is only legal if facing a bet.
+    if to_call > 0 {
+        mask[0] = true;
+    }
+
+    // Check/call is always available for an actionable player.
+    mask[1] = true;
+
+    if stack > 0 {
+        mask[7] = true; // all-in
+    }
+
+    if stack > to_call {
+        let max_raise_amount = stack - to_call;
+        let min_raise = table.min_raise.max(table.big_blind).max(1);
+        let pot = table.pot.total();
+        for action_idx in 2..=6 {
+            if let Some(raise_amount) = raise_amount_for_discrete(action_idx, pot, to_call) {
+                if raise_amount >= min_raise && raise_amount <= max_raise_amount {
+                    mask[action_idx] = true;
+                }
+            }
+        }
+    }
+
+    mask
+}
+
+fn discrete_to_player_action(
+    action_idx: usize,
+    table: &PokerTable,
+    player_idx: usize,
+) -> Option<PlayerAction> {
+    let legal_mask = legal_actions_mask(table, player_idx);
+    if action_idx >= NUM_ACTIONS || !legal_mask[action_idx] {
+        return None;
+    }
+
+    let player = table.players.get(player_idx)?;
+    let to_call = (table.current_bet - player.current_bet).max(0);
+    let stack = player.stack.max(0);
+    let pot = table.pot.total();
+    let min_raise = table.min_raise.max(table.big_blind).max(1);
+    let max_raise_amount = stack - to_call;
+
+    match action_idx {
+        0 => Some(PlayerAction::Fold),
+        1 => {
+            if to_call > 0 {
+                Some(PlayerAction::Call)
+            } else {
+                Some(PlayerAction::Check)
+            }
+        }
+        2..=6 => {
+            let raise_amount = raise_amount_for_discrete(action_idx, pot, to_call)?;
+            if raise_amount < min_raise || raise_amount > max_raise_amount {
+                return None;
+            }
+            Some(PlayerAction::Raise(raise_amount))
+        }
+        7 => Some(PlayerAction::AllIn),
+        _ => None,
+    }
+}
+
+fn raise_amount_for_discrete(action_idx: usize, pot: i64, to_call: i64) -> Option<i64> {
+    let effective_pot = pot.saturating_add(to_call);
+    let raise_amount = match action_idx {
+        2 => effective_pot / 2,
+        3 => effective_pot.saturating_mul(3) / 4,
+        4 => effective_pot,
+        5 => effective_pot.saturating_mul(3) / 2,
+        6 => effective_pot.saturating_mul(2),
+        _ => return None,
+    };
+    Some(raise_amount.max(0))
+}
+
+fn encode_static_observation(table: &PokerTable, player_idx: usize) -> Vec<f32> {
+    let mut obs = Vec::with_capacity(OBS_DIM);
+    encode_cards(table, player_idx, &mut obs);
+    encode_game_state(table, player_idx, &mut obs);
+    encode_hand_strength(table, player_idx, &mut obs);
+    obs
+}
+
+fn encode_action_history(table: &PokerTable) -> (Vec<f32>, i64) {
+    let mut history = vec![0.0_f32; MAX_HISTORY_LEN * HISTORY_DIM];
+    let length = table.hand_action_history.len().min(MAX_HISTORY_LEN);
+    let start = table.hand_action_history.len().saturating_sub(length);
+
+    for (dst_row, record) in table.hand_action_history[start..].iter().enumerate() {
+        let start_col = dst_row * HISTORY_DIM;
+        history[start_col..start_col + HISTORY_DIM].copy_from_slice(record);
+    }
+
+    (history, length as i64)
+}
+
+fn encode_cards(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) {
+    let player = match table.players.get(player_idx) {
+        Some(player) => player,
+        None => {
+            out.resize(364, 0.0);
+            return;
+        }
+    };
+
+    for i in 0..2 {
+        let mut onehot = [0.0_f32; 52];
+        if let Some(card) = player.hole_cards.get(i) {
+            onehot[card_index(card)] = 1.0;
+        }
+        out.extend_from_slice(&onehot);
+    }
+
+    for i in 0..5 {
+        let mut onehot = [0.0_f32; 52];
+        if let Some(card) = table.community_cards.get(i) {
+            onehot[card_index(card)] = 1.0;
+        }
+        out.extend_from_slice(&onehot);
+    }
+}
+
+fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) {
+    let player = match table.players.get(player_idx) {
+        Some(player) => player,
+        None => {
+            out.extend_from_slice(&[0.0; 25]);
+            return;
+        }
+    };
+
+    let num_players = table.players.len().max(1);
+    let denominator = (num_players - 1).max(1) as f32;
+
+    let mut game = Vec::with_capacity(38);
+
+    // Phase one-hot: [preflop, flop, turn, river, showdown, hand_over].
+    let mut phase_oh = [0.0_f32; 6];
+    let phase_idx = match table.phase {
+        GamePhase::PreFlop => 0,
+        GamePhase::Flop => 1,
+        GamePhase::Turn => 2,
+        GamePhase::River => 3,
+        GamePhase::Showdown => 4,
+        GamePhase::Waiting => 5,
+    };
+    phase_oh[phase_idx] = 1.0;
+    game.extend_from_slice(&phase_oh);
+
+    let stack = player.stack.max(0);
+    let initial_stack = stack.saturating_add(player.total_bet_this_hand.max(0));
+    let stack_ratio = if initial_stack > 0 {
+        stack as f32 / initial_stack as f32
+    } else {
+        0.0
+    };
+    game.push(stack_ratio);
+
+    let pot = table.pot.total().max(0);
+    let bb = table.big_blind.max(1) as f32;
+    let pot_bb = (pot as f32 / bb).min(50.0) / 50.0;
+    game.push(pot_bb);
+
+    let spr = if pot > 0 {
+        stack as f32 / pot as f32
+    } else {
+        10.0
+    };
+    game.push(spr.min(20.0) / 20.0);
+
+    let position =
+        ((player_idx + num_players - table.dealer_seat) % num_players) as f32 / denominator;
+    game.push(position);
+
+    let active_count = table
+        .players
+        .iter()
+        .filter(|p| p.is_active_in_hand())
+        .count();
+    let opponents_in_hand = active_count.saturating_sub(1) as f32 / denominator;
+    game.push(opponents_in_hand);
+
+    let can_act = table.players.iter().filter(|p| p.can_act()).count() as f32 / num_players as f32;
+    game.push(can_act);
+
+    let to_call = (table.current_bet - player.current_bet).max(0);
+    let to_call_ratio = if pot > 0 {
+        to_call as f32 / pot as f32
+    } else {
+        0.0
+    };
+    game.push(to_call_ratio.min(5.0) / 5.0);
+
+    game.push((num_players as f32 / 9.0).min(1.0));
+
+    for i in 0..8 {
+        if i < num_players.saturating_sub(1) {
+            let opp_idx = (player_idx + 1 + i) % num_players;
+            let opp = &table.players[opp_idx];
+            let opp_stack = opp.stack.max(0);
+            let opp_initial = opp_stack.saturating_add(opp.total_bet_this_hand.max(0));
+            let opp_stack_ratio = if opp_initial > 0 {
+                opp_stack as f32 / opp_initial as f32
+            } else {
+                0.0
+            };
+
+            game.push(if matches!(opp.state, PlayerState::Folded) {
+                1.0
+            } else {
+                0.0
+            });
+            game.push(if matches!(opp.state, PlayerState::AllIn) {
+                1.0
+            } else {
+                0.0
+            });
+            game.push(opp_stack_ratio.min(3.0) / 3.0);
+        } else {
+            game.extend_from_slice(&[0.0, 0.0, 0.0]);
+        }
+    }
+
+    // Match training static extraction: take only the first 25 game features.
+    game.resize(25, 0.0);
+    out.extend_from_slice(&game[..25]);
+}
+
+fn encode_hand_strength(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) {
+    let mut hand = vec![0.0_f32; 52];
+    let player = match table.players.get(player_idx) {
+        Some(player) => player,
+        None => {
+            out.extend_from_slice(&hand);
+            return;
+        }
+    };
+
+    if player.hole_cards.len() >= 2 {
+        if player.hole_cards.len() + table.community_cards.len() >= 5 {
+            let rank = evaluate_hand(&player.hole_cards, &table.community_cards);
+            hand[0] = rank.normalized();
+        }
+
+        hand[1] = preflop_strength(player.hole_cards[0], player.hole_cards[1]);
+    }
+
+    out.extend_from_slice(&hand);
+}
+
+fn card_index(card: &Card) -> usize {
+    (card.suit as usize) * 13 + (card.rank as usize - 2)
+}
+
+fn preflop_strength(c1: Card, c2: Card) -> f32 {
+    let high = c1.rank.max(c2.rank);
+    let low = c1.rank.min(c2.rank);
+    let suited = c1.suit == c2.suit;
+    let pair = c1.rank == c2.rank;
+
+    let tier = if pair {
+        match high {
+            14 | 13 | 12 => 0,
+            11 | 10 => 1,
+            9 | 8 => 2,
+            7 | 6 => 3,
+            5 | 4 => 4,
+            _ => 5,
+        }
+    } else if suited {
+        match (high, low) {
+            (14, 13) => 0,
+            (14, 12) | (14, 11) => 1,
+            (14, 10) | (13, 12) | (13, 11) | (12, 11) => 2,
+            (14, _) | (13, 10) | (12, 10) | (11, 10) | (10, 9) => 3,
+            (13, lo) if lo >= 7 => 4,
+            (_, _) if high - low <= 2 && high >= 7 => 4,
+            _ => 5 + (14 - high) as u8 / 3,
+        }
+    } else {
+        match (high, low) {
+            (14, 13) => 1,
+            (14, 12) => 2,
+            (14, 11) | (14, 10) => 3,
+            (13, 12) | (13, 11) | (12, 11) => 4,
+            (13, 10) | (12, 10) | (11, 10) => 5,
+            _ => 6 + (14 - high) as u8 / 2,
+        }
+    };
+
+    (0.95 - tier as f32 * 0.10).clamp(0.05, 0.95)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::player::PlayerState;
+
+    fn make_table() -> PokerTable {
+        let mut table = PokerTable::new("t1".to_string(), "Test".to_string(), 50, 100);
+        table
+            .take_seat("p1".to_string(), "P1".to_string(), 0, 2000)
+            .unwrap();
+        table
+            .take_seat("p2".to_string(), "P2".to_string(), 1, 2000)
+            .unwrap();
+
+        table.phase = GamePhase::PreFlop;
+        table.current_player = 0;
+        table.dealer_seat = 0;
+        table.players[0].state = PlayerState::Active;
+        table.players[1].state = PlayerState::Active;
+        table.players[0].current_bet = 100;
+        table.players[1].current_bet = 100;
+        table.players[0].total_bet_this_hand = 100;
+        table.players[1].total_bet_this_hand = 100;
+        table.current_bet = 100;
+        table.min_raise = 100;
+        table
+    }
+
+    #[test]
+    fn test_encode_static_observation_shape() {
+        let table = make_table();
+        let obs = encode_static_observation(&table, 0);
+        assert_eq!(obs.len(), OBS_DIM);
+    }
+
+    #[test]
+    fn test_legal_mask_disables_fold_when_check_available() {
+        let table = make_table();
+        let mask = legal_actions_mask(&table, 0);
+        assert!(!mask[0], "fold should be illegal when no bet is faced");
+        assert!(mask[1], "check/call should be legal");
+    }
+
+    #[test]
+    fn test_check_call_mapping_check_and_call() {
+        let mut table = make_table();
+
+        let action = discrete_to_player_action(1, &table, 0).expect("action should map");
+        assert!(matches!(action, PlayerAction::Check));
+
+        table.players[0].current_bet = 0;
+        table.current_bet = 100;
+        let action = discrete_to_player_action(1, &table, 0).expect("action should map");
+        assert!(matches!(action, PlayerAction::Call));
+    }
+
+    #[test]
+    fn test_encode_action_history_uses_recent_window() {
+        let mut table = make_table();
+        for idx in 0..35 {
+            table.record_hand_action(idx % 2, idx % NUM_ACTIONS);
+        }
+
+        let (history_flat, history_len) = encode_action_history(&table);
+        assert_eq!(history_len, MAX_HISTORY_LEN as i64);
+        assert_eq!(history_flat.len(), MAX_HISTORY_LEN * HISTORY_DIM);
+
+        let expected_first = table.hand_action_history[5];
+        let expected_last = table.hand_action_history[34];
+        assert_eq!(&history_flat[0..HISTORY_DIM], &expected_first);
+
+        let tail_start = (MAX_HISTORY_LEN - 1) * HISTORY_DIM;
+        assert_eq!(
+            &history_flat[tail_start..tail_start + HISTORY_DIM],
+            &expected_last
+        );
+    }
+
+    #[test]
+    fn test_handle_action_records_history() {
+        let mut table = make_table();
+        assert!(table.hand_action_history.is_empty());
+
+        table
+            .handle_action("p1", PlayerAction::Check)
+            .expect("action should succeed");
+
+        assert_eq!(table.hand_action_history.len(), 1);
+        let rec = table.hand_action_history[0];
+        assert_eq!(rec[0], 0.0);
+        assert_eq!(rec[1], 0.0);
+        assert_eq!(rec[2], 1.0);
+        assert!((rec[6] - (1.0 / 7.0)).abs() < 1e-6);
+    }
+}

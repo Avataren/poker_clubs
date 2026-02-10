@@ -145,6 +145,24 @@ curl http://127.0.0.1:3000/api/clubs/my \
 
 Actions: `Fold`, `Check`, `Call`, `Raise(amount)`, `AllIn`
 
+```json
+{
+  "type": "AddBot",
+  "payload": {
+    "table_id": "TABLE_ID",
+    "name": "Optional Bot Name",
+    "strategy": "model"
+  }
+}
+```
+
+Bot strategies:
+- `tight`
+- `aggressive`
+- `calling_station`
+- `model` (loads ONNX path from `POKER_BOT_MODEL_ONNX`)
+- `model:/absolute/path/to/model.onnx` (inline path override)
+
 ### Server Messages
 
 ```json
@@ -239,6 +257,7 @@ DATABASE_URL=sqlite:poker.db
 JWT_SECRET=your_secret_key_change_in_production
 SERVER_HOST=127.0.0.1
 SERVER_PORT=3000
+POKER_BOT_MODEL_ONNX=/absolute/path/to/as_model.onnx
 ```
 
 ## Database Schema

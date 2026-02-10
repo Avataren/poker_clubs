@@ -113,6 +113,10 @@ pub struct PokerTable {
     /// Buffer of user_ids eliminated since last drain (used by tournament lifecycle)
     #[serde(skip)]
     pub pending_eliminations: Vec<String>,
+    /// Per-hand action history encoded as 7-dim records for model inference.
+    /// Format matches training: [actor_norm, fold, check_call, raise_small, raise_med, raise_large, action_idx_norm]
+    #[serde(skip, default)]
+    pub(crate) hand_action_history: Vec<[f32; 7]>,
     pub won_without_showdown: bool,
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
@@ -154,6 +158,7 @@ impl Clone for PokerTable {
             showdown_delay_ms: self.showdown_delay_ms,
             tournament_id: self.tournament_id.clone(),
             pending_eliminations: self.pending_eliminations.clone(),
+            hand_action_history: self.hand_action_history.clone(),
             won_without_showdown: self.won_without_showdown,
             variant: self.variant.clone_box(),
             format: self.format.clone_box(),
@@ -248,10 +253,38 @@ impl PokerTable {
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,
             tournament_id: None,
             pending_eliminations: Vec::new(),
+            hand_action_history: Vec::new(),
             won_without_showdown: false,
             variant,
             format,
         }
+    }
+
+    pub(crate) fn clear_hand_action_history(&mut self) {
+        self.hand_action_history.clear();
+    }
+
+    pub(crate) fn record_hand_action(&mut self, actor_idx: usize, action_idx: usize) {
+        if actor_idx >= self.players.len() || action_idx >= 8 {
+            return;
+        }
+
+        let mut rec = [0.0_f32; 7];
+        if self.players.len() > 1 {
+            rec[0] = actor_idx as f32 / (self.players.len() - 1) as f32;
+        }
+
+        match action_idx {
+            0 => rec[1] = 1.0,     // fold
+            1 => rec[2] = 1.0,     // check/call
+            2 | 3 => rec[3] = 1.0, // small raise
+            4 | 5 => rec[4] = 1.0, // medium raise
+            6 | 7 => rec[5] = 1.0, // large raise / all-in
+            _ => return,
+        }
+
+        rec[6] = (action_idx as f32 / 7.0).min(1.0);
+        self.hand_action_history.push(rec);
     }
 
     /// Set the tournament ID for this table

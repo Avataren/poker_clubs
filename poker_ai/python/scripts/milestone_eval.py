@@ -26,6 +26,30 @@ from poker_ai.training.nfsp import NFSPTrainer
 
 
 _CKPT_RE = re.compile(r"^checkpoint_(\d+)\.pt$")
+_CSV_COLUMNS = [
+    "timestamp_utc",
+    "episode",
+    "checkpoint_path",
+    "num_hands",
+    "random_bb100",
+    "random_ci95",
+    "random_lb95",
+    "caller_bb100",
+    "caller_ci95",
+    "caller_lb95",
+    "tag_bb100",
+    "tag_ci95",
+    "tag_lb95",
+    "tag_seat0_bb100",
+    "tag_seat1_bb100",
+    "exploitability_hands",
+    "exploitability_bb100",
+    "exploitability_ci95",
+    "exploitability_ub95",
+    "exploitability_seat0_bb100",
+    "exploitability_seat1_bb100",
+    "promoted",
+]
 
 
 def _load_done_episodes(csv_path: Path) -> set[int]:
@@ -70,31 +94,26 @@ def _discover_milestones(
 
 
 def _write_header_if_needed(csv_path: Path):
-    if csv_path.exists():
-        return
     csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if not csv_path.exists():
+        with csv_path.open("w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(_CSV_COLUMNS)
+        return
+
+    with csv_path.open("r", newline="") as f:
+        reader = csv.DictReader(f)
+        existing_header = reader.fieldnames or []
+        if existing_header == _CSV_COLUMNS:
+            return
+        rows = list(reader)
+
     with csv_path.open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "timestamp_utc",
-                "episode",
-                "checkpoint_path",
-                "num_hands",
-                "random_bb100",
-                "random_ci95",
-                "random_lb95",
-                "caller_bb100",
-                "caller_ci95",
-                "caller_lb95",
-                "tag_bb100",
-                "tag_ci95",
-                "tag_lb95",
-                "tag_seat0_bb100",
-                "tag_seat1_bb100",
-                "promoted",
-            ]
-        )
+        writer = csv.DictWriter(f, fieldnames=_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            out = {col: row.get(col, "") for col in _CSV_COLUMNS}
+            writer.writerow(out)
 
 
 def _append_row(csv_path: Path, row: list[object]):
@@ -108,6 +127,7 @@ def _evaluate_and_record(
     checkpoint_path: Path,
     episode: int,
     num_hands: int,
+    exploitability_hands: int,
     csv_path: Path,
     best_path: Path | None,
     min_tag_lb95_for_promotion: float,
@@ -116,10 +136,12 @@ def _evaluate_and_record(
     vs_random = trainer._eval_vs_random(num_hands=num_hands)
     vs_caller = trainer._eval_vs_caller(num_hands=num_hands)
     vs_tag = trainer._eval_vs_tag(num_hands=num_hands)
+    vs_exploit = trainer.eval_exploitability_proxy(num_hands=exploitability_hands)
 
     random_lb95 = vs_random.bb100 - vs_random.ci95
     caller_lb95 = vs_caller.bb100 - vs_caller.ci95
     tag_lb95 = vs_tag.bb100 - vs_tag.ci95
+    exploit_ub95 = vs_exploit.bb100 + vs_exploit.ci95
 
     promoted = False
     if best_path is not None and tag_lb95 >= min_tag_lb95_for_promotion:
@@ -139,7 +161,9 @@ def _evaluate_and_record(
         f"Random {vs_random.bb100:+.2f} +/- {vs_random.ci95:.2f}, "
         f"Caller {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f}, "
         f"TAG {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100 "
-        f"(TAG LB95={tag_lb95:+.2f})"
+        f"(TAG LB95={tag_lb95:+.2f}) | "
+        f"ExploitProxy {vs_exploit.bb100:+.2f} +/- {vs_exploit.ci95:.2f} "
+        f"(UB95={exploit_ub95:+.2f}, n={exploitability_hands})"
     )
     if promoted and best_path is not None:
         print(f"  Promoted checkpoint to {best_path}")
@@ -162,6 +186,12 @@ def _evaluate_and_record(
             f"{tag_lb95:.6f}",
             f"{vs_tag.seat0_bb100:.6f}",
             f"{vs_tag.seat1_bb100:.6f}",
+            exploitability_hands,
+            f"{vs_exploit.bb100:.6f}",
+            f"{vs_exploit.ci95:.6f}",
+            f"{exploit_ub95:.6f}",
+            f"{vs_exploit.seat0_bb100:.6f}",
+            f"{vs_exploit.seat1_bb100:.6f}",
             int(promoted),
         ],
     )
@@ -173,6 +203,12 @@ def main():
     parser.add_argument("--checkpoint-dir", default="checkpoints", help="Directory with checkpoint_*.pt files")
     parser.add_argument("--device", default="cuda", help="Device for evaluation")
     parser.add_argument("--num-hands", type=int, default=100_000, help="Hands per milestone evaluation")
+    parser.add_argument(
+        "--exploitability-hands",
+        type=int,
+        default=None,
+        help="Hands for exploitability proxy eval (default: same as --num-hands)",
+    )
     parser.add_argument(
         "--milestone-every",
         type=int,
@@ -199,6 +235,11 @@ def main():
     checkpoint_dir = Path(args.checkpoint_dir)
     csv_path = Path(args.csv)
     best_path = Path(args.best_path) if args.best_path else None
+    exploitability_hands = (
+        args.exploitability_hands
+        if args.exploitability_hands is not None
+        else args.num_hands
+    )
 
     done_episodes = _load_done_episodes(csv_path)
     milestones = _discover_milestones(
@@ -228,6 +269,7 @@ def main():
                 checkpoint_path=checkpoint_path,
                 episode=episode,
                 num_hands=args.num_hands,
+                exploitability_hands=exploitability_hands,
                 csv_path=csv_path,
                 best_path=best_path,
                 min_tag_lb95_for_promotion=args.min_tag_lb95_for_promotion,

@@ -1,5 +1,6 @@
 """Export trained Average Strategy network to ONNX format."""
 
+import copy
 import torch
 import torch.nn as nn
 import numpy as np
@@ -26,7 +27,44 @@ class AverageStrategyONNXWrapper(nn.Module):
         history_lengths: torch.Tensor,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
+        # Keep history_lengths as an explicit ONNX input for backend compatibility.
+        # Current ActionHistoryMLP ignores lengths, so this is a no-op numerically.
+        history_lengths_f = history_lengths.to(action_history.dtype).view(-1, 1, 1)
+        action_history = action_history + history_lengths_f * 0.0
         return self.as_net(obs, action_history, history_lengths, legal_mask)
+
+
+def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> NFSPConfig:
+    """Infer architecture fields from checkpoint weights, preserving other config values."""
+    config = copy.deepcopy(base_config)
+    as_state = checkpoint.get("as_net")
+    if not isinstance(as_state, dict):
+        return config
+
+    hist_w = as_state.get("history_encoder.net.0.weight")
+    if isinstance(hist_w, torch.Tensor) and hist_w.ndim == 2:
+        config.lstm_hidden_dim = int(hist_w.shape[0])
+        flat_input = int(hist_w.shape[1])
+        if config.lstm_input_dim > 0 and flat_input % config.lstm_input_dim == 0:
+            config.max_history_len = flat_input // config.lstm_input_dim
+
+    trunk0_w = as_state.get("net.trunk.0.weight")
+    if isinstance(trunk0_w, torch.Tensor) and trunk0_w.ndim == 2:
+        config.hidden_dim = int(trunk0_w.shape[0])
+        total_in = int(trunk0_w.shape[1])
+        inferred_hist_hidden = total_in - 441
+        if inferred_hist_hidden > 0:
+            config.lstm_hidden_dim = inferred_hist_hidden
+
+    trunk4_w = as_state.get("net.trunk.4.weight")
+    if isinstance(trunk4_w, torch.Tensor) and trunk4_w.ndim == 2:
+        config.residual_dim = int(trunk4_w.shape[0])
+
+    policy_out_w = as_state.get("net.policy_head.2.weight")
+    if isinstance(policy_out_w, torch.Tensor) and policy_out_w.ndim == 2:
+        config.num_actions = int(policy_out_w.shape[0])
+
+    return config
 
 
 def export_to_onnx(
@@ -46,9 +84,11 @@ def export_to_onnx(
     if config is None:
         config = NFSPConfig()
 
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    config = infer_config_from_checkpoint(checkpoint, config)
+
     # Load model
     as_net = AverageStrategyNet(config)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     as_net.load_state_dict(checkpoint["as_net"])
     as_net.eval()
 
@@ -57,7 +97,7 @@ def export_to_onnx(
 
     # Create dummy inputs
     batch_size = 1
-    max_seq_len = 50
+    max_seq_len = config.max_history_len
     obs = torch.randn(batch_size, 441)
     action_history = torch.randn(batch_size, max_seq_len, 7)
     history_lengths = torch.tensor([max_seq_len], dtype=torch.long)
@@ -95,18 +135,28 @@ def verify_onnx(
     if config is None:
         config = NFSPConfig()
 
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    config = infer_config_from_checkpoint(checkpoint, config)
+
     # Load PyTorch model
     as_net = AverageStrategyNet(config)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     as_net.load_state_dict(checkpoint["as_net"])
     as_net.eval()
 
     # Create test inputs
     batch_size = 4
-    max_seq_len = 30
+    max_seq_len = config.max_history_len
     obs = torch.randn(batch_size, 441)
     action_history = torch.randn(batch_size, max_seq_len, 7)
-    history_lengths = torch.tensor([10, 20, 30, 5], dtype=torch.long)
+    history_lengths = torch.tensor(
+        [
+            min(10, max_seq_len),
+            min(20, max_seq_len),
+            max_seq_len,
+            min(5, max_seq_len),
+        ],
+        dtype=torch.long,
+    )
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
     # Make some actions illegal
     legal_mask[0, 0] = False

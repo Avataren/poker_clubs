@@ -38,6 +38,7 @@ rand_chacha = "0.3"
 
 # Poker hand evaluation
 rs_poker = "2.0"
+tract-onnx = "0.21"
 
 # Logging
 tracing = "0.1"

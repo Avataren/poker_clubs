@@ -38,6 +38,14 @@ pub struct BotGameView {
 /// Trait for bot decision-making.
 pub trait BotStrategy: Send + Sync {
     fn decide(&self, view: &BotGameView) -> PlayerAction;
+    fn decide_with_table(
+        &self,
+        view: &BotGameView,
+        _table: &crate::game::table::PokerTable,
+        _player_idx: usize,
+    ) -> PlayerAction {
+        self.decide(view)
+    }
     fn name(&self) -> &str;
 }
 

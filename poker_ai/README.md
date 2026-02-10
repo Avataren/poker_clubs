@@ -141,6 +141,7 @@ python scripts/milestone_eval.py \
   --checkpoint-dir checkpoints \
   --device cuda \
   --num-hands 100000 \
+  --exploitability-hands 25000 \
   --milestone-every 1000000 \
   --min-episode 1000000 \
   --csv logs/milestones.csv \
@@ -150,6 +151,7 @@ python scripts/milestone_eval.py \
 
 You can re-run this command while training; it skips milestones already written
 to the CSV and only evaluates new checkpoints.
+The CSV now includes exploitability proxy fields (BR vs AS); lower is better.
 
 If you are using `run_eval.sh`, run it in a second terminal while training:
 ```bash
@@ -170,6 +172,16 @@ python scripts/evaluate.py checkpoints/checkpoint_latest.pt --num-hands 10000 --
 
 Reports bb/100 win rate against random and calling-station baselines.
 Evaluation output also includes a tight-aggressive (TAG) scripted baseline and 95% confidence intervals.
+
+### Exploitability Proxy (Heads-Up)
+
+Evaluate approximate exploitability using greedy BR vs AS policy:
+
+```bash
+python scripts/eval_exploitability.py checkpoints/checkpoint_latest.pt --num-hands 10000 --device cuda
+```
+
+Lower is better; values near 0 suggest lower exploitability in this abstraction.
 
 ## ONNX Export
 

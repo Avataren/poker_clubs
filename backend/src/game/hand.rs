@@ -47,6 +47,13 @@ impl HandRank {
             best_cards,
         }
     }
+
+    /// Normalized strength in [0, 1] used by ML feature encoding.
+    pub fn normalized(&self) -> f32 {
+        let base = self.rank_value as f32 / 8.0;
+        let frac = (self.sub_rank as f32).min(100_000.0) / 100_000.0 / 8.0;
+        (base + frac).min(1.0)
+    }
 }
 
 impl PartialOrd for HandRank {

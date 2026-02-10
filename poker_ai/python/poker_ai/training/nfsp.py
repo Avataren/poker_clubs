@@ -321,6 +321,14 @@ class NFSPTrainer:
         """Evaluate AS network vs tight-aggressive scripted baseline."""
         return self._eval_heads_up(opponent="tag", num_hands=num_hands)
 
+    def eval_exploitability_proxy(self, num_hands: int = 10000) -> EvalStats:
+        """Approximate exploitability via BR-vs-AS heads-up.
+
+        Returns BR advantage in bb/100 against the current AS policy.
+        Lower is better; values near 0 suggest lower exploitability in this abstraction.
+        """
+        return self._eval_br_vs_as(num_hands=num_hands)
+
     def _select_baseline_action(self, opponent: str, obs: np.ndarray, mask: np.ndarray) -> int:
         """Select action for baseline opponent policy."""
         legal = np.where(mask)[0]
@@ -422,6 +430,70 @@ class NFSPTrainer:
                     hand_bb100 = float(rewards[hero_seat]) * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[hero_seat].append(hand_bb100)
+
+        mean_bb100 = float(hand_returns_bb100.mean()) if num_hands > 0 else 0.0
+        std_bb100 = float(hand_returns_bb100.std(ddof=1)) if num_hands > 1 else 0.0
+        stderr = std_bb100 / math.sqrt(num_hands) if num_hands > 1 else 0.0
+        ci95 = 1.96 * stderr
+
+        seat0 = float(np.mean(seat_returns_bb100[0])) if seat_returns_bb100[0] else 0.0
+        seat1 = float(np.mean(seat_returns_bb100[1])) if seat_returns_bb100[1] else 0.0
+        return EvalStats(
+            bb100=mean_bb100,
+            ci95=ci95,
+            std_bb100=std_bb100,
+            num_hands=num_hands,
+            seat0_bb100=seat0,
+            seat1_bb100=seat1,
+        )
+
+    def _eval_br_vs_as(self, num_hands: int) -> EvalStats:
+        """Evaluate greedy BR policy against AS policy in heads-up."""
+        env = PokerEnv(
+            num_players=2,
+            starting_stack=self.config.starting_stack,
+            small_blind=self.config.small_blind,
+            big_blind=self.config.big_blind,
+        )
+
+        max_hist = self.config.max_history_len
+        hand_returns_bb100 = np.zeros(num_hands, dtype=np.float64)
+        seat_returns_bb100: list[list[float]] = [[], []]
+
+        for hand_idx in range(num_hands):
+            br_seat = hand_idx % 2
+            player, obs, mask = env.reset()
+            action_history: list[list[np.ndarray]] = [[], []]
+            done = False
+
+            while not done:
+                static_obs = extract_static_features_batch(obs.reshape(1, -1))[0]
+                ah_padded, ah_len = pad_action_history(action_history[player], max_hist)
+                obs_t = torch.tensor(static_obs, device=self.device).unsqueeze(0)
+                ah_t = torch.tensor(ah_padded, device=self.device).unsqueeze(0)
+                ah_len_t = torch.tensor([ah_len], device=self.device)
+                mask_t = torch.tensor(mask, device=self.device).unsqueeze(0)
+
+                with torch.no_grad():
+                    if player == br_seat:
+                        action = self.br_net.select_action(
+                            obs_t, ah_t, ah_len_t, mask_t, epsilon=0.0
+                        ).item()
+                    else:
+                        action = self.as_net.select_action(
+                            obs_t, ah_t, ah_len_t, mask_t
+                        ).item()
+
+                action_record = make_action_record(player, action, 2)
+                for p in range(2):
+                    action_history[p].append(action_record.copy())
+
+                player, obs, mask, rewards, done = env.step(action)
+
+                if done:
+                    hand_bb100 = float(rewards[br_seat]) * 100.0
+                    hand_returns_bb100[hand_idx] = hand_bb100
+                    seat_returns_bb100[br_seat].append(hand_bb100)
 
         mean_bb100 = float(hand_returns_bb100.mean()) if num_hands > 0 else 0.0
         std_bb100 = float(hand_returns_bb100.std(ddof=1)) if num_hands > 1 else 0.0

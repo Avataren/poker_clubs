@@ -15,6 +15,7 @@ while true; do
     --checkpoint-dir checkpoints \
     --device cuda \
     --num-hands 100000 \
+    --exploitability-hands 25000 \
     --milestone-every 1000000 \
     --min-episode 1000000 \
     --csv logs/milestones.csv \
