@@ -427,7 +427,7 @@ class NFSPTrainer:
                 player, obs, mask, rewards, done = env.step(action)
 
                 if done:
-                    hand_bb100 = float(rewards[hero_seat]) * 100.0
+                    hand_bb100 = float(rewards[hero_seat]) / self.config.big_blind * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[hero_seat].append(hand_bb100)
 
@@ -491,7 +491,7 @@ class NFSPTrainer:
                 player, obs, mask, rewards, done = env.step(action)
 
                 if done:
-                    hand_bb100 = float(rewards[br_seat]) * 100.0
+                    hand_bb100 = float(rewards[br_seat]) / self.config.big_blind * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[br_seat].append(hand_bb100)
 
