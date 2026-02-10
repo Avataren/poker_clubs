@@ -11,7 +11,7 @@ from poker_ai.training.nfsp import NFSPTrainer
 def main():
     parser = argparse.ArgumentParser(description="Train poker AI with NFSP")
     parser.add_argument("--num-players", type=int, default=2, help="Number of players")
-    parser.add_argument("--num-envs", type=int, default=64, help="Parallel environments")
+    parser.add_argument("--num-envs", type=int, default=512, help="Parallel environments")
     parser.add_argument("--episodes", type=int, default=10_000_000, help="Total episodes")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint")

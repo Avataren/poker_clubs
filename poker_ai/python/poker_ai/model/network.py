@@ -160,6 +160,8 @@ class PokerNet(nn.Module):
     ) -> torch.Tensor:
         """Get action probabilities (softmax of policy logits)."""
         logits, _ = self.forward(obs, lstm_hidden, legal_mask)
+        # Guard against all-masked (all -inf) producing NaN from softmax
+        logits = logits.clamp(min=-1e9)
         return F.softmax(logits, dim=-1)
 
     def q_values(
@@ -255,7 +257,12 @@ class AverageStrategyNet(nn.Module):
     ) -> torch.Tensor:
         """Sample action from policy."""
         probs = self.forward(obs, action_history, history_lengths, legal_mask)
-        # Ensure valid probability distribution (guard against all-masked edge cases)
+        # Replace any NaN/inf rows with uniform over legal actions
+        bad = probs.isnan().any(dim=-1) | probs.isinf().any(dim=-1)
+        if bad.any():
+            uniform = legal_mask.float()
+            uniform = uniform / uniform.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            probs[bad] = uniform[bad]
         probs = probs.clamp(min=1e-8)
         probs = probs / probs.sum(dim=-1, keepdim=True)
         return torch.multinomial(probs, 1).squeeze(-1)

@@ -10,7 +10,7 @@ class NFSPConfig:
     starting_stack: int = 10000
     small_blind: int = 50
     big_blind: int = 100
-    num_envs: int = 256
+    num_envs: int = 512
 
     # Network architecture
     input_dim: int = 569
@@ -21,6 +21,7 @@ class NFSPConfig:
     lstm_hidden_dim: int = 128
     lstm_layers: int = 2
     lstm_embed_dim: int = 64
+    max_history_len: int = 30  # max action history steps (heads-up ~6, 9-player ~20)
 
     # NFSP parameters
     eta: float = 0.1  # anticipatory parameter (prob of using AS vs BR)

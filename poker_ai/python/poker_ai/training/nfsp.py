@@ -15,34 +15,8 @@ from poker_ai.config.hyperparams import NFSPConfig
 from poker_ai.model.network import BestResponseNet, AverageStrategyNet
 from poker_ai.training.circular_buffer import CircularBuffer, Transition
 from poker_ai.training.reservoir import ReservoirBuffer, SLTransition
-from poker_ai.training.self_play import SelfPlayWorker, extract_static_features, pad_action_history
+from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record
 from poker_ai.env.poker_env import PokerEnv
-
-
-def collate_transitions(batch: list[Transition], device: torch.device):
-    """Collate a batch of RL transitions into tensors."""
-    obs = torch.tensor(np.stack([t.obs for t in batch]), device=device)
-    ah = torch.tensor(np.stack([t.action_history for t in batch]), device=device)
-    ah_len = torch.tensor([t.history_length for t in batch], device=device)
-    actions = torch.tensor([t.action for t in batch], dtype=torch.long, device=device)
-    rewards = torch.tensor([t.reward for t in batch], dtype=torch.float32, device=device)
-    next_obs = torch.tensor(np.stack([t.next_obs for t in batch]), device=device)
-    next_ah = torch.tensor(np.stack([t.next_action_history for t in batch]), device=device)
-    next_ah_len = torch.tensor([t.next_history_length for t in batch], device=device)
-    next_mask = torch.tensor(np.stack([t.next_legal_mask for t in batch]), device=device)
-    dones = torch.tensor([t.done for t in batch], dtype=torch.float32, device=device)
-    masks = torch.tensor(np.stack([t.legal_mask for t in batch]), device=device)
-    return obs, ah, ah_len, actions, rewards, next_obs, next_ah, next_ah_len, next_mask, dones, masks
-
-
-def collate_sl_transitions(batch: list[SLTransition], device: torch.device):
-    """Collate a batch of SL transitions into tensors."""
-    obs = torch.tensor(np.stack([t.obs for t in batch]), device=device)
-    ah = torch.tensor(np.stack([t.action_history for t in batch]), device=device)
-    ah_len = torch.tensor([t.history_length for t in batch], device=device)
-    actions = torch.tensor([t.action for t in batch], dtype=torch.long, device=device)
-    masks = torch.tensor(np.stack([t.legal_mask for t in batch]), device=device)
-    return obs, ah, ah_len, actions, masks
 
 
 class NFSPTrainer:
@@ -64,8 +38,8 @@ class NFSPTrainer:
         self.as_optimizer = torch.optim.Adam(self.as_net.parameters(), lr=config.as_lr)
 
         # Replay buffers
-        self.br_buffer = CircularBuffer(config.br_buffer_size)
-        self.as_buffer = ReservoirBuffer(config.as_buffer_size)
+        self.br_buffer = CircularBuffer(config.br_buffer_size, max_seq_len=config.max_history_len)
+        self.as_buffer = ReservoirBuffer(config.as_buffer_size, max_seq_len=config.max_history_len)
 
         # Self-play worker
         self.worker = SelfPlayWorker(
@@ -95,9 +69,22 @@ class NFSPTrainer:
         if len(self.br_buffer) < self.config.batch_size:
             return 0.0
 
-        batch = self.br_buffer.sample(self.config.batch_size)
-        (obs, ah, ah_len, actions, rewards, next_obs, next_ah,
-         next_ah_len, next_mask, dones, masks) = collate_transitions(batch, self.device)
+        # Sample directly as numpy arrays, convert to tensors (no Python loop)
+        (obs_np, ah_np, ah_len_np, actions_np, rewards_np, next_obs_np,
+         next_ah_np, next_ah_len_np, next_mask_np, dones_np, masks_np
+        ) = self.br_buffer.sample_arrays(self.config.batch_size)
+
+        obs = torch.from_numpy(obs_np).to(self.device)
+        ah = torch.from_numpy(ah_np).to(self.device)
+        ah_len = torch.from_numpy(ah_len_np).to(self.device)
+        actions = torch.from_numpy(actions_np).to(self.device)
+        rewards = torch.from_numpy(rewards_np).to(self.device)
+        next_obs = torch.from_numpy(next_obs_np).to(self.device)
+        next_ah = torch.from_numpy(next_ah_np).to(self.device)
+        next_ah_len = torch.from_numpy(next_ah_len_np).to(self.device)
+        next_mask = torch.from_numpy(next_mask_np).to(self.device)
+        dones = torch.from_numpy(dones_np).to(self.device)
+        masks = torch.from_numpy(masks_np).to(self.device)
 
         # Current Q-values
         q_values = self.br_net(obs, ah, ah_len, masks)
@@ -111,7 +98,6 @@ class NFSPTrainer:
             next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
             target = rewards + self.config.gamma * next_q * (1 - dones)
 
-        # Huber loss
         loss = F.smooth_l1_loss(q_taken, target)
 
         self.br_optimizer.zero_grad()
@@ -127,13 +113,16 @@ class NFSPTrainer:
         if len(self.as_buffer) < self.config.batch_size:
             return 0.0
 
-        batch = self.as_buffer.sample(self.config.batch_size)
-        obs, ah, ah_len, actions, masks = collate_sl_transitions(batch, self.device)
+        # Sample directly as numpy arrays
+        obs_np, ah_np, ah_len_np, actions_np, masks_np = self.as_buffer.sample_arrays(self.config.batch_size)
 
-        # Get raw logits (numerically stable for cross-entropy)
+        obs = torch.from_numpy(obs_np).to(self.device)
+        ah = torch.from_numpy(ah_np).to(self.device)
+        ah_len = torch.from_numpy(ah_len_np).to(self.device)
+        actions = torch.from_numpy(actions_np).to(self.device)
+        masks = torch.from_numpy(masks_np).to(self.device)
+
         logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
-
-        # Cross-entropy loss on logits
         loss = F.cross_entropy(logits, actions)
 
         self.as_optimizer.zero_grad()
@@ -237,20 +226,19 @@ class NFSPTrainer:
             big_blind=self.config.big_blind,
         )
 
+        max_hist = self.config.max_history_len
         total_reward = 0.0
         hero_seat = 0
-        action_history: list[list[np.ndarray]] = [[], []]
 
         for _ in range(num_hands):
             player, obs, mask = env.reset()
-            action_history = [[], []]
+            action_history: list[list[np.ndarray]] = [[], []]
             done = False
 
             while not done:
                 if player == hero_seat:
-                    # Use AS network
-                    static_obs = extract_static_features(obs)
-                    ah_padded, ah_len = pad_action_history(action_history[player])
+                    static_obs = extract_static_features_batch(obs.reshape(1, -1))[0]
+                    ah_padded, ah_len = pad_action_history(action_history[player], max_hist)
                     obs_t = torch.tensor(static_obs, device=self.device).unsqueeze(0)
                     ah_t = torch.tensor(ah_padded, device=self.device).unsqueeze(0)
                     ah_len_t = torch.tensor([ah_len], device=self.device)
@@ -259,30 +247,13 @@ class NFSPTrainer:
                     with torch.no_grad():
                         action = self.as_net.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
                 else:
-                    # Opponent strategy
                     if opponent == "random":
                         legal = np.where(mask)[0]
                         action = np.random.choice(legal) if len(legal) > 0 else 1
-                    elif opponent == "caller":
-                        action = 1  # always check/call
                     else:
-                        action = 1
+                        action = 1  # caller
 
-                # Update action history
-                action_record = np.zeros(7, dtype=np.float32)
-                action_record[0] = player
-                if action == 0:
-                    action_record[1] = 1.0
-                elif action == 1:
-                    action_record[2] = 1.0
-                elif action <= 3:
-                    action_record[3] = 1.0
-                elif action <= 5:
-                    action_record[4] = 1.0
-                else:
-                    action_record[5] = 1.0
-                action_record[6] = min(action / 7.0, 1.0)
-
+                action_record = make_action_record(player, action, 2)
                 for p in range(2):
                     action_history[p].append(action_record.copy())
 
@@ -291,9 +262,7 @@ class NFSPTrainer:
                 if done:
                     total_reward += rewards[hero_seat]
 
-        # Convert to bb/100
-        bb_per_100 = (total_reward / num_hands) * 100
-        return bb_per_100
+        return (total_reward / num_hands) * 100
 
     def save_checkpoint(self, episode: int):
         path = Path(self.config.checkpoint_dir)
