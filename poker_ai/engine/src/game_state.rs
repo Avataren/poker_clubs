@@ -439,6 +439,14 @@ impl SimTable {
             self.stacks[*idx] += amount;
         }
 
+        // Ensure all community cards are dealt before evaluating
+        while self.community_cards.len() < 5 {
+            self.deck.deal(); // burn
+            if let Some(c) = self.deck.deal() {
+                self.community_cards.push(c);
+            }
+        }
+
         // Evaluate hands
         let hands: Vec<(usize, HandRank)> = active
             .iter()
@@ -452,10 +460,15 @@ impl SimTable {
         let winners_by_pot: Vec<Vec<usize>> = if pots.is_empty() {
             // Simple case: all bets equal, one pot
             let winners = crate::hand_eval::determine_winners(&hands);
-            let share = self.pot / winners.len() as i64;
-            let remainder = self.pot % winners.len() as i64;
-            for (i, &w) in winners.iter().enumerate() {
-                self.stacks[w] += if i == 0 { share + remainder } else { share };
+            if !winners.is_empty() {
+                let share = self.pot / winners.len() as i64;
+                let remainder = self.pot % winners.len() as i64;
+                for (i, &w) in winners.iter().enumerate() {
+                    self.stacks[w] += if i == 0 { share + remainder } else { share };
+                }
+            } else if let Some(&first_active) = active.first() {
+                // Fallback: give pot to first active player
+                self.stacks[first_active] += self.pot;
             }
             // Set rewards
             for i in 0..self.num_players {
