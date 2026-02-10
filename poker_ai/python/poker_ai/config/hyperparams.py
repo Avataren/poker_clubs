@@ -50,8 +50,8 @@ class NFSPConfig:
 
     # Epsilon-greedy for BR exploration
     epsilon_start: float = 0.06
-    epsilon_end: float = 0.001
-    epsilon_decay_steps: int = 8_000_000
+    epsilon_end: float = 0.003
+    epsilon_decay_steps: int = 20_000_000
 
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda
