@@ -227,6 +227,80 @@ impl BatchPokerEnv {
         Ok((current, obs, mask))
     }
 
+    /// Step multiple environments at once. Takes list of (env_idx, action_idx) pairs.
+    /// Returns (players, obs_flat, masks_flat, rewards_flat, dones) as flat arrays.
+    /// obs_flat shape: (n, 569), masks_flat: (n, 8), rewards_flat: (n, num_players), dones: (n,)
+    fn step_batch(
+        &mut self,
+        actions: Vec<(usize, usize)>,
+    ) -> PyResult<(Vec<usize>, Vec<f32>, Vec<bool>, Vec<f64>, Vec<bool>)> {
+        let n = actions.len();
+        let num_players = if self.envs.is_empty() { 0 } else { self.envs[0].0.num_players };
+
+        let mut players = Vec::with_capacity(n);
+        let mut obs_flat = Vec::with_capacity(n * 569);
+        let mut masks_flat = Vec::with_capacity(n * 8);
+        let mut rewards_flat = Vec::with_capacity(n * num_players);
+        let mut dones = Vec::with_capacity(n);
+
+        for (env_idx, action_idx) in actions {
+            let (table, _) = &mut self.envs[env_idx];
+            let (done, next_player) = table.apply_action(action_idx);
+
+            players.push(next_player);
+            dones.push(done);
+
+            if done {
+                obs_flat.extend(std::iter::repeat(0.0f32).take(569));
+                masks_flat.extend(std::iter::repeat(false).take(8));
+                let rewards: Vec<f64> = table
+                    .rewards
+                    .iter()
+                    .map(|r| *r / table.big_blind as f64)
+                    .collect();
+                rewards_flat.extend(rewards);
+            } else {
+                let obs = table.encode_observation(next_player);
+                obs_flat.extend(obs);
+                let mask = table.legal_actions_mask();
+                masks_flat.extend(mask);
+                rewards_flat.extend(std::iter::repeat(0.0f64).take(num_players));
+            }
+        }
+
+        Ok((players, obs_flat, masks_flat, rewards_flat, dones))
+    }
+
+    /// Reset multiple environments at once. Returns (players, obs_flat, masks_flat).
+    fn reset_batch(
+        &mut self,
+        env_indices: Vec<usize>,
+    ) -> PyResult<(Vec<usize>, Vec<f32>, Vec<bool>)> {
+        let n = env_indices.len();
+        let mut players = Vec::with_capacity(n);
+        let mut obs_flat = Vec::with_capacity(n * 569);
+        let mut masks_flat = Vec::with_capacity(n * 8);
+
+        for env_idx in env_indices {
+            let (table, rng) = &mut self.envs[env_idx];
+            table.advance_dealer();
+            let starting_stack = table.initial_stacks[0];
+            for i in 0..table.num_players {
+                if table.stacks[i] <= 0 {
+                    table.stacks[i] = starting_stack;
+                }
+            }
+            let current = table.start_hand(rng);
+            let obs = table.encode_observation(current);
+            let mask = table.legal_actions_mask();
+            players.push(current);
+            obs_flat.extend(obs);
+            masks_flat.extend(mask);
+        }
+
+        Ok((players, obs_flat, masks_flat))
+    }
+
     fn num_envs(&self) -> usize {
         self.envs.len()
     }

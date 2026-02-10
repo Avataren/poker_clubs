@@ -118,3 +118,35 @@ class BatchPokerEnv:
     def reset_env(self, env_idx: int) -> tuple[int, np.ndarray, np.ndarray]:
         p, o, m = self.env.reset_env(env_idx)
         return p, np.array(o, dtype=np.float32), np.array(m, dtype=bool)
+
+    def step_batch(
+        self, actions: list[tuple[int, int]]
+    ) -> tuple[list[int], np.ndarray, np.ndarray, np.ndarray, list[bool]]:
+        """Step multiple envs in one FFI call.
+
+        Args:
+            actions: list of (env_idx, action_idx) pairs
+
+        Returns:
+            (players, obs[n,569], masks[n,8], rewards[n,num_players], dones)
+        """
+        players, obs_flat, masks_flat, rewards_flat, dones = self.env.step_batch(actions)
+        n = len(actions)
+        obs = np.array(obs_flat, dtype=np.float32).reshape(n, 569)
+        masks = np.array(masks_flat, dtype=bool).reshape(n, 8)
+        rewards = np.array(rewards_flat, dtype=np.float64).reshape(n, self.num_players)
+        return players, obs, masks, rewards, dones
+
+    def reset_batch(
+        self, env_indices: list[int]
+    ) -> tuple[list[int], np.ndarray, np.ndarray]:
+        """Reset multiple envs in one FFI call.
+
+        Returns:
+            (players, obs[n,569], masks[n,8])
+        """
+        players, obs_flat, masks_flat = self.env.reset_batch(env_indices)
+        n = len(env_indices)
+        obs = np.array(obs_flat, dtype=np.float32).reshape(n, 569)
+        masks = np.array(masks_flat, dtype=bool).reshape(n, 8)
+        return players, obs, masks

@@ -10,7 +10,7 @@ class NFSPConfig:
     starting_stack: int = 10000
     small_blind: int = 50
     big_blind: int = 100
-    num_envs: int = 64
+    num_envs: int = 256
 
     # Network architecture
     input_dim: int = 569

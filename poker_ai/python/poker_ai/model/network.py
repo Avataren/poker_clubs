@@ -199,16 +199,20 @@ class BestResponseNet(nn.Module):
         legal_mask: torch.Tensor,
         epsilon: float = 0.0,
     ) -> torch.Tensor:
-        """Epsilon-greedy action selection."""
+        """Epsilon-greedy action selection (batched)."""
         q = self.forward(obs, action_history, history_lengths, legal_mask)
+        greedy = q.argmax(dim=-1)
 
-        if epsilon > 0 and torch.rand(1).item() < epsilon:
-            # Random legal action
+        if epsilon > 0:
+            batch_size = obs.size(0)
+            # Per-sample random exploration
+            explore_mask = torch.rand(batch_size, device=obs.device) < epsilon
             probs = legal_mask.float()
             probs = probs / probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-            return torch.multinomial(probs, 1).squeeze(-1)
+            random_actions = torch.multinomial(probs, 1).squeeze(-1)
+            return torch.where(explore_mask, random_actions, greedy)
 
-        return q.argmax(dim=-1)
+        return greedy
 
 
 class AverageStrategyNet(nn.Module):
@@ -230,6 +234,18 @@ class AverageStrategyNet(nn.Module):
         lstm_hidden = self.lstm(action_history, history_lengths)
         return self.net.policy(obs, lstm_hidden, legal_mask)
 
+    def forward_logits(
+        self,
+        obs: torch.Tensor,
+        action_history: torch.Tensor,
+        history_lengths: torch.Tensor | None,
+        legal_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Returns raw masked logits (for numerically stable cross-entropy)."""
+        lstm_hidden = self.lstm(action_history, history_lengths)
+        logits, _ = self.net.forward(obs, lstm_hidden, legal_mask)
+        return logits
+
     def select_action(
         self,
         obs: torch.Tensor,
@@ -239,4 +255,7 @@ class AverageStrategyNet(nn.Module):
     ) -> torch.Tensor:
         """Sample action from policy."""
         probs = self.forward(obs, action_history, history_lengths, legal_mask)
+        # Ensure valid probability distribution (guard against all-masked edge cases)
+        probs = probs.clamp(min=1e-8)
+        probs = probs / probs.sum(dim=-1, keepdim=True)
         return torch.multinomial(probs, 1).squeeze(-1)

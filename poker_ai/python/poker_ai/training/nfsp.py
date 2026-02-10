@@ -130,11 +130,11 @@ class NFSPTrainer:
         batch = self.as_buffer.sample(self.config.batch_size)
         obs, ah, ah_len, actions, masks = collate_sl_transitions(batch, self.device)
 
-        # Get action probabilities
-        probs = self.as_net(obs, ah, ah_len, masks)
+        # Get raw logits (numerically stable for cross-entropy)
+        logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
 
-        # Cross-entropy loss
-        loss = F.cross_entropy(probs.log().clamp(min=-100), actions)
+        # Cross-entropy loss on logits
+        loss = F.cross_entropy(logits, actions)
 
         self.as_optimizer.zero_grad()
         loss.backward()
