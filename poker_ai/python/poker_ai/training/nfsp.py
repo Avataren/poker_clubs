@@ -165,20 +165,21 @@ class NFSPTrainer:
             episode_count += self.config.num_envs
             self.total_episodes = episode_count
 
-            # Train BR (DQN)
-            if self.total_steps % self.config.br_train_every < self.config.num_envs:
+            # Train BR (DQN) — multiple gradient steps per self-play batch
+            for _ in range(self.config.br_train_steps):
                 br_loss = self.train_br_step()
-                if self.br_updates % 100 == 0:
-                    self.writer.add_scalar("loss/br", br_loss, self.total_steps)
+            if br_loss > 0 and self.br_updates % 50 == 0:
+                self.writer.add_scalar("loss/br", br_loss, self.total_steps)
 
-            # Train AS (supervised)
-            if self.total_steps % self.config.as_train_every < self.config.num_envs:
+            # Train AS (supervised) — multiple gradient steps
+            for _ in range(self.config.as_train_steps):
                 as_loss = self.train_as_step()
-                if self.as_updates % 100 == 0:
-                    self.writer.add_scalar("loss/as", as_loss, self.total_steps)
+            if as_loss > 0 and self.as_updates % 50 == 0:
+                self.writer.add_scalar("loss/as", as_loss, self.total_steps)
 
             # Update target network
-            if self.total_steps % self.config.target_update_every < self.config.num_envs:
+            train_rounds = episode_count // self.config.num_envs
+            if train_rounds % self.config.target_update_every == 0:
                 self.update_target_network()
 
             # Logging

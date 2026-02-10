@@ -27,7 +27,7 @@ class NFSPConfig:
 
     # Training
     total_episodes: int = 10_000_000
-    batch_size: int = 256
+    batch_size: int = 512
     br_lr: float = 1e-4      # best response learning rate
     as_lr: float = 5e-4      # average strategy learning rate
     gamma: float = 1.0       # episodic, no discounting
@@ -36,10 +36,10 @@ class NFSPConfig:
     br_buffer_size: int = 2_000_000   # circular buffer for RL
     as_buffer_size: int = 2_000_000   # reservoir for SL
 
-    # Update frequencies
-    br_train_every: int = 128    # train BR every N steps
-    as_train_every: int = 256    # train AS every N steps
-    target_update_every: int = 1000  # update DQN target network
+    # Update frequencies — steps per training round
+    br_train_steps: int = 4     # BR gradient steps per self-play batch
+    as_train_steps: int = 2     # AS gradient steps per self-play batch
+    target_update_every: int = 300  # update DQN target network (in training rounds)
 
     # Evaluation
     eval_every: int = 50_000
