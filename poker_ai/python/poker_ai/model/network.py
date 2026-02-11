@@ -52,7 +52,6 @@ class ActionHistoryTransformer(nn.Module):
             self.output_proj[0].weight.mul_(0.01)
             self.output_proj[0].bias.zero_()
 
-    @torch.compiler.disable  # Triton codegen bug with bool masks on ROCm
     def forward(
         self, action_seq: torch.Tensor, lengths: torch.Tensor | None = None
     ) -> torch.Tensor:
@@ -67,14 +66,20 @@ class ActionHistoryTransformer(nn.Module):
         """
         batch_size, seq_len, _ = action_seq.shape
 
-        # Build padding mask: True = ignore this position
+        # Build float additive mask (-inf for padding) instead of bool mask
+        # to avoid Triton codegen bug with bool types on ROCm.
         if lengths is not None:
             positions = torch.arange(seq_len, device=action_seq.device).unsqueeze(0)
-            pad_mask = positions >= lengths.unsqueeze(1)  # (batch, seq_len)
-            # Check for fully empty histories
+            is_pad = positions >= lengths.unsqueeze(1)  # (batch, seq_len) bool
+            # Float mask: 0.0 for valid, -inf for padding
+            pad_mask = torch.zeros_like(is_pad, dtype=action_seq.dtype)
+            pad_mask.masked_fill_(is_pad, float("-inf"))
+            # Valid mask as float for mean pooling
+            valid_mask_f = (~is_pad).to(action_seq.dtype)  # (batch, seq_len)
             all_empty = lengths <= 0
         else:
             pad_mask = None
+            valid_mask_f = None
             all_empty = None
 
         # Project input and add positional embeddings
@@ -82,14 +87,13 @@ class ActionHistoryTransformer(nn.Module):
         pos_ids = torch.arange(seq_len, device=action_seq.device)
         x = x + self.pos_embed(pos_ids).unsqueeze(0)
 
-        # Transformer encoder
+        # Transformer encoder (float mask avoids Triton bool bug)
         x = self.transformer(x, src_key_padding_mask=pad_mask)  # (batch, seq_len, embed_dim)
 
         # Mean pool over valid positions
-        if pad_mask is not None:
-            valid_mask = ~pad_mask  # (batch, seq_len)
-            valid_counts = valid_mask.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
-            x = (x * valid_mask.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
+        if valid_mask_f is not None:
+            valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
+            x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
         else:
             x = x.mean(dim=1)
 
