@@ -282,8 +282,8 @@ class SelfPlayWorker:
                 self.next_ah_all[alive_idx] = alive_histories
                 self.next_ah_lens_all[alive_idx] = alive_lengths
 
-            # Gather per-player rewards (normalize to big blinds)
-            player_rewards = rewards_batch[env_idx, pre_players] / self.config.big_blind
+            # Gather per-player rewards (already in big blinds from Rust engine)
+            player_rewards = rewards_batch[env_idx, pre_players]
 
             # Push BR transitions in batch (for non-AS envs)
             br_mask = ~is_as
