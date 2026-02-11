@@ -52,6 +52,7 @@ class ActionHistoryTransformer(nn.Module):
             self.output_proj[0].weight.mul_(0.01)
             self.output_proj[0].bias.zero_()
 
+    @torch.compiler.disable  # Triton codegen bug with bool masks on ROCm
     def forward(
         self, action_seq: torch.Tensor, lengths: torch.Tensor | None = None
     ) -> torch.Tensor:
