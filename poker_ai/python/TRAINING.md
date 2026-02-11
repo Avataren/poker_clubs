@@ -4,7 +4,7 @@
 
 Training follows a 3-stage pipeline: heads-up (2p) → 6-max (6p) → full ring (9p).
 Each stage fine-tunes from the previous checkpoint. The network architecture is
-player-count agnostic (fixed 441-dim input), so weights transfer directly.
+player-count agnostic (fixed 569-dim observation), so weights transfer directly.
 
 ## Prerequisites
 
@@ -14,6 +14,22 @@ source .venv/bin/activate
 # Rebuild engine if needed:
 cd ../engine && maturin develop --release && cd ../python
 ```
+
+## Key Hyperparameters
+
+These stabilization parameters are critical for convergence and should be passed
+to all training stages:
+
+| Parameter | Value | Why |
+|---|---|---|
+| `--eta` | 0.1 | Anticipatory param — lower values give smoother average strategy |
+| `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
+| `--br-lr` | 0.0001 | Best response learning rate |
+| `--as-buffer-size` | 5000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
+| `--batch-size` | 4096 | Fills 24GB VRAM well, stable gradient estimates |
+| `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
+| `--lr-warmup-steps` | 500000 | Linear warmup over first 500k env steps |
+| `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -25,11 +41,18 @@ python scripts/train.py \
   --device cuda \
   --num-envs 512 \
   --batch-size 4096 \
-  --br-train-steps 12 \
-  --as-train-steps 6 \
+  --eta 0.1 \
+  --br-lr 0.0001 \
+  --as-lr 0.0001 \
+  --as-buffer-size 5000000 \
+  --br-train-steps 8 \
+  --as-train-steps 4 \
   --epsilon-start 0.06 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 300000000 \
+  --lr-warmup-steps 500000 \
+  --lr-min-factor 0.01 \
+  --tau 0.005 \
   --eval-every 200000 \
   --eval-hands 5000 \
   --checkpoint-every 200000 \
@@ -42,6 +65,8 @@ python scripts/train.py \
 - `vs Caller` should go positive within the first few million episodes
 - `vs TAG` trending toward zero or positive
 - `vs Random` solidly positive
+- `lr` factor in logs — should decay smoothly from 1.0 to 0.01 over the run
+- Monitor in TensorBoard: `meta/lr_factor`, `meta/br_lr`
 
 **When to stop:** When eval metrics plateau for several million episodes, or at the
 episode limit. Pick the best checkpoint using milestone eval:
@@ -62,11 +87,18 @@ python scripts/train.py \
   --device cuda \
   --num-envs 256 \
   --batch-size 4096 \
-  --br-train-steps 12 \
-  --as-train-steps 6 \
+  --eta 0.1 \
+  --br-lr 0.0001 \
+  --as-lr 0.0001 \
+  --as-buffer-size 5000000 \
+  --br-train-steps 8 \
+  --as-train-steps 4 \
   --epsilon-start 0.04 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 200000000 \
+  --lr-warmup-steps 200000 \
+  --lr-min-factor 0.01 \
+  --tau 0.005 \
   --eval-every 200000 \
   --eval-hands 3000 \
   --checkpoint-every 200000 \
@@ -83,6 +115,7 @@ python scripts/train.py \
   understands basic poker
 - `--episodes 50000000`: fewer total episodes needed (fine-tuning, not from scratch)
 - `--eval-hands 3000`: each hand takes longer with 6 players
+- `--lr-warmup-steps 200000`: shorter warmup for fine-tuning
 
 **What to watch:**
 - The model may initially regress (heads-up habits don't all transfer)
@@ -100,11 +133,18 @@ python scripts/train.py \
   --device cuda \
   --num-envs 128 \
   --batch-size 4096 \
-  --br-train-steps 12 \
-  --as-train-steps 6 \
+  --eta 0.1 \
+  --br-lr 0.0001 \
+  --as-lr 0.0001 \
+  --as-buffer-size 5000000 \
+  --br-train-steps 8 \
+  --as-train-steps 4 \
   --epsilon-start 0.03 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 150000000 \
+  --lr-warmup-steps 200000 \
+  --lr-min-factor 0.01 \
+  --tau 0.005 \
   --eval-every 200000 \
   --eval-hands 2000 \
   --checkpoint-every 200000 \
@@ -119,6 +159,22 @@ python scripts/train.py \
 - `--epsilon-start 0.03`: even less exploration needed
 - `--episodes 30000000`: fine-tuning pass
 - `--eval-hands 2000`: 9-player eval hands are slow
+
+## What Changed (v2)
+
+Key improvements over the initial training setup:
+
+| Change | Before | After | Why |
+|---|---|---|---|
+| **LR schedule** | Constant 1e-4 | Cosine decay 1e-4 → 1e-6 with warmup | Prevents policy oscillation after convergence |
+| **Target updates** | Hard copy every 300 rounds | Polyak soft (tau=0.005) every round | Smoother Q-value targets, less instability |
+| **eta** | 0.2 | 0.1 | More AS play → better average strategy quality |
+| **br_train_steps** | 12 | 8 | Less overfitting to recent BR buffer data |
+| **as_train_steps** | 6 | 4 | Matches reduced BR steps proportionally |
+
+The LR schedule is the most impactful change. Previous runs showed convergence
+to ~-4 bb/100 vs TAG by episode 4-5M with no improvement through 32M — the
+constant LR caused the policy to oscillate around the basin instead of settling.
 
 ## ONNX Export
 
@@ -166,3 +222,5 @@ so the model works across different blind levels and tournaments.
 - **Resuming interrupted training:** use `--resume checkpoints/6max/checkpoint_latest.pt`
   with the same arguments to continue where you left off
 - The reward signal is normalized to big blinds, so models transfer across blind levels
+- **RAM usage:** the 5M reservoir buffer uses ~13GB RAM. With 31GB system RAM this
+  leaves plenty for the OS and Rust engine. Don't go above 5M without more RAM.

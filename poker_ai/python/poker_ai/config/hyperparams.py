@@ -29,14 +29,14 @@ class NFSPConfig:
 
     # Training
     total_episodes: int = 10_000_000
-    batch_size: int = 2048
+    batch_size: int = 4096
     br_lr: float = 1e-4      # best response learning rate
-    as_lr: float = 5e-4      # average strategy learning rate
+    as_lr: float = 1e-4      # average strategy learning rate (low to stabilize averaging)
     gamma: float = 1.0       # episodic, no discounting
 
     # Replay buffers
     br_buffer_size: int = 2_000_000   # circular buffer for RL
-    as_buffer_size: int = 2_000_000   # reservoir for SL
+    as_buffer_size: int = 5_000_000   # reservoir for SL (large to preserve long-run average)
 
     # Update frequencies — steps per training round
     br_train_steps: int = 8     # BR gradient steps per self-play batch
@@ -47,6 +47,13 @@ class NFSPConfig:
     eval_every: int = 50_000
     eval_hands: int = 1_000
     checkpoint_every: int = 100_000
+
+    # Learning rate schedule (cosine decay with warmup)
+    lr_warmup_steps: int = 500_000        # linear warmup over this many env steps
+    lr_min_factor: float = 0.01           # decay to lr * this factor (e.g. 1e-4 -> 1e-6)
+
+    # Target network (Polyak soft update)
+    tau: float = 0.005                    # soft update coefficient (1.0 = hard copy)
 
     # Epsilon-greedy for BR exploration
     epsilon_start: float = 0.06

@@ -80,6 +80,13 @@ class NFSPTrainer:
         self.br_scaler = torch.amp.GradScaler(scaler_device, enabled=self.use_amp)
         self.as_scaler = torch.amp.GradScaler(scaler_device, enabled=self.use_amp)
 
+        # LR schedulers (cosine decay with linear warmup)
+        self._lr_warmup_steps = config.lr_warmup_steps
+        self._lr_min_factor = config.lr_min_factor
+        # Total training steps approximation for cosine period
+        # (episodes * ~10 steps/episode is a rough estimate; we use env steps directly)
+        self._lr_total_steps = config.epsilon_decay_steps  # reuse as LR schedule horizon
+
         # Replay buffers
         self.br_buffer = CircularBuffer(config.br_buffer_size, max_seq_len=config.max_history_len)
         self.as_buffer = ReservoirBuffer(config.as_buffer_size, max_seq_len=config.max_history_len)
@@ -106,6 +113,25 @@ class NFSPTrainer:
         return self.config.epsilon_start + progress * (
             self.config.epsilon_end - self.config.epsilon_start
         )
+
+    def _get_lr_factor(self) -> float:
+        """Cosine decay with linear warmup. Returns multiplier in [min_factor, 1.0]."""
+        steps = self.total_steps
+        warmup = self._lr_warmup_steps
+        if steps < warmup:
+            return max(steps / warmup, 0.01)  # linear warmup from 1% to 100%
+        # Cosine decay from 1.0 to min_factor
+        progress = min((steps - warmup) / max(self._lr_total_steps - warmup, 1), 1.0)
+        min_f = self._lr_min_factor
+        return min_f + 0.5 * (1.0 - min_f) * (1.0 + math.cos(math.pi * progress))
+
+    def _update_lr(self):
+        """Apply LR schedule to both optimizers."""
+        factor = self._get_lr_factor()
+        for pg in self.br_optimizer.param_groups:
+            pg["lr"] = self.config.br_lr * factor
+        for pg in self.as_optimizer.param_groups:
+            pg["lr"] = self.config.as_lr * factor
 
     def _to_device(self, array: np.ndarray) -> torch.Tensor:
         """Move numpy array to training device with optional pinned-memory staging."""
@@ -206,10 +232,13 @@ class NFSPTrainer:
         return loss.item()
 
     def update_target_network(self):
-        """Copy BR network weights to target network."""
-        self._unwrap(self.br_target).load_state_dict(
-            self._unwrap(self.br_net).state_dict()
-        )
+        """Polyak soft update: target = tau * online + (1 - tau) * target."""
+        tau = self.config.tau
+        for p_target, p_online in zip(
+            self._unwrap(self.br_target).parameters(),
+            self._unwrap(self.br_net).parameters(),
+        ):
+            p_target.data.mul_(1.0 - tau).add_(p_online.data, alpha=tau)
 
     def train(self):
         """Main training loop."""
@@ -235,6 +264,9 @@ class NFSPTrainer:
             episode_count += self.config.num_envs
             self.total_episodes = episode_count
 
+            # Update learning rates
+            self._update_lr()
+
             # Train BR (DQN) — multiple gradient steps per self-play batch
             for _ in range(self.config.br_train_steps):
                 br_loss = self.train_br_step()
@@ -247,22 +279,25 @@ class NFSPTrainer:
             if as_loss > 0 and self.as_updates % 50 == 0:
                 self.writer.add_scalar("loss/as", as_loss, self.total_steps)
 
-            # Update target network
+            # Soft-update target network every round
             train_rounds += 1
-            if train_rounds % self.config.target_update_every == 0:
-                self.update_target_network()
+            self.update_target_network()
 
             # Logging
             if episode_count >= next_log:
                 elapsed = time.time() - start_time
                 eps_per_sec = episode_count / max(elapsed, 1)
+                cur_lr_f = self._get_lr_factor()
                 print(
                     f"Episodes: {episode_count:,} | Steps: {self.total_steps:,} | "
                     f"BR buf: {len(self.br_buffer):,} | AS buf: {len(self.as_buffer):,} | "
-                    f"eps: {epsilon:.4f} | {eps_per_sec:.0f} ep/s"
+                    f"eps: {epsilon:.4f} | lr: {cur_lr_f:.4f} | {eps_per_sec:.0f} ep/s"
                 )
+                cur_br_lr = self.br_optimizer.param_groups[0]["lr"]
                 self.writer.add_scalar("meta/epsilon", epsilon, self.total_steps)
                 self.writer.add_scalar("meta/episodes", episode_count, self.total_steps)
+                self.writer.add_scalar("meta/br_lr", cur_br_lr, self.total_steps)
+                self.writer.add_scalar("meta/lr_factor", self._get_lr_factor(), self.total_steps)
                 self.writer.add_scalar("buffer/br_size", len(self.br_buffer), self.total_steps)
                 self.writer.add_scalar("buffer/as_size", len(self.as_buffer), self.total_steps)
                 while episode_count >= next_log:

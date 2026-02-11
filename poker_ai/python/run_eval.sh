@@ -12,14 +12,14 @@ fi
 
 while true; do
   "$PYTHON_BIN" scripts/milestone_eval.py \
-    --checkpoint-dir checkpoints \
+    --checkpoint-dir checkpoints/hu \
     --device cuda \
-    --num-hands 100000 \
-    --exploitability-hands 25000 \
+    --num-hands 20000 \
+    --exploitability-hands 5000 \
     --milestone-every 1000000 \
     --min-episode 1000000 \
-    --csv logs/milestones.csv \
-    --best-path checkpoints/checkpoint_best.pt \
+    --csv logs/hu/milestones.csv \
+    --best-path checkpoints/hu/checkpoint_best.pt \
     --min-tag-lb95-for-promotion 0.0
-  sleep 1800
+  sleep 500
 done

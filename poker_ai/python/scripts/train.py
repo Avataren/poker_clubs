@@ -19,12 +19,16 @@ def main():
     parser.add_argument("--eval-every", type=int, default=50_000)
     parser.add_argument("--eval-hands", type=int, default=1_000, help="Hands per evaluation run")
     parser.add_argument("--checkpoint-every", type=int, default=100_000)
-    parser.add_argument("--eta", type=float, default=0.1, help="Anticipatory parameter")
+    parser.add_argument("--eta", type=float, default=0.2, help="Anticipatory parameter")
     parser.add_argument("--br-lr", type=float, default=1e-4)
-    parser.add_argument("--as-lr", type=float, default=5e-4)
+    parser.add_argument("--as-lr", type=float, default=1e-4)
+    parser.add_argument("--as-buffer-size", type=int, default=None, help="AS reservoir buffer size")
     parser.add_argument("--epsilon-start", type=float, default=None, help="Initial BR exploration epsilon")
     parser.add_argument("--epsilon-end", type=float, default=None, help="Final BR exploration epsilon")
     parser.add_argument("--epsilon-decay-steps", type=int, default=None, help="Steps to linearly decay epsilon")
+    parser.add_argument("--lr-warmup-steps", type=int, default=None, help="Linear LR warmup steps")
+    parser.add_argument("--lr-min-factor", type=float, default=None, help="Cosine LR decays to lr*factor")
+    parser.add_argument("--tau", type=float, default=None, help="Polyak soft target update coefficient")
     parser.add_argument("--batch-size", type=int, default=None, help="Training batch size")
     parser.add_argument("--br-train-steps", type=int, default=None, help="BR gradient steps per rollout")
     parser.add_argument("--as-train-steps", type=int, default=None, help="AS gradient steps per rollout")
@@ -57,6 +61,14 @@ def main():
         config_kwargs["epsilon_end"] = args.epsilon_end
     if args.epsilon_decay_steps is not None:
         config_kwargs["epsilon_decay_steps"] = args.epsilon_decay_steps
+    if args.as_buffer_size is not None:
+        config_kwargs["as_buffer_size"] = args.as_buffer_size
+    if args.lr_warmup_steps is not None:
+        config_kwargs["lr_warmup_steps"] = args.lr_warmup_steps
+    if args.lr_min_factor is not None:
+        config_kwargs["lr_min_factor"] = args.lr_min_factor
+    if args.tau is not None:
+        config_kwargs["tau"] = args.tau
     if args.no_amp:
         config_kwargs["use_amp"] = False
 
