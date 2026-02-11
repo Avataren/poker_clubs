@@ -268,6 +268,7 @@ class NFSPTrainer:
 
         start_time = time.time()
         episode_count = self.total_episodes
+        episodes_at_start = episode_count
         log_every = 10000
         next_log = ((episode_count // log_every) + 1) * log_every
         next_eval = ((episode_count // self.config.eval_every) + 1) * self.config.eval_every
@@ -311,7 +312,7 @@ class NFSPTrainer:
             # Logging
             if episode_count >= next_log:
                 elapsed = time.time() - start_time
-                eps_per_sec = episode_count / max(elapsed, 1)
+                eps_per_sec = (episode_count - episodes_at_start) / max(elapsed, 1)
                 cur_lr_f = self._get_lr_factor()
                 print(
                     f"Episodes: {episode_count:,} | Steps: {self.total_steps:,} | "
