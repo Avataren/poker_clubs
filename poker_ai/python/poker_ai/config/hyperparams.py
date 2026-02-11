@@ -21,6 +21,10 @@ class NFSPConfig:
     history_input_dim: int = 11
     history_hidden_dim: int = 256
     max_history_len: int = 30  # max action history steps (heads-up ~6, 9-player ~20)
+    history_embed_dim: int = 64    # transformer embedding dimension
+    history_num_heads: int = 4     # transformer attention heads
+    history_num_layers: int = 2    # transformer encoder layers
+    history_ffn_dim: int = 128     # transformer feedforward dimension
 
     # NFSP parameters (eta is now scheduled, see eta_start/eta_end below)
 
@@ -57,7 +61,9 @@ class NFSPConfig:
     epsilon_end: float = 0.003
     epsilon_decay_steps: int = 40_000_000
 
-    # Eta scheduling (AS/BR mix linear ramp)
+    # Eta scheduling (anticipatory parameter): P(use AS policy) during self-play.
+    # eta=0.1 means 10% AS / 90% BR. Higher eta → more average strategy play.
+    # BR transitions are collected only from BR-policy actions (~is_as).
     eta_start: float = 0.1
     eta_end: float = 0.4
     eta_ramp_steps: int = 30_000_000

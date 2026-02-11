@@ -7,36 +7,98 @@ import torch.nn.functional as F
 from poker_ai.config.hyperparams import NFSPConfig
 
 
-class ActionHistoryMLP(nn.Module):
-    """MLP for encoding flattened action history."""
+class ActionHistoryTransformer(nn.Module):
+    """Transformer encoder for action history sequences.
+
+    Replaces the flat MLP with attention over the sequence of action records,
+    capturing temporal patterns (e.g. raise-then-check indicating weakness).
+    """
 
     def __init__(self, config: NFSPConfig):
         super().__init__()
-        flat_input = config.max_history_len * config.history_input_dim  # 30 * 11 = 330
-        hidden = config.history_hidden_dim  # output dim (256)
-        self.net = nn.Sequential(
-            nn.Linear(flat_input, hidden),
-            nn.LayerNorm(hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, hidden),
-            nn.LayerNorm(hidden),
+        embed_dim = config.history_embed_dim  # 64
+        max_len = config.max_history_len  # 30
+        self.hidden_dim = config.history_hidden_dim  # 256
+
+        # Project each 11-dim action record to embed space
+        self.input_proj = nn.Linear(config.history_input_dim, embed_dim)
+
+        # Learned positional embeddings
+        self.pos_embed = nn.Embedding(max_len, embed_dim)
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=config.history_num_heads,
+            dim_feedforward=config.history_ffn_dim,
+            batch_first=True,
+            dropout=0.0,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer, num_layers=config.history_num_layers
+        )
+
+        # Output projection to history_hidden_dim
+        self.output_proj = nn.Sequential(
+            nn.Linear(embed_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim),
             nn.ReLU(),
         )
-        self.hidden_dim = hidden
+
+        # Initialize output projection with small weights so initial output
+        # is near-zero, preserving pretrained trunk behavior when resuming.
+        with torch.no_grad():
+            self.output_proj[0].weight.mul_(0.01)
+            self.output_proj[0].bias.zero_()
 
     def forward(
         self, action_seq: torch.Tensor, lengths: torch.Tensor | None = None
     ) -> torch.Tensor:
-        """Encode action history.
+        """Encode action history with transformer attention.
 
         Args:
             action_seq: (batch, max_seq_len, 11) action features
-            lengths: ignored (kept for API compatibility)
+            lengths: (batch,) number of valid entries per sample
 
         Returns:
             (batch, hidden_dim) encoded history
         """
-        return self.net(action_seq.reshape(action_seq.size(0), -1))
+        batch_size, seq_len, _ = action_seq.shape
+
+        # Build padding mask: True = ignore this position
+        if lengths is not None:
+            positions = torch.arange(seq_len, device=action_seq.device).unsqueeze(0)
+            pad_mask = positions >= lengths.unsqueeze(1)  # (batch, seq_len)
+            # Check for fully empty histories
+            all_empty = lengths <= 0
+        else:
+            pad_mask = None
+            all_empty = None
+
+        # Project input and add positional embeddings
+        x = self.input_proj(action_seq)  # (batch, seq_len, embed_dim)
+        pos_ids = torch.arange(seq_len, device=action_seq.device)
+        x = x + self.pos_embed(pos_ids).unsqueeze(0)
+
+        # Transformer encoder
+        x = self.transformer(x, src_key_padding_mask=pad_mask)  # (batch, seq_len, embed_dim)
+
+        # Mean pool over valid positions
+        if pad_mask is not None:
+            valid_mask = ~pad_mask  # (batch, seq_len)
+            valid_counts = valid_mask.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
+            x = (x * valid_mask.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
+        else:
+            x = x.mean(dim=1)
+
+        out = self.output_proj(x)  # (batch, hidden_dim)
+
+        # Zero out output for empty histories
+        if all_empty is not None and all_empty.any():
+            out = out.masked_fill(all_empty.unsqueeze(-1), 0.0)
+
+        return out
 
 
 class ResidualBlock(nn.Module):
@@ -163,7 +225,7 @@ class BestResponseNet(nn.Module):
     def __init__(self, config: NFSPConfig):
         super().__init__()
         self.net = PokerNet(config)
-        self.history_encoder = ActionHistoryMLP(config)
+        self.history_encoder = ActionHistoryTransformer(config)
 
     def forward(
         self,
@@ -205,7 +267,7 @@ class AverageStrategyNet(nn.Module):
     def __init__(self, config: NFSPConfig):
         super().__init__()
         self.net = PokerNet(config)
-        self.history_encoder = ActionHistoryMLP(config)
+        self.history_encoder = ActionHistoryTransformer(config)
 
     def forward(
         self,
@@ -237,7 +299,7 @@ class AverageStrategyNet(nn.Module):
         history_lengths: torch.Tensor | None,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Sample action from policy."""
+        """Sample action from policy (only over legal actions)."""
         probs = self.forward(obs, action_history, history_lengths, legal_mask)
         # Replace any NaN/inf rows with uniform over legal actions
         bad = probs.isnan().any(dim=-1) | probs.isinf().any(dim=-1)
@@ -245,6 +307,7 @@ class AverageStrategyNet(nn.Module):
             uniform = legal_mask.float()
             uniform = uniform / uniform.sum(dim=-1, keepdim=True).clamp(min=1e-8)
             probs[bad] = uniform[bad]
-        probs = probs.clamp(min=1e-8)
-        probs = probs / probs.sum(dim=-1, keepdim=True)
+        # Clamp only legal actions to avoid zero-probability; keep illegal at zero
+        probs = torch.where(legal_mask, probs.clamp(min=1e-8), torch.zeros_like(probs))
+        probs = probs / probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
         return torch.multinomial(probs, 1).squeeze(-1)

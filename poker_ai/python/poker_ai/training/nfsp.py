@@ -168,7 +168,12 @@ class NFSPTrainer:
         )
 
     def get_eta(self) -> float:
-        """Get current eta (AS/BR mix) with linear ramp."""
+        """Get current eta (anticipatory parameter) with linear ramp.
+
+        eta = P(use AS policy) during self-play. A player uses AS with
+        probability eta, BR with probability (1-eta). BR transitions
+        are collected only from BR-policy actions.
+        """
         progress = min(self.total_steps / max(self.config.eta_ramp_steps, 1), 1.0)
         return self.config.eta_start + progress * (
             self.config.eta_end - self.config.eta_start

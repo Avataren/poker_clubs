@@ -82,18 +82,55 @@ def test_as_net_action_probs():
     assert (probs >= 0).all()
 
 
-def test_history_encoder_zero_input():
-    """Test history MLP handles zero-padded input."""
+def test_as_net_no_illegal_mass():
+    """Test AS select_action gives zero probability to illegal actions."""
     from poker_ai.config.hyperparams import NFSPConfig
-    from poker_ai.model.network import ActionHistoryMLP
+    from poker_ai.model.network import AverageStrategyNet
 
     config = NFSPConfig()
-    mlp = ActionHistoryMLP(config)
+    net = AverageStrategyNet(config)
 
+    obs = torch.randn(100, STATIC_FEATURE_SIZE)
+    action_history = torch.randn(100, config.max_history_len, config.history_input_dim)
+    history_lengths = torch.full((100,), 5)
+    # Only actions 0, 1, 8 are legal
+    legal_mask = torch.zeros(100, config.num_actions, dtype=torch.bool)
+    legal_mask[:, 0] = True
+    legal_mask[:, 1] = True
+    legal_mask[:, 8] = True
+
+    with torch.no_grad():
+        actions = net.select_action(obs, action_history, history_lengths, legal_mask)
+
+    # All selected actions should be legal
+    for a in actions:
+        assert a.item() in [0, 1, 8], f"Action {a.item()} is illegal"
+
+
+def test_history_transformer_shapes():
+    """Test transformer history encoder produces correct shapes."""
+    from poker_ai.config.hyperparams import NFSPConfig
+    from poker_ai.model.network import ActionHistoryTransformer
+
+    config = NFSPConfig()
+    encoder = ActionHistoryTransformer(config)
+
+    # Non-empty history
+    seq = torch.randn(4, config.max_history_len, config.history_input_dim)
+    lengths = torch.tensor([5, 10, 30, 1])
+    output = encoder(seq, lengths)
+    assert output.shape == (4, config.history_hidden_dim)
+
+    # Empty history should produce zeros
     zero_seq = torch.zeros(2, config.max_history_len, config.history_input_dim)
-    output = mlp(zero_seq)
+    zero_lengths = torch.tensor([0, 0])
+    zero_output = encoder(zero_seq, zero_lengths)
+    assert zero_output.shape == (2, config.history_hidden_dim)
+    assert torch.allclose(zero_output, torch.zeros_like(zero_output))
 
-    assert output.shape == (2, config.history_hidden_dim)
+    # No lengths provided
+    output_no_len = encoder(seq)
+    assert output_no_len.shape == (4, config.history_hidden_dim)
 
 
 def test_parameter_count():
@@ -111,6 +148,6 @@ def test_parameter_count():
     print(f"BR params: {br_params:,}")
     print(f"AS params: {as_params:,}")
 
-    # With larger heads and more features, expect ~2-6M each
+    # With transformer history encoder, expect ~2-6M each
     assert 500_000 < br_params < 10_000_000, f"BR params {br_params:,} out of expected range"
     assert 500_000 < as_params < 10_000_000, f"AS params {as_params:,} out of expected range"
