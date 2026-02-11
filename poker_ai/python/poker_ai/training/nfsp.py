@@ -19,7 +19,46 @@ from poker_ai.training.circular_buffer import CircularBuffer
 from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record
 from poker_ai.env.poker_env import PokerEnv
-from poker_ai.model.state_encoder import HAND_STRENGTH_START
+from poker_ai.model.state_encoder import HAND_STRENGTH_START, STATIC_FEATURE_SIZE
+
+
+# --- Suit permutation augmentation ---
+# Card encoding: 7 slots × 52 one-hot (indices 0-363 in static features).
+# Within each 52-dim slot, layout is suit*13 + rank_offset (4 suits × 13 ranks).
+# Suits are interchangeable in Hold'em, so permuting them produces valid data.
+# We precompute all 24 permutation index arrays for the card region.
+
+def _build_suit_permutation_indices() -> np.ndarray:
+    """Build (24, 364) index arrays for all suit permutations over card features."""
+    from itertools import permutations
+    perms = list(permutations(range(4)))  # 24 permutations of 4 suits
+    num_card_features = 364  # 7 cards × 52
+    indices = np.zeros((24, num_card_features), dtype=np.int64)
+    for pi, perm in enumerate(perms):
+        for card_slot in range(7):  # 2 hole + 5 community
+            base = card_slot * 52
+            for old_suit in range(4):
+                new_suit = perm[old_suit]
+                for rank in range(13):
+                    indices[pi, base + new_suit * 13 + rank] = base + old_suit * 13 + rank
+    return indices
+
+_SUIT_PERM_INDICES = _build_suit_permutation_indices()  # (24, 364)
+
+
+def apply_suit_augmentation(obs: torch.Tensor) -> torch.Tensor:
+    """Apply a random suit permutation to the card features of a batch.
+
+    Args:
+        obs: (batch, STATIC_FEATURE_SIZE) tensor
+    Returns:
+        augmented obs with permuted card features (in-place safe)
+    """
+    perm_idx = np.random.randint(1, 24)  # skip identity (0)
+    idx = _SUIT_PERM_INDICES[perm_idx]  # (364,)
+    aug = obs.clone()
+    aug[:, :364] = obs[:, idx]
+    return aug
 
 
 @dataclass
@@ -183,6 +222,10 @@ class NFSPTrainer:
         dones = self._to_device(dones_np)
         masks = self._to_device(masks_np)
 
+        # Suit permutation augmentation (permute card features for both obs and next_obs)
+        obs = apply_suit_augmentation(obs)
+        next_obs = apply_suit_augmentation(next_obs)
+
         with torch.autocast(
             device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
         ):
@@ -230,6 +273,9 @@ class NFSPTrainer:
         ah_len = self._to_device(ah_len_np)
         actions = self._to_device(actions_np)
         masks = self._to_device(masks_np)
+
+        # Suit permutation augmentation
+        obs = apply_suit_augmentation(obs)
 
         with torch.autocast(
             device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
