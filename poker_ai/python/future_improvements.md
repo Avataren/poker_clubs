@@ -20,6 +20,12 @@ TD error) would focus training on surprising transitions — hands where the Q-v
 prediction was most wrong. Expect faster convergence but adds implementation complexity
 and slight CPU overhead.
 
+### Lower epsilon_start
+Currently 0.12 — means ~1 in 8 BR actions are random, which adds significant noise
+to the replay buffer early on. Previous run used 0.06. For heads-up with 9 actions,
+0.06 is likely sufficient exploration. The higher value doesn't hurt convergence long
+term but delays early Q-value accuracy.
+
 ### Separate LR schedules for BR and AS
 Currently both piggyback on the same cosine schedule. BR might benefit from a faster
 initial LR (learns value estimation) while AS needs a consistently low LR (stability
