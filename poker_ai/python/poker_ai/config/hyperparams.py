@@ -32,7 +32,7 @@ class NFSPConfig:
     gamma: float = 1.0       # episodic, no discounting
 
     # Replay buffers
-    br_buffer_size: int = 2_000_000   # circular buffer for RL
+    br_buffer_size: int = 1_000_000   # circular buffer for RL
     as_buffer_size: int = 5_000_000   # reservoir for SL (large to preserve long-run average)
 
     # Update frequencies — steps per training round

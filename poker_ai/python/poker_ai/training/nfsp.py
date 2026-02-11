@@ -19,6 +19,7 @@ from poker_ai.training.circular_buffer import CircularBuffer
 from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record
 from poker_ai.env.poker_env import PokerEnv
+from poker_ai.model.state_encoder import HAND_STRENGTH_START
 
 
 @dataclass
@@ -408,9 +409,10 @@ class NFSPTrainer:
         # - raises strong hands with larger sizes when available.
         phase_oh = obs[364:370]
         phase = int(np.argmax(phase_oh))  # 0=preflop
-        to_call_ratio = float(obs[376])  # normalized to [0, 1] from internal [0, 5]
-        hand_rank = float(obs[517])      # postflop normalized hand rank
-        preflop_strength = float(obs[518])
+        # Game state: 364+6(phase)+1(stack)+1(pot_bb)+1(spr)+1(pos)+1(opp)+1(can_act) = 376
+        to_call_ratio = float(obs[376])  # to_call/pot normalized to [0, 1] from [0, 5]
+        hand_rank = float(obs[HAND_STRENGTH_START])      # postflop normalized hand rank
+        preflop_strength = float(obs[HAND_STRENGTH_START + 1])
 
         if phase == 0:
             strength = preflop_strength
@@ -487,7 +489,8 @@ class NFSPTrainer:
                 player, obs, mask, rewards, done = env.step(action)
 
                 if done:
-                    hand_bb100 = float(rewards[hero_seat]) / self.config.big_blind * 100.0
+                    # rewards are already in big blinds (normalized in Rust engine)
+                    hand_bb100 = float(rewards[hero_seat]) * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[hero_seat].append(hand_bb100)
 
@@ -551,7 +554,8 @@ class NFSPTrainer:
                 player, obs, mask, rewards, done = env.step(action)
 
                 if done:
-                    hand_bb100 = float(rewards[br_seat]) / self.config.big_blind * 100.0
+                    # rewards are already in big blinds (normalized in Rust engine)
+                    hand_bb100 = float(rewards[br_seat]) * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[br_seat].append(hand_bb100)
 
