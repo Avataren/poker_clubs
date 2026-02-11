@@ -50,7 +50,8 @@ class NFSPConfig:
     checkpoint_every: int = 100_000
 
     # Learning rate schedule (cosine decay with warmup)
-    lr_warmup_steps: int = 500_000        # linear warmup over this many env steps
+    # Note: all *_steps params below are in env steps (~8 steps/episode)
+    lr_warmup_steps: int = 4_000_000      # linear warmup (~500k episodes)
     lr_min_factor: float = 0.01           # decay to lr * this factor (e.g. 1e-4 -> 1e-6)
 
     # Target network (Polyak soft update)
@@ -59,14 +60,14 @@ class NFSPConfig:
     # Epsilon-greedy for BR exploration
     epsilon_start: float = 0.12
     epsilon_end: float = 0.003
-    epsilon_decay_steps: int = 40_000_000
+    epsilon_decay_steps: int = 400_000_000  # ~50M episodes — explore for first half
 
     # Eta scheduling (anticipatory parameter): P(use AS policy) during self-play.
     # eta=0.1 means 10% AS / 90% BR. Higher eta → more average strategy play.
     # BR transitions are collected only from BR-policy actions (~is_as).
     eta_start: float = 0.1
     eta_end: float = 0.4
-    eta_ramp_steps: int = 30_000_000
+    eta_ramp_steps: int = 200_000_000       # ~25M episodes — gradual shift to AS
 
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda
