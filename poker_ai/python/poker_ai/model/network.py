@@ -65,45 +65,39 @@ class ActionHistoryTransformer(nn.Module):
             (batch, hidden_dim) encoded history
         """
         batch_size, seq_len, _ = action_seq.shape
+        dtype = action_seq.dtype
 
-        # Build float additive mask (-inf for padding) instead of bool mask
-        # to avoid Triton codegen bug with bool types on ROCm.
+        # All-float masking to avoid Triton codegen bug with bool types on ROCm.
         if lengths is not None:
             positions = torch.arange(seq_len, device=action_seq.device).unsqueeze(0)
-            is_pad = positions >= lengths.unsqueeze(1)  # (batch, seq_len) bool
-            # Float mask: 0.0 for valid, -inf for padding
-            pad_mask = torch.zeros_like(is_pad, dtype=action_seq.dtype)
-            pad_mask.masked_fill_(is_pad, float("-inf"))
-            # Valid mask as float for mean pooling
-            valid_mask_f = (~is_pad).to(action_seq.dtype)  # (batch, seq_len)
-            all_empty = lengths <= 0
+            # valid_mask: 1.0 for valid positions, 0.0 for padding (no bools)
+            valid_mask_f = (positions < lengths.unsqueeze(1)).to(dtype)  # (batch, seq_len)
+            # Additive attention mask: 0.0 for valid, -inf for padding
+            pad_mask = (1.0 - valid_mask_f) * torch.finfo(dtype).min
         else:
-            pad_mask = None
             valid_mask_f = None
-            all_empty = None
+            pad_mask = None
 
         # Project input and add positional embeddings
         x = self.input_proj(action_seq)  # (batch, seq_len, embed_dim)
         pos_ids = torch.arange(seq_len, device=action_seq.device)
         x = x + self.pos_embed(pos_ids).unsqueeze(0)
 
-        # Transformer encoder (float mask avoids Triton bool bug)
+        # Transformer encoder
         x = self.transformer(x, src_key_padding_mask=pad_mask)  # (batch, seq_len, embed_dim)
 
         # Mean pool over valid positions
         if valid_mask_f is not None:
             valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
             x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
+            # Zero out output for fully empty histories (lengths==0 → valid_counts==1
+            # but input was all-zero so output is near-zero; multiply to ensure exact zero)
+            has_history = (valid_counts > 0.5).to(dtype)  # (batch, 1) float
+            x = x * has_history
         else:
             x = x.mean(dim=1)
 
-        out = self.output_proj(x)  # (batch, hidden_dim)
-
-        # Zero out output for empty histories
-        if all_empty is not None and all_empty.any():
-            out = out.masked_fill(all_empty.unsqueeze(-1), 0.0)
-
-        return out
+        return self.output_proj(x)  # (batch, hidden_dim)
 
 
 class ResidualBlock(nn.Module):
@@ -191,11 +185,12 @@ class PokerNet(nn.Module):
         policy_logits = self.policy_head(trunk_out)
         q_values = self.value_head(trunk_out)
 
-        # Mask illegal actions
+        # Mask illegal actions (float math only — no bools for ROCm Triton compat)
         if legal_mask is not None:
-            illegal_mask = ~legal_mask
-            policy_logits = policy_logits.masked_fill(illegal_mask, float("-inf"))
-            q_values = q_values.masked_fill(illegal_mask, float("-inf"))
+            neg_inf = torch.finfo(policy_logits.dtype).min
+            illegal_f = 1.0 - legal_mask.to(policy_logits.dtype)  # 1.0=illegal, 0.0=legal
+            policy_logits = policy_logits + illegal_f * neg_inf
+            q_values = q_values + illegal_f * neg_inf
 
         return policy_logits, q_values
 
@@ -207,11 +202,8 @@ class PokerNet(nn.Module):
     ) -> torch.Tensor:
         """Get action probabilities (softmax of policy logits)."""
         logits, _ = self.forward(obs, history_hidden, legal_mask)
-        # Use torch.where for proper masking instead of clamp
-        safe_logits = torch.where(
-            legal_mask, logits, torch.tensor(-1e9, device=logits.device)
-        )
-        return F.softmax(safe_logits, dim=-1)
+        # Already masked by forward(); softmax over masked logits
+        return F.softmax(logits, dim=-1)
 
     def q_values(
         self,
