@@ -43,6 +43,27 @@ Replace epsilon-greedy with NoisyLinear layers in the BR value head. Learned exp
 is more efficient than random — the network explores where it's uncertain rather than
 uniformly. Would eliminate the epsilon schedule entirely.
 
+## Deployment
+
+### Temperature-based difficulty scaling
+Use a single trained model for all difficulty levels by scaling AS policy logits
+before softmax at inference time: `probs = softmax(logits / temperature)`.
+
+| Difficulty | Temperature | Effect |
+|---|---|---|
+| Easy | 3.0 | Loose, passive, frequent mistakes |
+| Medium | 1.5 | Plays recognizable poker but makes errors |
+| Hard | 1.0 | Full-strength trained policy |
+| Expert | 0.7 | Sharper than training — exploits marginal edges |
+
+Implementation: single multiply in the backend ONNX inference path, before the
+softmax. Expose as a difficulty setting per bot. No extra checkpoints or models
+needed — one ONNX file serves all difficulty levels.
+
+Can also combine with epsilon injection (force X% random actions) for a different
+flavor of weakness: temperature makes the bot loose/passive, epsilon makes it
+chaotic/unpredictable.
+
 ## Evaluation
 
 ### Position-aware eval reporting
