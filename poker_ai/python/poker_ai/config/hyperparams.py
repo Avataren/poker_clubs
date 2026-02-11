@@ -14,18 +14,15 @@ class NFSPConfig:
     num_envs: int = 1024
 
     # Network architecture
-    input_dim: int = 569
-    num_actions: int = 8
+    input_dim: int = 590
+    num_actions: int = 9
     hidden_dim: int = 1024
     residual_dim: int = 512
-    lstm_input_dim: int = 7
-    lstm_hidden_dim: int = 256
-    lstm_layers: int = 2
-    lstm_embed_dim: int = 128
+    history_input_dim: int = 11
+    history_hidden_dim: int = 256
     max_history_len: int = 30  # max action history steps (heads-up ~6, 9-player ~20)
 
-    # NFSP parameters
-    eta: float = 0.1  # anticipatory parameter (prob of using AS vs BR)
+    # NFSP parameters (eta is now scheduled, see eta_start/eta_end below)
 
     # Training
     total_episodes: int = 10_000_000
@@ -56,9 +53,14 @@ class NFSPConfig:
     tau: float = 0.005                    # soft update coefficient (1.0 = hard copy)
 
     # Epsilon-greedy for BR exploration
-    epsilon_start: float = 0.06
+    epsilon_start: float = 0.12
     epsilon_end: float = 0.003
-    epsilon_decay_steps: int = 20_000_000
+    epsilon_decay_steps: int = 40_000_000
+
+    # Eta scheduling (AS/BR mix linear ramp)
+    eta_start: float = 0.1
+    eta_end: float = 0.4
+    eta_ramp_steps: int = 30_000_000
 
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda

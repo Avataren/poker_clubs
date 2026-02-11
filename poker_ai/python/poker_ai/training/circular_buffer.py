@@ -27,7 +27,7 @@ class Transition:
 class CircularBuffer:
     """Fixed-size circular replay buffer using pre-allocated numpy arrays."""
 
-    def __init__(self, capacity: int, obs_dim: int = 441, max_seq_len: int = 30, num_actions: int = 8):
+    def __init__(self, capacity: int, obs_dim: int = 462, max_seq_len: int = 30, num_actions: int = 9, history_dim: int = 11):
         self.capacity = capacity
         self.obs_dim = obs_dim
         self.max_seq_len = max_seq_len
@@ -37,12 +37,12 @@ class CircularBuffer:
 
         # Pre-allocated arrays
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.action_history = np.zeros((capacity, max_seq_len, 7), dtype=np.float32)
+        self.action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float32)
         self.history_length = np.zeros(capacity, dtype=np.int64)
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.next_action_history = np.zeros((capacity, max_seq_len, 7), dtype=np.float32)
+        self.next_action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float32)
         self.next_history_length = np.zeros(capacity, dtype=np.int64)
         self.next_legal_mask = np.zeros((capacity, num_actions), dtype=bool)
         self.dones = np.zeros(capacity, dtype=np.float32)

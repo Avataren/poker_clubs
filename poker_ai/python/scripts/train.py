@@ -19,7 +19,10 @@ def main():
     parser.add_argument("--eval-every", type=int, default=50_000)
     parser.add_argument("--eval-hands", type=int, default=1_000, help="Hands per evaluation run")
     parser.add_argument("--checkpoint-every", type=int, default=100_000)
-    parser.add_argument("--eta", type=float, default=0.2, help="Anticipatory parameter")
+    parser.add_argument("--eta", type=float, default=None, help="Fixed eta (overrides schedule)")
+    parser.add_argument("--eta-start", type=float, default=None, help="Eta schedule start")
+    parser.add_argument("--eta-end", type=float, default=None, help="Eta schedule end")
+    parser.add_argument("--eta-ramp-steps", type=int, default=None, help="Eta linear ramp steps")
     parser.add_argument("--br-lr", type=float, default=1e-4)
     parser.add_argument("--as-lr", type=float, default=1e-4)
     parser.add_argument("--as-buffer-size", type=int, default=None, help="AS reservoir buffer size")
@@ -45,7 +48,6 @@ def main():
         eval_every=args.eval_every,
         eval_hands=args.eval_hands,
         checkpoint_every=args.checkpoint_every,
-        eta=args.eta,
         br_lr=args.br_lr,
         as_lr=args.as_lr,
     )
@@ -69,6 +71,16 @@ def main():
         config_kwargs["lr_min_factor"] = args.lr_min_factor
     if args.tau is not None:
         config_kwargs["tau"] = args.tau
+    if args.eta is not None:
+        # Fixed eta: set start=end to disable ramp
+        config_kwargs["eta_start"] = args.eta
+        config_kwargs["eta_end"] = args.eta
+    if args.eta_start is not None:
+        config_kwargs["eta_start"] = args.eta_start
+    if args.eta_end is not None:
+        config_kwargs["eta_end"] = args.eta_end
+    if args.eta_ramp_steps is not None:
+        config_kwargs["eta_ramp_steps"] = args.eta_ramp_steps
     if args.no_amp:
         config_kwargs["use_amp"] = False
 

@@ -12,8 +12,8 @@ class ActionHistoryMLP(nn.Module):
 
     def __init__(self, config: NFSPConfig):
         super().__init__()
-        flat_input = config.max_history_len * config.lstm_input_dim  # 30 * 7 = 210
-        hidden = config.lstm_hidden_dim  # reuse same output dim (256)
+        flat_input = config.max_history_len * config.history_input_dim  # 30 * 11 = 330
+        hidden = config.history_hidden_dim  # output dim (256)
         self.net = nn.Sequential(
             nn.Linear(flat_input, hidden),
             nn.LayerNorm(hidden),
@@ -30,7 +30,7 @@ class ActionHistoryMLP(nn.Module):
         """Encode action history.
 
         Args:
-            action_seq: (batch, max_seq_len, 7) action features
+            action_seq: (batch, max_seq_len, 11) action features
             lengths: ignored (kept for API compatibility)
 
         Returns:
@@ -66,12 +66,12 @@ class PokerNet(nn.Module):
         super().__init__()
         self.config = config
 
-        # Static features: observation without LSTM placeholder
-        # 364 (cards) + 25 (game state) + 52 (hand strength) = 441
-        static_input = 441
+        # Static features: observation without history placeholder
+        # 364 (cards) + 46 (game state) + 52 (hand strength) = 462
+        static_input = 462
 
         # Input layer combines static features + history encoding
-        total_input = static_input + config.lstm_hidden_dim
+        total_input = static_input + config.history_hidden_dim
 
         # Shared trunk
         self.trunk = nn.Sequential(
@@ -85,8 +85,8 @@ class PokerNet(nn.Module):
             ResidualBlock(config.residual_dim),
         )
 
-        # Head hidden dim scales with residual dim
-        head_dim = config.residual_dim // 2  # 256 for residual_dim=512
+        # Head hidden dim matches residual dim for more capacity
+        head_dim = config.residual_dim  # 512
 
         # Policy head (for AS: outputs action probabilities)
         self.policy_head = nn.Sequential(
@@ -105,20 +105,20 @@ class PokerNet(nn.Module):
     def forward(
         self,
         obs: torch.Tensor,
-        lstm_hidden: torch.Tensor,
+        history_hidden: torch.Tensor,
         legal_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass.
 
         Args:
-            obs: (batch, 441) static features (cards + game state + hand strength)
-            lstm_hidden: (batch, 128) LSTM hidden state
-            legal_mask: (batch, 8) boolean mask of legal actions
+            obs: (batch, 462) static features (cards + game state + hand strength)
+            history_hidden: (batch, 256) history encoding
+            legal_mask: (batch, 9) boolean mask of legal actions
 
         Returns:
             (policy_logits, q_values) both (batch, num_actions)
         """
-        x = torch.cat([obs, lstm_hidden], dim=-1)
+        x = torch.cat([obs, history_hidden], dim=-1)
         trunk_out = self.trunk(x)
 
         policy_logits = self.policy_head(trunk_out)
@@ -135,23 +135,25 @@ class PokerNet(nn.Module):
     def policy(
         self,
         obs: torch.Tensor,
-        lstm_hidden: torch.Tensor,
+        history_hidden: torch.Tensor,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Get action probabilities (softmax of policy logits)."""
-        logits, _ = self.forward(obs, lstm_hidden, legal_mask)
-        # Guard against all-masked (all -inf) producing NaN from softmax
-        logits = logits.clamp(min=-1e9)
-        return F.softmax(logits, dim=-1)
+        logits, _ = self.forward(obs, history_hidden, legal_mask)
+        # Use torch.where for proper masking instead of clamp
+        safe_logits = torch.where(
+            legal_mask, logits, torch.tensor(-1e9, device=logits.device)
+        )
+        return F.softmax(safe_logits, dim=-1)
 
     def q_values(
         self,
         obs: torch.Tensor,
-        lstm_hidden: torch.Tensor,
+        history_hidden: torch.Tensor,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Get Q-values for all actions."""
-        _, q = self.forward(obs, lstm_hidden, legal_mask)
+        _, q = self.forward(obs, history_hidden, legal_mask)
         return q
 
 
@@ -170,8 +172,8 @@ class BestResponseNet(nn.Module):
         history_lengths: torch.Tensor | None,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
-        lstm_hidden = self.history_encoder(action_history, history_lengths)
-        return self.net.q_values(obs, lstm_hidden, legal_mask)
+        history_hidden = self.history_encoder(action_history, history_lengths)
+        return self.net.q_values(obs, history_hidden, legal_mask)
 
     def select_action(
         self,
@@ -213,8 +215,8 @@ class AverageStrategyNet(nn.Module):
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Returns action probabilities."""
-        lstm_hidden = self.history_encoder(action_history, history_lengths)
-        return self.net.policy(obs, lstm_hidden, legal_mask)
+        history_hidden = self.history_encoder(action_history, history_lengths)
+        return self.net.policy(obs, history_hidden, legal_mask)
 
     def forward_logits(
         self,
@@ -224,8 +226,8 @@ class AverageStrategyNet(nn.Module):
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Returns raw masked logits (for numerically stable cross-entropy)."""
-        lstm_hidden = self.history_encoder(action_history, history_lengths)
-        logits, _ = self.net.forward(obs, lstm_hidden, legal_mask)
+        history_hidden = self.history_encoder(action_history, history_lengths)
+        logits, _ = self.net.forward(obs, history_hidden, legal_mask)
         return logits
 
     def select_action(

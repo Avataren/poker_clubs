@@ -28,35 +28,29 @@ _STATIC_COLS = np.concatenate([
 
 
 def extract_static_features_batch(obs_batch: np.ndarray) -> np.ndarray:
-    """Vectorized: extract static features from (n, 569) -> (n, 441)."""
+    """Vectorized: extract static features from (n, 579) -> (n, 451)."""
     return obs_batch[:, _STATIC_COLS]
 
 
 def pad_action_history(history: list[np.ndarray], max_len: int = 30) -> tuple[np.ndarray, int]:
-    """Pad action history to fixed length. Returns (padded[max_len, 7], length)."""
+    """Pad action history to fixed length. Returns (padded[max_len, 11], length)."""
     length = min(len(history), max_len)
-    padded = np.zeros((max_len, 7), dtype=np.float32)
+    padded = np.zeros((max_len, 11), dtype=np.float32)
     if length > 0:
         padded[:length] = history[-length:]  # take most recent entries
     return padded, length
 
 
-# Pre-computed action record templates
-_ACTION_TEMPLATES = np.zeros((8, 7), dtype=np.float32)
-_ACTION_TEMPLATES[0, 1] = 1.0  # fold
-_ACTION_TEMPLATES[1, 2] = 1.0  # check/call
-_ACTION_TEMPLATES[2, 3] = 1.0  # small raise
-_ACTION_TEMPLATES[3, 3] = 1.0  # small raise
-_ACTION_TEMPLATES[4, 4] = 1.0  # medium raise
-_ACTION_TEMPLATES[5, 4] = 1.0  # medium raise
-_ACTION_TEMPLATES[6, 5] = 1.0  # large raise
-_ACTION_TEMPLATES[7, 5] = 1.0  # all-in
-for i in range(8):
-    _ACTION_TEMPLATES[i, 6] = min(i / 7.0, 1.0)
+# Pre-computed action record templates (9 actions × 11 dims)
+# Format: [seat_norm, 9× action one-hot, bet_size/pot]
+_ACTION_TEMPLATES = np.zeros((9, 11), dtype=np.float32)
+for _i in range(9):
+    _ACTION_TEMPLATES[_i, 1 + _i] = 1.0  # one-hot at position 1+action_idx
+    _ACTION_TEMPLATES[_i, 10] = min(_i / 8.0, 1.0)  # rough bet ratio
 
 
 def make_action_record(player: int, action: int, num_players: int) -> np.ndarray:
-    """Create a 7-dim action record."""
+    """Create an 11-dim action record."""
     rec = _ACTION_TEMPLATES[action].copy()
     rec[0] = player / max(1, num_players - 1)
     return rec
@@ -95,12 +89,12 @@ class SelfPlayWorker:
 
         # Per-env state (always active)
         self.use_as = np.zeros((config.num_envs, config.num_players), dtype=bool)
-        self.prev_obs = np.zeros((config.num_envs, 569), dtype=np.float32)
-        self.prev_mask = np.zeros((config.num_envs, 8), dtype=bool)
+        self.prev_obs = np.zeros((config.num_envs, config.input_dim), dtype=np.float32)
+        self.prev_mask = np.zeros((config.num_envs, config.num_actions), dtype=bool)
         self.prev_player = np.zeros(config.num_envs, dtype=np.intp)
         # Action histories stored as fixed-size ring buffers per env per player
         self.ah_arrays = np.zeros(
-            (config.num_envs, config.num_players, config.max_history_len, 7),
+            (config.num_envs, config.num_players, config.max_history_len, config.history_input_dim),
             dtype=np.float32,
         )
         self.ah_lens = np.zeros(
@@ -116,14 +110,15 @@ class SelfPlayWorker:
         self.hist_offsets = np.arange(self.max_hist, dtype=np.int64)
         self.static_obs = np.empty((self.num_envs, static_dim), dtype=np.float32)
         self.next_static = np.empty((self.num_envs, static_dim), dtype=np.float32)
-        self.pre_mask = np.empty((self.num_envs, 8), dtype=bool)
+        self.hist_dim = config.history_input_dim
+        self.pre_mask = np.empty((self.num_envs, config.num_actions), dtype=bool)
         self.pre_players = np.empty(self.num_envs, dtype=np.intp)
-        self.ah_batch = np.empty((self.num_envs, self.max_hist, 7), dtype=np.float32)
+        self.ah_batch = np.empty((self.num_envs, self.max_hist, self.hist_dim), dtype=np.float32)
         self.ah_lens_batch = np.empty(self.num_envs, dtype=np.int64)
-        self.next_ah_all = np.empty((self.num_envs, self.max_hist, 7), dtype=np.float32)
+        self.next_ah_all = np.empty((self.num_envs, self.max_hist, self.hist_dim), dtype=np.float32)
         self.next_ah_lens_all = np.empty(self.num_envs, dtype=np.int64)
         self.actions_np = np.empty(self.num_envs, dtype=np.int64)
-        self.action_records = np.empty((self.num_envs, 7), dtype=np.float32)
+        self.action_records = np.empty((self.num_envs, self.hist_dim), dtype=np.float32)
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
@@ -143,10 +138,10 @@ class SelfPlayWorker:
     def _gather_histories(
         self, env_indices: np.ndarray, players: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Gather chronological [max_hist, 7] histories for env/player pairs."""
+        """Gather chronological [max_hist, hist_dim] histories for env/player pairs."""
         n = len(env_indices)
         max_hist = self.max_hist
-        out = np.empty((n, max_hist, 7), dtype=np.float32)
+        out = np.empty((n, max_hist, self.hist_dim), dtype=np.float32)
         lengths = np.empty(n, dtype=np.int64)
         self._gather_histories_into(env_indices, players, out, lengths)
         return out, lengths
@@ -158,7 +153,7 @@ class SelfPlayWorker:
         out: np.ndarray,
         lengths: np.ndarray,
     ):
-        """Gather chronological [max_hist, 7] histories into preallocated outputs."""
+        """Gather chronological [max_hist, hist_dim] histories into preallocated outputs."""
         n = len(env_indices)
         max_hist = self.max_hist
         out.fill(0.0)
@@ -193,9 +188,11 @@ class SelfPlayWorker:
         self.ah_lens[env] = 0
         self.ah_pos[env] = 0
 
-    def _init_envs(self):
+    def _init_envs(self, eta: float | None = None):
+        if eta is None:
+            eta = self.config.eta_start
         results = self.env.reset_all()
-        self.use_as[:] = np.random.random((self.num_envs, self.num_players)) < self.config.eta
+        self.use_as[:] = np.random.random((self.num_envs, self.num_players)) < eta
         self.ah_arrays[:] = 0.0
         self.ah_lens[:] = 0
         self.ah_pos[:] = 0
@@ -206,10 +203,12 @@ class SelfPlayWorker:
             self.prev_player[i] = player
         self._initialized = True
 
-    def run_episodes(self, epsilon: float) -> int:
+    def run_episodes(self, epsilon: float, eta: float | None = None) -> int:
         """Run continuous self-play until at least num_envs episodes complete."""
+        if eta is None:
+            eta = self.config.eta_start
         if not self._initialized:
-            self._init_envs()
+            self._init_envs(eta)
 
         n = self.num_envs
         num_players = self.num_players
@@ -222,7 +221,7 @@ class SelfPlayWorker:
             players = self.prev_player
             np.take(self.prev_obs, _STATIC_COLS, axis=1, out=self.static_obs)
 
-            # Build action history batch: (n, max_hist, 7)
+            # Build action history batch: (n, max_hist, hist_dim)
             self._gather_histories_into(env_idx, players, self.ah_batch, self.ah_lens_batch)
             np.copyto(self.pre_mask, self.prev_mask)
             np.copyto(self.pre_players, players)
@@ -332,7 +331,7 @@ class SelfPlayWorker:
                 self.prev_mask[done_indices] = reset_masks
                 self.prev_player[done_indices] = reset_players
                 self.use_as[done_indices] = (
-                    np.random.random((len(done_indices), num_players)) < self.config.eta
+                    np.random.random((len(done_indices), num_players)) < eta
                 )
 
         return total_steps

@@ -3,15 +3,16 @@
 ACTION_NAMES = [
     "Fold",
     "Check/Call",
-    "Raise 0.5x Pot",
-    "Raise 0.75x Pot",
+    "Raise 0.25x Pot",
+    "Raise 0.4x Pot",
+    "Raise 0.6x Pot",
+    "Raise 0.8x Pot",
     "Raise 1x Pot",
     "Raise 1.5x Pot",
-    "Raise 2x Pot",
     "All-In",
 ]
 
-NUM_ACTIONS = 8
+NUM_ACTIONS = 9
 
 
 def action_name(action_idx: int) -> str:

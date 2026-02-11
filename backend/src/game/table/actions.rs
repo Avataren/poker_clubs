@@ -400,7 +400,7 @@ impl PokerTable {
 }
 
 const DISCRETE_RAISE_TARGETS: &[(usize, f32)] =
-    &[(2, 0.5), (3, 0.75), (4, 1.0), (5, 1.5), (6, 2.0)];
+    &[(2, 0.25), (3, 0.4), (4, 0.6), (5, 0.8), (6, 1.0), (7, 1.5)];
 
 fn action_to_history_index(
     action: &PlayerAction,
@@ -417,7 +417,7 @@ fn action_to_history_index(
             pot_before_action.max(0),
             stack_before_action.max(0),
         )),
-        PlayerAction::AllIn => Some(7),
+        PlayerAction::AllIn => Some(8),
         PlayerAction::ShowCards(_) => None,
     }
 }
@@ -430,7 +430,7 @@ fn raise_to_history_index(
 ) -> usize {
     let max_raise = stack_before_action.saturating_sub(to_call_before);
     if max_raise > 0 && raise_amount >= max_raise {
-        return 7;
+        return 8;
     }
 
     let effective_pot = pot_before_action.saturating_add(to_call_before).max(1) as f32;

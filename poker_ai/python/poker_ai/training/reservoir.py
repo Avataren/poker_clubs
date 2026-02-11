@@ -20,7 +20,7 @@ class SLTransition:
 class ReservoirBuffer:
     """Reservoir sampling buffer using pre-allocated numpy arrays."""
 
-    def __init__(self, capacity: int, obs_dim: int = 441, max_seq_len: int = 30, num_actions: int = 8):
+    def __init__(self, capacity: int, obs_dim: int = 462, max_seq_len: int = 30, num_actions: int = 9, history_dim: int = 11):
         self.capacity = capacity
         self.size = 0
         self.total_seen = 0
@@ -28,7 +28,7 @@ class ReservoirBuffer:
 
         # Pre-allocated arrays
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.action_history = np.zeros((capacity, max_seq_len, 7), dtype=np.float32)
+        self.action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float32)
         self.history_length = np.zeros(capacity, dtype=np.int64)
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.legal_mask = np.zeros((capacity, num_actions), dtype=bool)

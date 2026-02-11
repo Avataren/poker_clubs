@@ -7,33 +7,35 @@ pub enum Action {
     AllIn,
 }
 
-/// Discrete action IDs for the neural network (8 actions).
+/// Discrete action IDs for the neural network (9 actions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DiscreteAction {
     Fold = 0,
     CheckCall = 1,
-    RaiseHalfPot = 2,
-    RaiseThreeQuarterPot = 3,
-    RaisePot = 4,
-    RaiseOneAndHalfPot = 5,
-    RaiseTwoPot = 6,
-    AllIn = 7,
+    RaiseQuarterPot = 2,
+    RaiseFortyPot = 3,
+    RaiseSixtyPot = 4,
+    RaiseEightyPot = 5,
+    RaisePot = 6,
+    RaiseOneAndHalfPot = 7,
+    AllIn = 8,
 }
 
 impl DiscreteAction {
-    pub const NUM_ACTIONS: usize = 8;
+    pub const NUM_ACTIONS: usize = 9;
 
     pub fn from_index(idx: usize) -> Option<Self> {
         match idx {
             0 => Some(Self::Fold),
             1 => Some(Self::CheckCall),
-            2 => Some(Self::RaiseHalfPot),
-            3 => Some(Self::RaiseThreeQuarterPot),
-            4 => Some(Self::RaisePot),
-            5 => Some(Self::RaiseOneAndHalfPot),
-            6 => Some(Self::RaiseTwoPot),
-            7 => Some(Self::AllIn),
+            2 => Some(Self::RaiseQuarterPot),
+            3 => Some(Self::RaiseFortyPot),
+            4 => Some(Self::RaiseSixtyPot),
+            5 => Some(Self::RaiseEightyPot),
+            6 => Some(Self::RaisePot),
+            7 => Some(Self::RaiseOneAndHalfPot),
+            8 => Some(Self::AllIn),
             _ => None,
         }
     }
@@ -46,12 +48,20 @@ impl DiscreteAction {
         match self {
             Self::Fold => Action::Fold,
             Self::CheckCall => Action::CheckCall,
-            Self::RaiseHalfPot => {
-                let raise_amount = effective_pot / 2;
+            Self::RaiseQuarterPot => {
+                let raise_amount = effective_pot / 4;
                 Action::Raise(current_bet + raise_amount)
             }
-            Self::RaiseThreeQuarterPot => {
-                let raise_amount = effective_pot * 3 / 4;
+            Self::RaiseFortyPot => {
+                let raise_amount = effective_pot * 2 / 5;
+                Action::Raise(current_bet + raise_amount)
+            }
+            Self::RaiseSixtyPot => {
+                let raise_amount = effective_pot * 3 / 5;
+                Action::Raise(current_bet + raise_amount)
+            }
+            Self::RaiseEightyPot => {
+                let raise_amount = effective_pot * 4 / 5;
                 Action::Raise(current_bet + raise_amount)
             }
             Self::RaisePot => {
@@ -60,10 +70,6 @@ impl DiscreteAction {
             }
             Self::RaiseOneAndHalfPot => {
                 let raise_amount = effective_pot * 3 / 2;
-                Action::Raise(current_bet + raise_amount)
-            }
-            Self::RaiseTwoPot => {
-                let raise_amount = effective_pot * 2;
                 Action::Raise(current_bet + raise_amount)
             }
             Self::AllIn => Action::AllIn,
@@ -80,33 +86,17 @@ pub struct ActionRecord {
 }
 
 impl ActionRecord {
-    /// Encode as 7 floats: [seat_normalized, fold, check_call, raise_small, raise_med, raise_large, bet_ratio]
-    pub fn encode(&self, num_players: usize) -> [f32; 7] {
+    /// Encode as 11 floats: [seat_normalized, 9× action one-hot, bet_size/pot]
+    pub fn encode(&self, num_players: usize) -> [f32; 11] {
         let seat_norm = if num_players > 1 {
             self.seat as f32 / (num_players - 1) as f32
         } else {
             0.0
         };
-        let mut action_onehot = [0.0f32; 5];
-        match self.action {
-            DiscreteAction::Fold => action_onehot[0] = 1.0,
-            DiscreteAction::CheckCall => action_onehot[1] = 1.0,
-            DiscreteAction::RaiseHalfPot | DiscreteAction::RaiseThreeQuarterPot => {
-                action_onehot[2] = 1.0
-            }
-            DiscreteAction::RaisePot | DiscreteAction::RaiseOneAndHalfPot => {
-                action_onehot[3] = 1.0
-            }
-            DiscreteAction::RaiseTwoPot | DiscreteAction::AllIn => action_onehot[4] = 1.0,
-        }
-        [
-            seat_norm,
-            action_onehot[0],
-            action_onehot[1],
-            action_onehot[2],
-            action_onehot[3],
-            action_onehot[4],
-            self.bet_ratio,
-        ]
+        let mut out = [0.0f32; 11];
+        out[0] = seat_norm;
+        out[1 + self.action as usize] = 1.0;
+        out[10] = self.bet_ratio;
+        out
     }
 }

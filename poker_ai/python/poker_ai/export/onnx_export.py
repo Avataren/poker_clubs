@@ -43,18 +43,19 @@ def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> N
 
     hist_w = as_state.get("history_encoder.net.0.weight")
     if isinstance(hist_w, torch.Tensor) and hist_w.ndim == 2:
-        config.lstm_hidden_dim = int(hist_w.shape[0])
+        config.history_hidden_dim = int(hist_w.shape[0])
         flat_input = int(hist_w.shape[1])
-        if config.lstm_input_dim > 0 and flat_input % config.lstm_input_dim == 0:
-            config.max_history_len = flat_input // config.lstm_input_dim
+        if config.history_input_dim > 0 and flat_input % config.history_input_dim == 0:
+            config.max_history_len = flat_input // config.history_input_dim
 
     trunk0_w = as_state.get("net.trunk.0.weight")
     if isinstance(trunk0_w, torch.Tensor) and trunk0_w.ndim == 2:
         config.hidden_dim = int(trunk0_w.shape[0])
         total_in = int(trunk0_w.shape[1])
-        inferred_hist_hidden = total_in - 441
+        from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
+        inferred_hist_hidden = total_in - STATIC_FEATURE_SIZE
         if inferred_hist_hidden > 0:
-            config.lstm_hidden_dim = inferred_hist_hidden
+            config.history_hidden_dim = inferred_hist_hidden
 
     trunk4_w = as_state.get("net.trunk.4.weight")
     if isinstance(trunk4_w, torch.Tensor) and trunk4_w.ndim == 2:
@@ -96,10 +97,11 @@ def export_to_onnx(
     wrapper.eval()
 
     # Create dummy inputs
+    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
     batch_size = 1
     max_seq_len = config.max_history_len
-    obs = torch.randn(batch_size, 441)
-    action_history = torch.randn(batch_size, max_seq_len, 7)
+    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    action_history = torch.randn(batch_size, max_seq_len, config.history_input_dim)
     history_lengths = torch.tensor([max_seq_len], dtype=torch.long)
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
 
@@ -144,10 +146,11 @@ def verify_onnx(
     as_net.eval()
 
     # Create test inputs
+    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
     batch_size = 4
     max_seq_len = config.max_history_len
-    obs = torch.randn(batch_size, 441)
-    action_history = torch.randn(batch_size, max_seq_len, 7)
+    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    action_history = torch.randn(batch_size, max_seq_len, config.history_input_dim)
     history_lengths = torch.tensor(
         [
             min(10, max_seq_len),
@@ -160,7 +163,7 @@ def verify_onnx(
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
     # Make some actions illegal
     legal_mask[0, 0] = False
-    legal_mask[1, 7] = False
+    legal_mask[1, 8] = False
 
     # PyTorch output
     with torch.no_grad():

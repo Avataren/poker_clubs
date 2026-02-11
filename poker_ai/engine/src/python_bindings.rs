@@ -60,13 +60,13 @@ impl PokerEnv {
         let (done, next_player) = self.table.apply_action(action_idx);
 
         let obs = if done {
-            vec![0.0f32; 569]
+            vec![0.0f32; 590]
         } else {
             self.table.encode_observation(next_player)
         };
 
         let mask = if done {
-            vec![false; 8]
+            vec![false; 9]
         } else {
             self.table.legal_actions_mask().to_vec()
         };
@@ -89,7 +89,7 @@ impl PokerEnv {
         Ok(self.table.encode_observation(seat))
     }
 
-    /// Get action history encoded for LSTM (list of 7-float arrays).
+    /// Get action history encoded for history MLP (list of 11-float arrays).
     fn get_action_history(&self) -> PyResult<Vec<Vec<f32>>> {
         Ok(self
             .table
@@ -195,13 +195,13 @@ impl BatchPokerEnv {
         let (done, next_player) = table.apply_action(action_idx);
 
         let obs = if done {
-            vec![0.0f32; 569]
+            vec![0.0f32; 590]
         } else {
             table.encode_observation(next_player)
         };
 
         let mask = if done {
-            vec![false; 8]
+            vec![false; 9]
         } else {
             table.legal_actions_mask().to_vec()
         };
@@ -232,7 +232,7 @@ impl BatchPokerEnv {
 
     /// Step multiple environments at once. Takes list of (env_idx, action_idx) pairs.
     /// Returns (players, obs_flat, masks_flat, rewards_flat, dones) as flat arrays.
-    /// obs_flat shape: (n, 569), masks_flat: (n, 8), rewards_flat: (n, num_players), dones: (n,)
+    /// obs_flat shape: (n, 590), masks_flat: (n, 9), rewards_flat: (n, num_players), dones: (n,)
     fn step_batch(
         &mut self,
         actions: Vec<(usize, usize)>,
@@ -241,8 +241,8 @@ impl BatchPokerEnv {
         let num_players = if self.envs.is_empty() { 0 } else { self.envs[0].0.num_players };
 
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 569);
-        let mut masks_flat = Vec::with_capacity(n * 8);
+        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut masks_flat = Vec::with_capacity(n * 9);
         let mut rewards_flat = Vec::with_capacity(n * num_players);
         let mut dones = Vec::with_capacity(n);
 
@@ -254,7 +254,7 @@ impl BatchPokerEnv {
             dones.push(done);
 
             if done {
-                obs_flat.extend(std::iter::repeat(0.0f32).take(569));
+                obs_flat.extend(std::iter::repeat(0.0f32).take(590));
                 masks_flat.extend(std::iter::repeat(false).take(8));
                 let rewards: Vec<f64> = table
                     .rewards
@@ -298,8 +298,8 @@ impl BatchPokerEnv {
         let num_players = if self.envs.is_empty() { 0 } else { self.envs[0].0.num_players };
 
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 569);
-        let mut masks_flat = Vec::with_capacity(n * 8);
+        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut masks_flat = Vec::with_capacity(n * 9);
         let mut rewards_flat = Vec::with_capacity(n * num_players);
         let mut dones = Vec::with_capacity(n);
 
@@ -311,8 +311,8 @@ impl BatchPokerEnv {
             dones.push(u8::from(done));
 
             if done {
-                obs_flat.extend(std::iter::repeat(0.0f32).take(569));
-                masks_flat.extend(std::iter::repeat(0u8).take(8));
+                obs_flat.extend(std::iter::repeat(0.0f32).take(590));
+                masks_flat.extend(std::iter::repeat(0u8).take(9));
                 rewards_flat.extend(
                     table
                         .rewards
@@ -344,8 +344,8 @@ impl BatchPokerEnv {
     ) -> PyResult<(Vec<usize>, Vec<f32>, Vec<bool>)> {
         let n = env_indices.len();
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 569);
-        let mut masks_flat = Vec::with_capacity(n * 8);
+        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut masks_flat = Vec::with_capacity(n * 9);
 
         for env_idx in env_indices {
             let (table, rng) = &mut self.envs[env_idx];
@@ -371,8 +371,8 @@ impl BatchPokerEnv {
     ) -> PyResult<(Vec<usize>, Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
         let n = env_indices.len();
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 569);
-        let mut masks_flat = Vec::with_capacity(n * 8);
+        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut masks_flat = Vec::with_capacity(n * 9);
 
         for env_idx in env_indices {
             let (table, rng) = &mut self.envs[env_idx];

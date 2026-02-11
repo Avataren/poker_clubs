@@ -51,7 +51,7 @@ class NFSPTrainer:
         if self.use_amp:
             print(f"AMP enabled: dtype={self.amp_dtype}")
         print(f"Model: hidden={config.hidden_dim}, residual={config.residual_dim}, "
-              f"lstm_hidden={config.lstm_hidden_dim}, batch={config.batch_size}")
+              f"history_hidden={config.history_hidden_dim}, batch={config.batch_size}")
 
         # Networks
         self.br_net = BestResponseNet(config).to(self.device)
@@ -88,8 +88,21 @@ class NFSPTrainer:
         self._lr_total_steps = config.epsilon_decay_steps  # reuse as LR schedule horizon
 
         # Replay buffers
-        self.br_buffer = CircularBuffer(config.br_buffer_size, max_seq_len=config.max_history_len)
-        self.as_buffer = ReservoirBuffer(config.as_buffer_size, max_seq_len=config.max_history_len)
+        from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
+        self.br_buffer = CircularBuffer(
+            config.br_buffer_size,
+            obs_dim=STATIC_FEATURE_SIZE,
+            max_seq_len=config.max_history_len,
+            num_actions=config.num_actions,
+            history_dim=config.history_input_dim,
+        )
+        self.as_buffer = ReservoirBuffer(
+            config.as_buffer_size,
+            obs_dim=STATIC_FEATURE_SIZE,
+            max_seq_len=config.max_history_len,
+            num_actions=config.num_actions,
+            history_dim=config.history_input_dim,
+        )
 
         # Self-play worker
         self.worker = SelfPlayWorker(
@@ -112,6 +125,13 @@ class NFSPTrainer:
         progress = min(self.total_steps / self.config.epsilon_decay_steps, 1.0)
         return self.config.epsilon_start + progress * (
             self.config.epsilon_end - self.config.epsilon_start
+        )
+
+    def get_eta(self) -> float:
+        """Get current eta (AS/BR mix) with linear ramp."""
+        progress = min(self.total_steps / max(self.config.eta_ramp_steps, 1), 1.0)
+        return self.config.eta_start + progress * (
+            self.config.eta_end - self.config.eta_start
         )
 
     def _get_lr_factor(self) -> float:
@@ -250,16 +270,20 @@ class NFSPTrainer:
         log_every = 10000
         next_log = ((episode_count // log_every) + 1) * log_every
         next_eval = ((episode_count // self.config.eval_every) + 1) * self.config.eval_every
-        next_checkpoint = (
-            ((episode_count // self.config.checkpoint_every) + 1) * self.config.checkpoint_every
-        )
+        if self.config.checkpoint_every > 0:
+            next_checkpoint = (
+                ((episode_count // self.config.checkpoint_every) + 1) * self.config.checkpoint_every
+            )
+        else:
+            next_checkpoint = self.config.total_episodes + 1
         train_rounds = episode_count // self.config.num_envs
 
         while episode_count < self.config.total_episodes:
             epsilon = self.get_epsilon()
+            eta = self.get_eta()
 
             # Run self-play episodes
-            steps = self.worker.run_episodes(epsilon)
+            steps = self.worker.run_episodes(epsilon, eta)
             self.total_steps += steps
             episode_count += self.config.num_envs
             self.total_episodes = episode_count
@@ -291,10 +315,11 @@ class NFSPTrainer:
                 print(
                     f"Episodes: {episode_count:,} | Steps: {self.total_steps:,} | "
                     f"BR buf: {len(self.br_buffer):,} | AS buf: {len(self.as_buffer):,} | "
-                    f"eps: {epsilon:.4f} | lr: {cur_lr_f:.4f} | {eps_per_sec:.0f} ep/s"
+                    f"eps: {epsilon:.4f} | eta: {eta:.4f} | lr: {cur_lr_f:.4f} | {eps_per_sec:.0f} ep/s"
                 )
                 cur_br_lr = self.br_optimizer.param_groups[0]["lr"]
                 self.writer.add_scalar("meta/epsilon", epsilon, self.total_steps)
+                self.writer.add_scalar("meta/eta", eta, self.total_steps)
                 self.writer.add_scalar("meta/episodes", episode_count, self.total_steps)
                 self.writer.add_scalar("meta/br_lr", cur_br_lr, self.total_steps)
                 self.writer.add_scalar("meta/lr_factor", self._get_lr_factor(), self.total_steps)

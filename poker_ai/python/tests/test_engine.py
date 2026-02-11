@@ -3,6 +3,9 @@
 import numpy as np
 import pytest
 
+from poker_ai.model.state_encoder import OBS_SIZE
+from poker_ai.env.action_space import NUM_ACTIONS
+
 
 def test_env_creation():
     """Test basic environment creation."""
@@ -22,8 +25,8 @@ def test_env_reset():
 
     assert isinstance(player, int)
     assert 0 <= player < 2
-    assert obs.shape == (569,)
-    assert mask.shape == (8,)
+    assert obs.shape == (OBS_SIZE,)
+    assert mask.shape == (NUM_ACTIONS,)
     assert obs.dtype == np.float32
     assert mask.dtype == bool
     assert mask.any(), "At least one action must be legal"
@@ -42,8 +45,8 @@ def test_env_step():
     next_player, next_obs, next_mask, rewards, done = env.step(int(action))
 
     assert isinstance(next_player, int)
-    assert next_obs.shape == (569,)
-    assert next_mask.shape == (8,)
+    assert next_obs.shape == (OBS_SIZE,)
+    assert next_mask.shape == (NUM_ACTIONS,)
     assert rewards.shape == (2,)
     assert isinstance(done, bool)
 
@@ -99,8 +102,8 @@ def test_batch_env():
 
     assert len(results) == 4
     for player, obs, mask in results:
-        assert obs.shape == (569,)
-        assert mask.shape == (8,)
+        assert obs.shape == (OBS_SIZE,)
+        assert mask.shape == (NUM_ACTIONS,)
 
 
 def test_batch_env_step():
@@ -115,7 +118,7 @@ def test_batch_env_step():
     legal = np.where(mask)[0]
     action = legal[0]
     next_player, next_obs, next_mask, rewards, done = env.step(0, int(action))
-    assert next_obs.shape == (569,)
+    assert next_obs.shape == (OBS_SIZE,)
 
 
 def test_batch_env_dense_api():
@@ -131,8 +134,8 @@ def test_batch_env_dense_api():
 
     players, obs, masks, rewards, dones = env.step_batch_dense(actions)
     assert players.shape == (4,)
-    assert obs.shape == (4, 569)
-    assert masks.shape == (4, 8)
+    assert obs.shape == (4, OBS_SIZE)
+    assert masks.shape == (4, NUM_ACTIONS)
     assert rewards.shape == (4, 2)
     assert dones.shape == (4,)
 
@@ -140,8 +143,8 @@ def test_batch_env_dense_api():
     if len(done_idx) > 0:
         r_players, r_obs, r_masks = env.reset_batch_dense(done_idx)
         assert r_players.shape == (len(done_idx),)
-        assert r_obs.shape == (len(done_idx), 569)
-        assert r_masks.shape == (len(done_idx), 8)
+        assert r_obs.shape == (len(done_idx), OBS_SIZE)
+        assert r_masks.shape == (len(done_idx), NUM_ACTIONS)
 
 
 def test_legal_mask_validity():

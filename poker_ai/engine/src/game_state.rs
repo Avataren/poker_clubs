@@ -53,6 +53,8 @@ pub struct SimTable {
     pub players_acted_this_round: Vec<bool>,
     pub rewards: Vec<f64>,           // chips won - chips invested, per player
     pub initial_stacks: Vec<i64>,
+    pub street_action_count: usize,
+    pub street_raise_count: usize,
 }
 
 impl SimTable {
@@ -82,6 +84,8 @@ impl SimTable {
             players_acted_this_round: vec![false; num_players],
             rewards: vec![0.0; num_players],
             initial_stacks: vec![starting_stack; num_players],
+            street_action_count: 0,
+            street_raise_count: 0,
         }
     }
 
@@ -110,6 +114,8 @@ impl SimTable {
         self.players_acted_this_round = vec![false; self.num_players];
         self.rewards = vec![0.0; self.num_players];
         self.initial_stacks = self.stacks.clone();
+        self.street_action_count = 0;
+        self.street_raise_count = 0;
 
         // Mark busted players as folded
         for i in 0..self.num_players {
@@ -167,8 +173,8 @@ impl SimTable {
     }
 
     /// Get legal discrete action mask (true = legal).
-    pub fn legal_actions_mask(&self) -> [bool; 8] {
-        let mut mask = [false; 8];
+    pub fn legal_actions_mask(&self) -> [bool; 9] {
+        let mut mask = [false; 9];
         if self.phase == Phase::HandOver || self.phase == Phase::Showdown {
             return mask;
         }
@@ -197,7 +203,7 @@ impl SimTable {
         // Raise options (only if stack > to_call)
         if stack > to_call {
             let _min_raise = self.big_blind.max(self.current_bet);
-            for action_idx in 2..=6 {
+            for action_idx in 2..=7 {
                 if let Some(da) = DiscreteAction::from_index(action_idx) {
                     let action = da.to_action(self.pot, self.current_bet, self.player_bets[seat], stack);
                     if let Action::Raise(raise_to) = action {
@@ -242,6 +248,7 @@ impl SimTable {
             action: da,
             bet_ratio,
         });
+        self.street_action_count += 1;
 
         match action {
             Action::Fold => {
@@ -268,6 +275,7 @@ impl SimTable {
                 self.pot += amount;
                 self.current_bet = actual_raise_to;
                 self.last_raiser = Some(seat);
+                self.street_raise_count += 1;
                 // Reset acted flags for others
                 for i in 0..self.num_players {
                     if i != seat {
@@ -288,6 +296,7 @@ impl SimTable {
                     // This is a raise
                     self.current_bet = new_bet;
                     self.last_raiser = Some(seat);
+                    self.street_raise_count += 1;
                     for i in 0..self.num_players {
                         if i != seat {
                             self.players_acted_this_round[i] = false;
@@ -316,6 +325,14 @@ impl SimTable {
         (0..self.num_players)
             .filter(|&i| !self.folded[i])
             .count()
+    }
+
+    fn count_street_actions(&self) -> usize {
+        self.street_action_count
+    }
+
+    fn count_street_raises(&self) -> usize {
+        self.street_raise_count
     }
 
     fn can_act_count(&self) -> usize {
@@ -364,6 +381,8 @@ impl SimTable {
         self.current_bet = 0;
         self.last_raiser = None;
         self.players_acted_this_round = vec![false; self.num_players];
+        self.street_action_count = 0;
+        self.street_raise_count = 0;
 
         match self.phase {
             Phase::Preflop => {
@@ -516,9 +535,10 @@ impl SimTable {
     }
 
     /// Encode observation for the given player as a feature vector.
-    /// Returns 569 floats total (without LSTM hidden state which is maintained in Python).
+    /// Returns 590 floats total:
+    ///   364 (cards) + 46 (game state) + 128 (history placeholder) + 52 (hand strength)
     pub fn encode_observation(&self, seat: usize) -> Vec<f32> {
-        let mut features = Vec::with_capacity(569);
+        let mut features = Vec::with_capacity(590);
 
         // --- Card encoding (364 floats) ---
         // Hole cards: 2 x 52 one-hot
@@ -538,7 +558,12 @@ impl SimTable {
             features.extend_from_slice(&onehot);
         }
 
-        // --- Game state (25 floats) ---
+        // --- Game state (35 floats) ---
+        let to_call_i64 = self.current_bet - self.player_bets.get(seat).copied().unwrap_or(0);
+        let to_call = to_call_i64.max(0) as f32;
+        let pot_f = self.pot.max(0) as f32;
+        let stack = self.stacks[seat].max(0) as f32;
+
         // Phase one-hot (6)
         let mut phase_oh = [0.0f32; 6];
         phase_oh[self.phase.index()] = 1.0;
@@ -546,19 +571,19 @@ impl SimTable {
 
         // Stack / initial stack ratio (1)
         let stack_ratio = if self.initial_stacks[seat] > 0 {
-            self.stacks[seat] as f32 / self.initial_stacks[seat] as f32
+            stack / self.initial_stacks[seat] as f32
         } else {
             0.0
         };
         features.push(stack_ratio);
 
         // Pot / BB ratio (1)
-        let pot_bb = self.pot as f32 / self.big_blind.max(1) as f32;
+        let pot_bb = pot_f / self.big_blind.max(1) as f32;
         features.push(pot_bb.min(50.0) / 50.0);
 
         // Stack / pot ratio (SPR) (1)
         let spr = if self.pot > 0 {
-            self.stacks[seat] as f32 / self.pot as f32
+            stack / pot_f
         } else {
             10.0
         };
@@ -570,7 +595,8 @@ impl SimTable {
         features.push(position);
 
         // Num opponents still in hand (1)
-        let opponents = self.active_count().saturating_sub(1) as f32
+        let active = self.active_count();
+        let opponents = active.saturating_sub(1) as f32
             / (self.num_players - 1).max(1) as f32;
         features.push(opponents);
 
@@ -579,9 +605,8 @@ impl SimTable {
         features.push(can_act);
 
         // To-call / pot ratio (1)
-        let to_call = (self.current_bet - self.player_bets.get(seat).copied().unwrap_or(0)) as f32;
         let to_call_ratio = if self.pot > 0 {
-            to_call / self.pot as f32
+            to_call / pot_f
         } else {
             0.0
         };
@@ -590,8 +615,59 @@ impl SimTable {
         // Num players (normalized) (1)
         features.push(self.num_players as f32 / 9.0);
 
+        // --- NEW features (10 floats) ---
+
+        // Pot odds: to_call / (pot + to_call) (1)
+        let pot_odds = if pot_f + to_call > 0.0 {
+            to_call / (pot_f + to_call)
+        } else {
+            0.0
+        };
+        features.push(pot_odds);
+
+        // Effective stack / pot: min(hero_stack, max_opp_stack) / pot (1)
+        let max_opp_stack = (0..self.num_players)
+            .filter(|&i| i != seat && !self.folded[i])
+            .map(|i| self.stacks[i].max(0) as f32)
+            .fold(0.0f32, f32::max);
+        let eff_stack = stack.min(max_opp_stack);
+        let eff_stack_pot = if pot_f > 0.0 {
+            eff_stack / pot_f
+        } else {
+            10.0
+        };
+        features.push(eff_stack_pot.min(20.0) / 20.0);
+
+        // Street action count: num actions this street / 10 (1)
+        let street_action_count = self.count_street_actions();
+        features.push((street_action_count as f32 / 10.0).min(1.0));
+
+        // Total action count: total actions this hand / 30 (1)
+        features.push((self.action_history.len() as f32 / 30.0).min(1.0));
+
+        // Num raises this street / 4 (1)
+        let raises_this_street = self.count_street_raises();
+        features.push((raises_this_street as f32 / 4.0).min(1.0));
+
+        // Last aggressor is hero (1)
+        let last_agg_hero = if self.last_raiser == Some(seat) { 1.0 } else { 0.0 };
+        features.push(last_agg_hero);
+
+        // Hero's current bet / pot (1)
+        let hero_bet = self.player_bets.get(seat).copied().unwrap_or(0).max(0) as f32;
+        let hero_bet_pot = if pot_f > 0.0 { hero_bet / pot_f } else { 0.0 };
+        features.push(hero_bet_pot.min(5.0) / 5.0);
+
+        // Hero invested / starting stack (1)
+        let total_invested = self.total_bets.get(seat).copied().unwrap_or(0).max(0) as f32;
+        let hero_invested = if self.initial_stacks[seat] > 0 {
+            total_invested / self.initial_stacks[seat] as f32
+        } else {
+            0.0
+        };
+        features.push(hero_invested.min(1.0));
+
         // Per-opponent features: folded, all-in, stack ratio (up to 8 opponents = 24)
-        // Pad to 8 opponents for fixed size
         for i in 0..8 {
             let opp = (seat + 1 + i) % self.num_players;
             if i < self.num_players - 1 {
@@ -607,16 +683,12 @@ impl SimTable {
                 features.extend_from_slice(&[0.0, 0.0, 0.0]);
             }
         }
-        // Total game state: 6 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 24 = 38
-        // We said 25, but let me recount: we need exactly 25
-        // Trim: 6 phase + 8 scalars + 8*... let's use less opponent info
-        // Actually the plan says 25 game state + 128 LSTM + 52 hand strength = 205 non-card
-        // Plus 364 card = 569. Let me just ensure we hit 569 by controlling the layout.
+        // Game state: 6 phase + 8 scalars + 8 new + 24 opponents = 46
+        debug_assert_eq!(features.len(), 364 + 46,
+            "game state mismatch: got {} floats, expected 46", features.len() - 364);
 
-        // --- Placeholder for LSTM hidden state (128 floats) - filled by Python ---
-        // We encode action_history here as raw data, Python LSTM will process it
-        // For now output zeros as placeholder
-        features.resize(364 + 25 + 128, 0.0);
+        // --- Placeholder for history hidden state (128 floats) - filled by Python ---
+        features.resize(364 + 46 + 128, 0.0);
 
         // --- Hand strength features (52 floats) ---
         if seat < self.hole_cards.len() && !self.hole_cards.is_empty() {
@@ -635,17 +707,17 @@ impl SimTable {
             ));
 
             // Pad remaining hand strength features
-            features.resize(569, 0.0);
+            features.resize(590, 0.0);
         } else {
-            features.resize(569, 0.0);
+            features.resize(590, 0.0);
         }
 
         features
     }
 
-    /// Get action history encoded for LSTM input.
-    /// Each action is 7 floats. Returns Vec of [7] arrays.
-    pub fn encode_action_history(&self) -> Vec<[f32; 7]> {
+    /// Get action history encoded for history MLP input.
+    /// Each action is 11 floats. Returns Vec of [11] arrays.
+    pub fn encode_action_history(&self) -> Vec<[f32; 11]> {
         self.action_history
             .iter()
             .map(|ar| ar.encode(self.num_players))

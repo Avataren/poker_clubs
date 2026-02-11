@@ -9,6 +9,9 @@ except ImportError:
     RustPokerEnv = None
     RustBatchPokerEnv = None
 
+from poker_ai.model.state_encoder import OBS_SIZE
+from poker_ai.env.action_space import NUM_ACTIONS
+
 
 class PokerEnv:
     """Single-table poker environment wrapping the Rust engine."""
@@ -126,18 +129,11 @@ class BatchPokerEnv:
     def step_batch(
         self, actions: list[tuple[int, int]]
     ) -> tuple[list[int], np.ndarray, np.ndarray, np.ndarray, list[bool]]:
-        """Step multiple envs in one FFI call.
-
-        Args:
-            actions: list of (env_idx, action_idx) pairs
-
-        Returns:
-            (players, obs[n,569], masks[n,8], rewards[n,num_players], dones)
-        """
+        """Step multiple envs in one FFI call."""
         players, obs_flat, masks_flat, rewards_flat, dones = self.env.step_batch(actions)
         n = len(actions)
-        obs = np.array(obs_flat, dtype=np.float32).reshape(n, 569)
-        masks = np.array(masks_flat, dtype=bool).reshape(n, 8)
+        obs = np.array(obs_flat, dtype=np.float32).reshape(n, OBS_SIZE)
+        masks = np.array(masks_flat, dtype=bool).reshape(n, NUM_ACTIONS)
         rewards = np.array(rewards_flat, dtype=np.float64).reshape(n, self.num_players)
         return players, obs, masks, rewards, dones
 
@@ -150,7 +146,7 @@ class BatchPokerEnv:
             actions: action indices for all envs, shape (num_envs,)
 
         Returns:
-            (players[intp], obs[n,569] float32, masks[n,8] bool, rewards[n,p] float32, dones[n] bool)
+            (players, obs, masks, rewards, dones)
         """
         actions_arr = np.asarray(actions, dtype=np.int64)
         n = int(actions_arr.shape[0])
@@ -159,10 +155,10 @@ class BatchPokerEnv:
                 actions_arr.tolist()
             )
             players_arr = np.asarray(players, dtype=np.intp)
-            obs = np.frombuffer(obs_bytes, dtype=np.float32).reshape(n, 569)
+            obs = np.frombuffer(obs_bytes, dtype=np.float32).reshape(n, OBS_SIZE)
             masks = (
                 np.frombuffer(masks_bytes, dtype=np.uint8)
-                .reshape(n, 8)
+                .reshape(n, NUM_ACTIONS)
                 .astype(bool, copy=False)
             )
             rewards = np.frombuffer(rewards_bytes, dtype=np.float32).reshape(
@@ -184,25 +180,17 @@ class BatchPokerEnv:
     def reset_batch(
         self, env_indices: list[int]
     ) -> tuple[list[int], np.ndarray, np.ndarray]:
-        """Reset multiple envs in one FFI call.
-
-        Returns:
-            (players, obs[n,569], masks[n,8])
-        """
+        """Reset multiple envs in one FFI call."""
         players, obs_flat, masks_flat = self.env.reset_batch(env_indices)
         n = len(env_indices)
-        obs = np.array(obs_flat, dtype=np.float32).reshape(n, 569)
-        masks = np.array(masks_flat, dtype=bool).reshape(n, 8)
+        obs = np.array(obs_flat, dtype=np.float32).reshape(n, OBS_SIZE)
+        masks = np.array(masks_flat, dtype=bool).reshape(n, NUM_ACTIONS)
         return players, obs, masks
 
     def reset_batch_dense(
         self, env_indices: np.ndarray | list[int]
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Dense self-play reset path.
-
-        Returns:
-            (players[intp], obs[n,569] float32, masks[n,8] bool)
-        """
+        """Dense self-play reset path."""
         env_idx_arr = np.asarray(env_indices, dtype=np.intp)
         n = int(env_idx_arr.shape[0])
         if self._has_dense_api:
@@ -210,10 +198,10 @@ class BatchPokerEnv:
                 env_idx_arr.tolist()
             )
             players_arr = np.asarray(players, dtype=np.intp)
-            obs = np.frombuffer(obs_bytes, dtype=np.float32).reshape(n, 569)
+            obs = np.frombuffer(obs_bytes, dtype=np.float32).reshape(n, OBS_SIZE)
             masks = (
                 np.frombuffer(masks_bytes, dtype=np.uint8)
-                .reshape(n, 8)
+                .reshape(n, NUM_ACTIONS)
                 .astype(bool, copy=False)
             )
             return players_arr, obs, masks

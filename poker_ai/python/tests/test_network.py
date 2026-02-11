@@ -3,6 +3,8 @@
 import torch
 import pytest
 
+from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
+
 
 def test_poker_net_forward():
     """Test forward pass with random input."""
@@ -13,11 +15,11 @@ def test_poker_net_forward():
     net = PokerNet(config)
 
     batch_size = 4
-    obs = torch.randn(batch_size, 441)
-    lstm_hidden = torch.randn(batch_size, config.lstm_hidden_dim)
+    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    history_hidden = torch.randn(batch_size, config.history_hidden_dim)
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
 
-    policy_logits, q_values = net(obs, lstm_hidden, legal_mask)
+    policy_logits, q_values = net(obs, history_hidden, legal_mask)
 
     assert policy_logits.shape == (batch_size, config.num_actions)
     assert q_values.shape == (batch_size, config.num_actions)
@@ -31,11 +33,11 @@ def test_poker_net_masking():
     config = NFSPConfig()
     net = PokerNet(config)
 
-    obs = torch.randn(1, 441)
-    lstm_hidden = torch.randn(1, config.lstm_hidden_dim)
-    legal_mask = torch.tensor([[True, True, False, False, False, False, False, True]])
+    obs = torch.randn(1, STATIC_FEATURE_SIZE)
+    history_hidden = torch.randn(1, config.history_hidden_dim)
+    legal_mask = torch.tensor([[True, True, False, False, False, False, False, True, True]])
 
-    policy_logits, q_values = net(obs, lstm_hidden, legal_mask)
+    policy_logits, q_values = net(obs, history_hidden, legal_mask)
 
     # Illegal actions should have -inf
     assert policy_logits[0, 2] == float("-inf")
@@ -51,13 +53,13 @@ def test_br_net_action_selection():
     config = NFSPConfig()
     net = BestResponseNet(config)
 
-    obs = torch.randn(1, 441)
-    action_history = torch.randn(1, config.max_history_len, 7)
+    obs = torch.randn(1, STATIC_FEATURE_SIZE)
+    action_history = torch.randn(1, config.max_history_len, config.history_input_dim)
     history_lengths = torch.tensor([10])
-    legal_mask = torch.tensor([[False, True, False, False, True, False, False, True]])
+    legal_mask = torch.tensor([[False, True, False, False, True, False, False, True, True]])
 
     action = net.select_action(obs, action_history, history_lengths, legal_mask)
-    assert action.item() in [1, 4, 7], f"Action {action.item()} should be legal"
+    assert action.item() in [1, 4, 7, 8], f"Action {action.item()} should be legal"
 
 
 def test_as_net_action_probs():
@@ -68,8 +70,8 @@ def test_as_net_action_probs():
     config = NFSPConfig()
     net = AverageStrategyNet(config)
 
-    obs = torch.randn(1, 441)
-    action_history = torch.randn(1, config.max_history_len, 7)
+    obs = torch.randn(1, STATIC_FEATURE_SIZE)
+    action_history = torch.randn(1, config.max_history_len, config.history_input_dim)
     history_lengths = torch.tensor([5])
     legal_mask = torch.ones(1, config.num_actions, dtype=torch.bool)
 
@@ -88,14 +90,14 @@ def test_history_encoder_zero_input():
     config = NFSPConfig()
     mlp = ActionHistoryMLP(config)
 
-    zero_seq = torch.zeros(2, config.max_history_len, 7)
+    zero_seq = torch.zeros(2, config.max_history_len, config.history_input_dim)
     output = mlp(zero_seq)
 
-    assert output.shape == (2, config.lstm_hidden_dim)
+    assert output.shape == (2, config.history_hidden_dim)
 
 
 def test_parameter_count():
-    """Verify approximate parameter count (~1.2M per network)."""
+    """Verify approximate parameter count."""
     from poker_ai.config.hyperparams import NFSPConfig
     from poker_ai.model.network import BestResponseNet, AverageStrategyNet
 
@@ -109,6 +111,6 @@ def test_parameter_count():
     print(f"BR params: {br_params:,}")
     print(f"AS params: {as_params:,}")
 
-    # Should be roughly 1-2M each
-    assert 500_000 < br_params < 5_000_000, f"BR params {br_params:,} out of expected range"
-    assert 500_000 < as_params < 5_000_000, f"AS params {as_params:,} out of expected range"
+    # With larger heads and more features, expect ~2-6M each
+    assert 500_000 < br_params < 10_000_000, f"BR params {br_params:,} out of expected range"
+    assert 500_000 < as_params < 10_000_000, f"AS params {as_params:,} out of expected range"

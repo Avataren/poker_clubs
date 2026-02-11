@@ -1,6 +1,6 @@
 //! ONNX-backed bot strategy.
 //!
-//! This strategy mirrors the poker_ai discrete 8-action policy interface and
+//! This strategy mirrors the poker_ai discrete 9-action policy interface and
 //! falls back to a balanced heuristic strategy if model inference fails.
 
 use super::strategy::{BotGameView, BotStrategy, SimpleStrategy};
@@ -14,10 +14,10 @@ use std::path::Path;
 use std::sync::Mutex;
 use tract_onnx::prelude::*;
 
-const OBS_DIM: usize = 441;
-const HISTORY_DIM: usize = 7;
+const OBS_DIM: usize = 462;
+const HISTORY_DIM: usize = 11;
 const MAX_HISTORY_LEN: usize = 30;
-const NUM_ACTIONS: usize = 8;
+const NUM_ACTIONS: usize = 9;
 
 type OnnxPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, TypedModel>;
 
@@ -236,14 +236,14 @@ fn legal_actions_mask(table: &PokerTable, player_idx: usize) -> [bool; NUM_ACTIO
     mask[1] = true;
 
     if stack > 0 {
-        mask[7] = true; // all-in
+        mask[8] = true; // all-in
     }
 
     if stack > to_call {
         let max_raise_amount = stack - to_call;
         let min_raise = table.min_raise.max(table.big_blind).max(1);
         let pot = table.pot.total();
-        for action_idx in 2..=6 {
+        for action_idx in 2..=7 {
             if let Some(raise_amount) = raise_amount_for_discrete(action_idx, pot, to_call) {
                 if raise_amount >= min_raise && raise_amount <= max_raise_amount {
                     mask[action_idx] = true;
@@ -281,14 +281,14 @@ fn discrete_to_player_action(
                 Some(PlayerAction::Check)
             }
         }
-        2..=6 => {
+        2..=7 => {
             let raise_amount = raise_amount_for_discrete(action_idx, pot, to_call)?;
             if raise_amount < min_raise || raise_amount > max_raise_amount {
                 return None;
             }
             Some(PlayerAction::Raise(raise_amount))
         }
-        7 => Some(PlayerAction::AllIn),
+        8 => Some(PlayerAction::AllIn),
         _ => None,
     }
 }
@@ -296,11 +296,12 @@ fn discrete_to_player_action(
 fn raise_amount_for_discrete(action_idx: usize, pot: i64, to_call: i64) -> Option<i64> {
     let effective_pot = pot.saturating_add(to_call);
     let raise_amount = match action_idx {
-        2 => effective_pot / 2,
-        3 => effective_pot.saturating_mul(3) / 4,
-        4 => effective_pot,
-        5 => effective_pot.saturating_mul(3) / 2,
-        6 => effective_pot.saturating_mul(2),
+        2 => effective_pot / 4,                        // 0.25× pot
+        3 => effective_pot.saturating_mul(2) / 5,      // 0.4× pot
+        4 => effective_pot.saturating_mul(3) / 5,      // 0.6× pot
+        5 => effective_pot.saturating_mul(4) / 5,      // 0.8× pot
+        6 => effective_pot,                            // 1.0× pot
+        7 => effective_pot.saturating_mul(3) / 2,      // 1.5× pot
         _ => return None,
     };
     Some(raise_amount.max(0))
@@ -357,15 +358,13 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
     let player = match table.players.get(player_idx) {
         Some(player) => player,
         None => {
-            out.extend_from_slice(&[0.0; 25]);
+            out.extend_from_slice(&[0.0; 46]);
             return;
         }
     };
 
     let num_players = table.players.len().max(1);
     let denominator = (num_players - 1).max(1) as f32;
-
-    let mut game = Vec::with_capacity(38);
 
     // Phase one-hot: [preflop, flop, turn, river, showdown, hand_over].
     let mut phase_oh = [0.0_f32; 6];
@@ -378,7 +377,7 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
         GamePhase::Waiting => 5,
     };
     phase_oh[phase_idx] = 1.0;
-    game.extend_from_slice(&phase_oh);
+    out.extend_from_slice(&phase_oh);
 
     let stack = player.stack.max(0);
     let initial_stack = stack.saturating_add(player.total_bet_this_hand.max(0));
@@ -387,23 +386,24 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
     } else {
         0.0
     };
-    game.push(stack_ratio);
+    out.push(stack_ratio);
 
     let pot = table.pot.total().max(0);
     let bb = table.big_blind.max(1) as f32;
-    let pot_bb = (pot as f32 / bb).min(50.0) / 50.0;
-    game.push(pot_bb);
+    let pot_f = pot as f32;
+    let pot_bb = (pot_f / bb).min(50.0) / 50.0;
+    out.push(pot_bb);
 
     let spr = if pot > 0 {
-        stack as f32 / pot as f32
+        stack as f32 / pot_f
     } else {
         10.0
     };
-    game.push(spr.min(20.0) / 20.0);
+    out.push(spr.min(20.0) / 20.0);
 
     let position =
         ((player_idx + num_players - table.dealer_seat) % num_players) as f32 / denominator;
-    game.push(position);
+    out.push(position);
 
     let active_count = table
         .players
@@ -411,21 +411,78 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
         .filter(|p| p.is_active_in_hand())
         .count();
     let opponents_in_hand = active_count.saturating_sub(1) as f32 / denominator;
-    game.push(opponents_in_hand);
+    out.push(opponents_in_hand);
 
     let can_act = table.players.iter().filter(|p| p.can_act()).count() as f32 / num_players as f32;
-    game.push(can_act);
+    out.push(can_act);
 
     let to_call = (table.current_bet - player.current_bet).max(0);
+    let to_call_f = to_call as f32;
     let to_call_ratio = if pot > 0 {
-        to_call as f32 / pot as f32
+        to_call_f / pot_f
     } else {
         0.0
     };
-    game.push(to_call_ratio.min(5.0) / 5.0);
+    out.push(to_call_ratio.min(5.0) / 5.0);
 
-    game.push((num_players as f32 / 9.0).min(1.0));
+    out.push((num_players as f32 / 9.0).min(1.0));
 
+    // --- NEW features (8 floats) ---
+
+    // Pot odds: to_call / (pot + to_call)
+    let pot_odds = if pot_f + to_call_f > 0.0 {
+        to_call_f / (pot_f + to_call_f)
+    } else {
+        0.0
+    };
+    out.push(pot_odds);
+
+    // Effective stack / pot
+    let max_opp_stack = table
+        .players
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| *i != player_idx && p.is_active_in_hand())
+        .map(|(_, p)| p.stack.max(0) as f32)
+        .fold(0.0f32, f32::max);
+    let eff_stack = (stack as f32).min(max_opp_stack);
+    let eff_stack_pot = if pot_f > 0.0 {
+        eff_stack / pot_f
+    } else {
+        10.0
+    };
+    out.push(eff_stack_pot.min(20.0) / 20.0);
+
+    // Street action count / 10 (approximate from hand history)
+    let street_actions = table.hand_action_history.len().min(30) as f32;
+    out.push((street_actions / 10.0).min(1.0));
+
+    // Total action count / 30
+    out.push((table.hand_action_history.len() as f32 / 30.0).min(1.0));
+
+    // Num raises this street / 4 (approximate: count raises in history)
+    let raises_count = table.raises_this_round.min(10) as f32;
+    out.push((raises_count / 4.0).min(1.0));
+
+    // Last aggressor is hero
+    // (approximation: check if last raiser seat matches player_idx)
+    out.push(0.0); // conservative default since we don't track last raiser seat precisely
+
+    // Hero's current bet / pot
+    let hero_bet = player.current_bet.max(0) as f32;
+    let hero_bet_pot = if pot_f > 0.0 { hero_bet / pot_f } else { 0.0 };
+    out.push(hero_bet_pot.min(5.0) / 5.0);
+
+    // Hero invested / starting stack
+    let hero_invested = player.total_bet_this_hand.max(0) as f32;
+    let hero_invested_ratio = if initial_stack > 0 {
+        hero_invested / initial_stack as f32
+    } else {
+        0.0
+    };
+    out.push(hero_invested_ratio.min(1.0));
+
+    // Per-opponent features (8 × 3 = 24)
     for i in 0..8 {
         if i < num_players.saturating_sub(1) {
             let opp_idx = (player_idx + 1 + i) % num_players;
@@ -438,25 +495,22 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
                 0.0
             };
 
-            game.push(if matches!(opp.state, PlayerState::Folded) {
+            out.push(if matches!(opp.state, PlayerState::Folded) {
                 1.0
             } else {
                 0.0
             });
-            game.push(if matches!(opp.state, PlayerState::AllIn) {
+            out.push(if matches!(opp.state, PlayerState::AllIn) {
                 1.0
             } else {
                 0.0
             });
-            game.push(opp_stack_ratio.min(3.0) / 3.0);
+            out.push(opp_stack_ratio.min(3.0) / 3.0);
         } else {
-            game.extend_from_slice(&[0.0, 0.0, 0.0]);
+            out.extend_from_slice(&[0.0, 0.0, 0.0]);
         }
     }
-
-    // Match training static extraction: take only the first 25 game features.
-    game.resize(25, 0.0);
-    out.extend_from_slice(&game[..25]);
+    // Total: 6 + 8 + 8 + 24 = 46
 }
 
 fn encode_hand_strength(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) {
@@ -613,9 +667,13 @@ mod tests {
 
         assert_eq!(table.hand_action_history.len(), 1);
         let rec = table.hand_action_history[0];
+        // rec[0] = seat_normalized: player 0 of 2 → 0.0
         assert_eq!(rec[0], 0.0);
+        // rec[1..=9] = one-hot over 9 actions; Check/Call = action index 1 → rec[2] = 1.0
         assert_eq!(rec[1], 0.0);
         assert_eq!(rec[2], 1.0);
-        assert!((rec[6] - (1.0 / 7.0)).abs() < 1e-6);
+        assert_eq!(rec[3], 0.0);
+        // rec[10] = rough bet ratio: action_idx 1 / 8.0 = 0.125
+        assert!((rec[10] - (1.0 / 8.0)).abs() < 1e-6);
     }
 }

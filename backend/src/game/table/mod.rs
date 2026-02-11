@@ -113,10 +113,10 @@ pub struct PokerTable {
     /// Buffer of user_ids eliminated since last drain (used by tournament lifecycle)
     #[serde(skip)]
     pub pending_eliminations: Vec<String>,
-    /// Per-hand action history encoded as 7-dim records for model inference.
-    /// Format matches training: [actor_norm, fold, check_call, raise_small, raise_med, raise_large, action_idx_norm]
+    /// Per-hand action history encoded as 11-dim records for model inference.
+    /// Format matches training: [actor_norm, 9× action one-hot, bet_size/pot]
     #[serde(skip, default)]
-    pub(crate) hand_action_history: Vec<[f32; 7]>,
+    pub(crate) hand_action_history: Vec<[f32; 11]>,
     pub won_without_showdown: bool,
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
@@ -265,25 +265,16 @@ impl PokerTable {
     }
 
     pub(crate) fn record_hand_action(&mut self, actor_idx: usize, action_idx: usize) {
-        if actor_idx >= self.players.len() || action_idx >= 8 {
+        if actor_idx >= self.players.len() || action_idx >= 9 {
             return;
         }
 
-        let mut rec = [0.0_f32; 7];
+        let mut rec = [0.0_f32; 11];
         if self.players.len() > 1 {
             rec[0] = actor_idx as f32 / (self.players.len() - 1) as f32;
         }
-
-        match action_idx {
-            0 => rec[1] = 1.0,     // fold
-            1 => rec[2] = 1.0,     // check/call
-            2 | 3 => rec[3] = 1.0, // small raise
-            4 | 5 => rec[4] = 1.0, // medium raise
-            6 | 7 => rec[5] = 1.0, // large raise / all-in
-            _ => return,
-        }
-
-        rec[6] = (action_idx as f32 / 7.0).min(1.0);
+        rec[1 + action_idx] = 1.0; // one-hot over 9 actions
+        rec[10] = (action_idx as f32 / 8.0).min(1.0); // rough bet ratio
         self.hand_action_history.push(rec);
     }
 
