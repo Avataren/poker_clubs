@@ -2,6 +2,8 @@
 
 Self-play neural network training system for No-Limit Texas Hold'em (2-9 players). Uses a fast Rust game engine with Python bindings, training via NFSP which combines DQN (best response) with supervised learning (average strategy) to converge toward Nash equilibrium.
 
+**Architecture:** 9 discrete actions (fold, check/call, 5 pot-relative raises, all-in), 590-dim observation (364 cards + 46 game state + 128 action history + 52 hand strength), ~3.3M params per network (hidden=1024, residual=512, history_hidden=256, head=512).
+
 ## Project Structure
 
 ```
@@ -105,14 +107,19 @@ python scripts/train.py \
   --episodes 100000000 \
   --device cuda \
   --batch-size 4096 \
-  --br-train-steps 12 \
-  --as-train-steps 6 \
-  --eta 0.1 \
+  --br-train-steps 8 \
+  --as-train-steps 4 \
+  --eta-start 0.1 \
+  --eta-end 0.4 \
+  --eta-ramp-steps 30000000 \
   --br-lr 0.0001 \
-  --as-lr 0.0005 \
-  --epsilon-start 0.06 \
+  --as-lr 0.0001 \
+  --epsilon-start 0.12 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 300000000 \
+  --epsilon-decay-steps 40000000 \
+  --lr-warmup-steps 500000 \
+  --lr-min-factor 0.01 \
+  --tau 0.005 \
   --eval-every 200000 \
   --eval-hands 5000 \
   --checkpoint-every 200000 \
@@ -207,7 +214,7 @@ Training logs to TensorBoard:
 tensorboard --logdir logs/
 ```
 
-Tracks: BR/AS loss curves, epsilon decay, buffer sizes, eval win rates.
+Tracks: BR/AS loss curves, epsilon decay, eta ramp, buffer sizes, eval win rates.
 
 ## GPU Notes
 
