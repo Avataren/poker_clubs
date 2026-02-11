@@ -111,13 +111,13 @@ python scripts/train.py \
   --as-train-steps 4 \
   --eta-start 0.1 \
   --eta-end 0.4 \
-  --eta-ramp-steps 30000000 \
+  --eta-ramp-steps 200000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
   --epsilon-start 0.12 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 40000000 \
-  --lr-warmup-steps 500000 \
+  --epsilon-decay-steps 400000000 \
+  --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
   --eval-every 200000 \

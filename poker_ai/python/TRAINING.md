@@ -24,13 +24,13 @@ to all training stages:
 |---|---|---|
 | `--eta-start` | 0.1 | Anticipatory param start — mostly BR early for stronger best response |
 | `--eta-end` | 0.4 | Ramps up AS mixing as training matures |
-| `--eta-ramp-steps` | 30000000 | Linear ramp over 30M episodes |
+| `--eta-ramp-steps` | 200000000 | Linear ramp over ~25M episodes (200M env steps) |
 | `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
 | `--br-lr` | 0.0001 | Best response learning rate |
 | `--as-buffer-size` | 5000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
 | `--batch-size` | 4096 | Fills 24GB VRAM well, stable gradient estimates |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
-| `--lr-warmup-steps` | 500000 | Linear warmup over first 500k env steps |
+| `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
 
 ## Stage 1: Heads-Up (2 players)
@@ -45,7 +45,7 @@ python scripts/train.py \
   --batch-size 4096 \
   --eta-start 0.1 \
   --eta-end 0.4 \
-  --eta-ramp-steps 30000000 \
+  --eta-ramp-steps 200000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
   --as-buffer-size 5000000 \
@@ -53,8 +53,8 @@ python scripts/train.py \
   --as-train-steps 4 \
   --epsilon-start 0.12 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 40000000 \
-  --lr-warmup-steps 500000 \
+  --epsilon-decay-steps 400000000 \
+  --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
   --eval-every 200000 \
@@ -93,7 +93,7 @@ python scripts/train.py \
   --batch-size 4096 \
   --eta-start 0.1 \
   --eta-end 0.4 \
-  --eta-ramp-steps 20000000 \
+  --eta-ramp-steps 100000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
   --as-buffer-size 5000000 \
@@ -101,8 +101,8 @@ python scripts/train.py \
   --as-train-steps 4 \
   --epsilon-start 0.06 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 20000000 \
-  --lr-warmup-steps 200000 \
+  --epsilon-decay-steps 200000000 \
+  --lr-warmup-steps 2000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
   --eval-every 200000 \
@@ -141,7 +141,7 @@ python scripts/train.py \
   --batch-size 4096 \
   --eta-start 0.1 \
   --eta-end 0.4 \
-  --eta-ramp-steps 15000000 \
+  --eta-ramp-steps 60000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
   --as-buffer-size 5000000 \
@@ -149,8 +149,8 @@ python scripts/train.py \
   --as-train-steps 4 \
   --epsilon-start 0.04 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 15000000 \
-  --lr-warmup-steps 200000 \
+  --epsilon-decay-steps 120000000 \
+  --lr-warmup-steps 2000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
   --eval-every 200000 \
@@ -179,8 +179,8 @@ Key improvements over v2:
 | **Observation** | 569 floats, 25 game state features | 590 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking |
 | **Head network** | 256-dim heads | 512-dim heads | More capacity for value/policy heads |
 | **Legal mask** | `logits.clamp(min=-1e9)` | `torch.where(mask, logits, -1e9)` | Proper masking — clamp affected legal actions too |
-| **Epsilon** | 0.06 → 0.003 over 20M | 0.12 → 0.003 over 40M | More exploration early, slower decay |
-| **Eta** | Fixed 0.1 | Linear ramp 0.1 → 0.4 over 30M | Mostly BR early (stronger best response), more AS later |
+| **Epsilon** | 0.06 → 0.003 over 20M | 0.12 → 0.003 over 400M steps | Explore through first half of training |
+| **Eta** | Fixed 0.1 | Linear ramp 0.1 → 0.4 over 200M steps | Mostly BR early (stronger best response), more AS later |
 
 Previous v2 changes (still in effect):
 
