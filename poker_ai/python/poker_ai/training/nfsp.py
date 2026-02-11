@@ -183,7 +183,7 @@ class NFSPTrainer:
         """Cosine decay with linear warmup. Returns multiplier in [min_factor, 1.0]."""
         steps = self.total_steps
         warmup = self._lr_warmup_steps
-        if steps < warmup:
+        if warmup > 0 and steps < warmup:
             return max(steps / warmup, 0.01)  # linear warmup from 1% to 100%
         # Cosine decay from 1.0 to min_factor
         progress = min((steps - warmup) / max(self._lr_total_steps - warmup, 1), 1.0)
@@ -345,20 +345,23 @@ class NFSPTrainer:
             self._update_lr()
 
             # Train BR (DQN) — multiple gradient steps per self-play batch
+            br_loss = 0.0
             for _ in range(self.config.br_train_steps):
                 br_loss = self.train_br_step()
             if br_loss > 0 and self.br_updates % 50 == 0:
                 self.writer.add_scalar("loss/br", br_loss, self.total_steps)
 
             # Train AS (supervised) — multiple gradient steps
+            as_loss = 0.0
             for _ in range(self.config.as_train_steps):
                 as_loss = self.train_as_step()
             if as_loss > 0 and self.as_updates % 50 == 0:
                 self.writer.add_scalar("loss/as", as_loss, self.total_steps)
 
-            # Soft-update target network every round
+            # Soft-update target network
             train_rounds += 1
-            self.update_target_network()
+            if self.config.target_update_every > 0 and train_rounds % self.config.target_update_every == 0:
+                self.update_target_network()
 
             # Logging
             if episode_count >= next_log:

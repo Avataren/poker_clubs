@@ -42,7 +42,7 @@ class NFSPConfig:
     # Update frequencies — steps per training round
     br_train_steps: int = 8     # BR gradient steps per self-play batch
     as_train_steps: int = 4     # AS gradient steps per self-play batch
-    target_update_every: int = 300  # update DQN target network (in training rounds)
+    target_update_every: int = 1    # update DQN target network (in training rounds); 1 = every round (Polyak)
 
     # Evaluation
     eval_every: int = 50_000
