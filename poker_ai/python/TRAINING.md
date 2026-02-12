@@ -28,6 +28,7 @@ to all training stages:
 | `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
 | `--br-lr` | 0.0001 | Best response learning rate |
 | `--as-buffer-size` | 5000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
+| `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
 | `--batch-size` | 4096 | Fills 24GB VRAM well, stable gradient estimates |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
 | `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
@@ -51,9 +52,10 @@ python scripts/train.py \
   --as-buffer-size 5000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
-  --epsilon-start 0.12 \
+  --epsilon-start 0.06 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 400000000 \
+  --huber-delta 10.0 \
   --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
@@ -179,7 +181,7 @@ Key improvements over v2:
 | **Observation** | 569 floats, 25 game state features | 590 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking |
 | **Head network** | 256-dim heads | 512-dim heads | More capacity for value/policy heads |
 | **Legal mask** | `logits.clamp(min=-1e9)` | `torch.where(mask, logits, -1e9)` | Proper masking — clamp affected legal actions too |
-| **Epsilon** | 0.06 → 0.003 over 20M | 0.12 → 0.003 over 400M steps | Explore through first half of training |
+| **Epsilon** | 0.06 → 0.003 over 20M | 0.06 → 0.003 over 400M steps | Sufficient exploration for 9 actions, less BR noise |
 | **Eta** | Fixed 0.1 | Linear ramp 0.1 → 0.4 over 200M steps | Mostly BR early (stronger best response), more AS later |
 
 Previous v2 changes (still in effect):

@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None, help="Training batch size")
     parser.add_argument("--br-train-steps", type=int, default=None, help="BR gradient steps per rollout")
     parser.add_argument("--as-train-steps", type=int, default=None, help="AS gradient steps per rollout")
+    parser.add_argument("--huber-delta", type=float, default=None, help="Huber loss beta (default 10.0)")
     parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision on CUDA")
     args = parser.parse_args()
 
@@ -81,6 +82,8 @@ def main():
         config_kwargs["eta_end"] = args.eta_end
     if args.eta_ramp_steps is not None:
         config_kwargs["eta_ramp_steps"] = args.eta_ramp_steps
+    if args.huber_delta is not None:
+        config_kwargs["huber_delta"] = args.huber_delta
     if args.no_amp:
         config_kwargs["use_amp"] = False
 

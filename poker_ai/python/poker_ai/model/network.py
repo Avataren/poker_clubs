@@ -156,8 +156,15 @@ class PokerNet(nn.Module):
             nn.Linear(head_dim, config.num_actions),
         )
 
-        # Value head (for BR: outputs Q-value per action)
-        self.value_head = nn.Sequential(
+        # Dueling DQN value head (for BR: outputs Q-value per action)
+        # State value stream: V(s) — scalar
+        self.value_stream = nn.Sequential(
+            nn.Linear(config.residual_dim, head_dim),
+            nn.ReLU(),
+            nn.Linear(head_dim, 1),
+        )
+        # Advantage stream: A(s,a) — per action
+        self.advantage_stream = nn.Sequential(
             nn.Linear(config.residual_dim, head_dim),
             nn.ReLU(),
             nn.Linear(head_dim, config.num_actions),
@@ -183,7 +190,11 @@ class PokerNet(nn.Module):
         trunk_out = self.trunk(x)
 
         policy_logits = self.policy_head(trunk_out)
-        q_values = self.value_head(trunk_out)
+
+        # Dueling DQN: Q(s,a) = V(s) + A(s,a) - mean(A)
+        v = self.value_stream(trunk_out)       # (batch, 1)
+        a = self.advantage_stream(trunk_out)   # (batch, num_actions)
+        q_values = v + a - a.mean(dim=-1, keepdim=True)
 
         # Mask illegal actions (float math only — no bools for ROCm Triton compat)
         if legal_mask is not None:

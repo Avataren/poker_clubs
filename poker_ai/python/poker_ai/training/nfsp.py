@@ -248,7 +248,7 @@ class NFSPTrainer:
                 next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
                 target = rewards + self.config.gamma * next_q
 
-            loss = F.smooth_l1_loss(q_taken, target)
+            loss = F.smooth_l1_loss(q_taken, target, beta=self.config.huber_delta)
 
         self.br_optimizer.zero_grad(set_to_none=True)
         if self.use_amp:

@@ -34,6 +34,7 @@ class NFSPConfig:
     br_lr: float = 1e-4      # best response learning rate
     as_lr: float = 1e-4      # average strategy learning rate (low to stabilize averaging)
     gamma: float = 1.0       # episodic, no discounting
+    huber_delta: float = 10.0  # Huber loss beta — squared error for <10 BB, linear above
 
     # Replay buffers
     br_buffer_size: int = 1_000_000   # circular buffer for RL
@@ -58,7 +59,7 @@ class NFSPConfig:
     tau: float = 0.005                    # soft update coefficient (1.0 = hard copy)
 
     # Epsilon-greedy for BR exploration
-    epsilon_start: float = 0.12
+    epsilon_start: float = 0.06
     epsilon_end: float = 0.003
     epsilon_decay_steps: int = 400_000_000  # ~50M episodes — explore for first half
 
