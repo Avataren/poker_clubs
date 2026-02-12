@@ -36,7 +36,8 @@ class ActionHistoryTransformer(nn.Module):
             norm_first=True,
         )
         self.transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=config.history_num_layers
+            encoder_layer, num_layers=config.history_num_layers,
+            enable_nested_tensor=False,
         )
 
         # Output projection to history_hidden_dim
