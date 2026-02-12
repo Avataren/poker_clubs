@@ -6,6 +6,9 @@ Training follows a 3-stage pipeline: heads-up (2p) → 6-max (6p) → full ring 
 Each stage fine-tunes from the previous checkpoint. The network architecture is
 player-count agnostic (fixed 590-dim observation), so weights transfer directly.
 
+**Important:** v4 fixed critical transition bugs — old checkpoints are incompatible.
+Start Stage 1 from scratch.
+
 ## Prerequisites
 
 ```bash
@@ -28,11 +31,15 @@ to all training stages:
 | `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
 | `--br-lr` | 0.0001 | Best response learning rate |
 | `--as-buffer-size` | 5000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
+| `--br-buffer-size` | 2000000 | Per-player transitions double the rate vs old code; 2M prevents staleness |
 | `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
 | `--batch-size` | 4096 | Fills 24GB VRAM well, stable gradient estimates |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
 | `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
+| `--epsilon-start` | 0.10 | Enough exploration while Q-values are still random |
+| `--epsilon-end` | 0.003 | Near-deterministic late in training |
+| `--epsilon-decay-steps` | 200000000 | Explore first half (~25M episodes), exploit second half |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -42,19 +49,20 @@ Train from scratch. This builds the foundation: hand values, bet sizing, aggress
 python scripts/train.py \
   --num-players 2 \
   --device cuda \
-  --num-envs 512 \
+  --num-envs 1024 \
   --batch-size 4096 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 200000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
+  --br-buffer-size 2000000 \
   --as-buffer-size 5000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
-  --epsilon-start 0.06 \
+  --epsilon-start 0.10 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 400000000 \
+  --epsilon-decay-steps 200000000 \
   --huber-delta 10.0 \
   --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
@@ -72,7 +80,7 @@ python scripts/train.py \
 - `vs TAG` trending toward zero or positive
 - `vs Random` solidly positive
 - `lr` factor in logs — should decay smoothly from 1.0 to 0.01 over the run
-- Monitor in TensorBoard: `meta/lr_factor`, `meta/br_lr`
+- Monitor in TensorBoard: `meta/epsilon`, `meta/eta`, `meta/lr_factor`
 
 **When to stop:** When eval metrics plateau for several million episodes, or at the
 episode limit. Pick the best checkpoint using milestone eval:
@@ -98,12 +106,13 @@ python scripts/train.py \
   --eta-ramp-steps 100000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
+  --br-buffer-size 2000000 \
   --as-buffer-size 5000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
-  --epsilon-start 0.06 \
+  --epsilon-start 0.04 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 200000000 \
+  --epsilon-decay-steps 100000000 \
   --lr-warmup-steps 2000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
@@ -123,7 +132,7 @@ python scripts/train.py \
   understands basic poker
 - `--episodes 50000000`: fewer total episodes needed (fine-tuning, not from scratch)
 - `--eval-hands 3000`: each hand takes longer with 6 players
-- `--lr-warmup-steps 200000`: shorter warmup for fine-tuning
+- `--lr-warmup-steps 2000000`: shorter warmup for fine-tuning
 
 **What to watch:**
 - The model may initially regress (heads-up habits don't all transfer)
@@ -146,12 +155,13 @@ python scripts/train.py \
   --eta-ramp-steps 60000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
+  --br-buffer-size 2000000 \
   --as-buffer-size 5000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
-  --epsilon-start 0.04 \
+  --epsilon-start 0.03 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 120000000 \
+  --epsilon-decay-steps 60000000 \
   --lr-warmup-steps 2000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
@@ -166,9 +176,26 @@ python scripts/train.py \
 
 **Key differences:**
 - `--num-envs 128`: 9-player hands are long, fewer envs needed
-- `--epsilon-start 0.03`: even less exploration needed
+- `--epsilon-start 0.03`: minimal exploration for fine-tuning
 - `--episodes 30000000`: fine-tuning pass
 - `--eval-hands 2000`: 9-player eval hands are slow
+
+## What Changed (v4)
+
+Critical convergence fixes:
+
+| Change | Before | After | Why |
+|---|---|---|---|
+| **BR transitions** | One per env step; next_obs from wrong player | Per-player tracking; same-player next_obs | Q-values were bootstrapping from opponent's cards — couldn't converge |
+| **Terminal rewards** | Only last-to-act player got reward | All players get terminal transitions | Most players' rewards were lost; ~93% of training signal missing |
+| **Card augmentation** | Independent random perm for obs/next_obs | Same permutation for both | Temporal consistency in DQN transitions |
+| **Default players** | 6 | 2 | Matches eval; NFSP convergence guarantees are for 2-player |
+| **Epsilon schedule** | 0.06 → 0.003 over 400M steps | 0.10 → 0.003 over 200M steps | More exploration early (Q-values start random), faster decay |
+| **BR buffer** | 1M | 2M | Per-player transitions roughly double the insertion rate |
+| **step_batch mask** | `.take(8)` (wrong) | `.take(9)` | Off-by-one in non-dense API mask padding |
+
+**Old checkpoints are incompatible** — they trained on corrupted transitions.
+Start fresh from Stage 1.
 
 ## What Changed (v3)
 
@@ -181,7 +208,7 @@ Key improvements over v2:
 | **Observation** | 569 floats, 25 game state features | 590 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking |
 | **Head network** | 256-dim heads | 512-dim heads | More capacity for value/policy heads |
 | **Legal mask** | `logits.clamp(min=-1e9)` | `torch.where(mask, logits, -1e9)` | Proper masking — clamp affected legal actions too |
-| **Epsilon** | 0.06 → 0.003 over 20M | 0.06 → 0.003 over 400M steps | Sufficient exploration for 9 actions, less BR noise |
+| **Epsilon** | 0.12 → 0.003 over 20M | 0.10 → 0.003 over 200M steps | Sufficient exploration for 9 actions, less BR noise |
 | **Eta** | Fixed 0.1 | Linear ramp 0.1 → 0.4 over 200M steps | Mostly BR early (stronger best response), more AS later |
 
 Previous v2 changes (still in effect):
@@ -190,6 +217,7 @@ Previous v2 changes (still in effect):
 |---|---|---|---|
 | **LR schedule** | Constant 1e-4 | Cosine decay 1e-4 → 1e-6 with warmup | Prevents policy oscillation after convergence |
 | **Target updates** | Hard copy every 300 rounds | Polyak soft (tau=0.005) every round | Smoother Q-value targets, less instability |
+| **Grad clipping** | None | `clip_grad_norm_ 10.0` on both BR and AS | Prevents gradient spikes from large Q-value errors |
 | **br_train_steps** | 12 | 8 | Less overfitting to recent BR buffer data |
 | **as_train_steps** | 6 | 4 | Matches reduced BR steps proportionally |
 
@@ -236,7 +264,7 @@ so the model works across different blind levels and tournaments.
 - **Monitor with TensorBoard:** `tensorboard --logdir logs/`
 - **Milestone eval** can run in parallel with training on the same GPU (it only
   does inference)
-- **Resuming interrupted training:** use `--resume checkpoints/6max/checkpoint_latest.pt`
+- **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
   with the same arguments to continue where you left off
 - The reward signal is normalized to big blinds, so models transfer across blind levels
 - **RAM usage:** the 5M reservoir buffer uses ~13GB RAM. With 31GB system RAM this

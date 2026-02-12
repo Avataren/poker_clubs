@@ -6,10 +6,9 @@
 Implemented configurable `huber_delta` (default 10.0). Squared error for <10 BB
 mispredictions, linear for larger swings. Exposed as `--huber-delta` CLI arg.
 
-### Gradient clipping
-Not currently used. With large Q-values from properly scaled rewards, gradient norms
-may spike during early training. Consider `torch.nn.utils.clip_grad_norm_` with
-max_norm=10.0 to stabilize.
+### ~~Gradient clipping~~ (DONE)
+Implemented `clip_grad_norm_` with max_norm=10.0 on both BR and AS networks.
+Prevents gradient spikes from large Q-value errors during early training.
 
 ### Prioritized experience replay for BR buffer
 Currently uniform sampling from circular buffer. Prioritized replay (proportional to
