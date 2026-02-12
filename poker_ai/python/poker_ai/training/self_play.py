@@ -130,6 +130,13 @@ class SelfPlayWorker:
         self.pending_action = np.zeros((config.num_envs, config.num_players), dtype=np.int64)
         self.pending_valid = np.zeros((config.num_envs, config.num_players), dtype=bool)
         self.pending_is_br = np.zeros((config.num_envs, config.num_players), dtype=bool)
+        # Pre-allocated zero buffers for terminal BR flushes (avoids per-flush alloc)
+        self._term_zero_obs = np.zeros((config.num_envs, static_dim), dtype=np.float32)
+        self._term_zero_ah = np.zeros(
+            (config.num_envs, config.max_history_len, config.history_input_dim), dtype=np.float32
+        )
+        self._term_zero_ah_len = np.zeros(config.num_envs, dtype=np.int64)
+        self._term_zero_mask = np.zeros((config.num_envs, config.num_actions), dtype=bool)
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
@@ -254,17 +261,19 @@ class SelfPlayWorker:
             as_idx = np.where(is_as)[0]
             br_idx = np.where(~is_as)[0]
 
-            # Batched GPU inference
+            # Batched GPU inference — single CPU sync
             actions_np = self.actions_np
             with torch.inference_mode():
+                actions_gpu = torch.empty(n, dtype=torch.long, device=self.device)
                 if len(as_idx) > 0:
-                    actions_np[as_idx] = self.as_net.select_action(
+                    actions_gpu[as_idx] = self.as_net.select_action(
                         obs_t[as_idx], ah_t[as_idx], ah_len_t[as_idx], mask_t[as_idx]
-                    ).cpu().numpy()
+                    )
                 if len(br_idx) > 0:
-                    actions_np[br_idx] = self.br_net.select_action(
+                    actions_gpu[br_idx] = self.br_net.select_action(
                         obs_t[br_idx], ah_t[br_idx], ah_len_t[br_idx], mask_t[br_idx], epsilon
-                    ).cpu().numpy()
+                    )
+                actions_np[:] = actions_gpu.cpu().numpy()
 
             pre_players = self.pre_players  # safe copy from above
 
@@ -343,14 +352,10 @@ class SelfPlayWorker:
                             history_length=self.pending_ah_len[sel, p],
                             actions=self.pending_action[sel, p],
                             rewards=rewards_batch[sel, p],
-                            next_obs=np.zeros((n_sel, static_dim), dtype=np.float32),
-                            next_action_history=np.zeros(
-                                (n_sel, self.max_hist, self.hist_dim), dtype=np.float32
-                            ),
-                            next_history_length=np.zeros(n_sel, dtype=np.int64),
-                            next_legal_mask=np.zeros(
-                                (n_sel, self.config.num_actions), dtype=bool
-                            ),
+                            next_obs=self._term_zero_obs[:n_sel],
+                            next_action_history=self._term_zero_ah[:n_sel],
+                            next_history_length=self._term_zero_ah_len[:n_sel],
+                            next_legal_mask=self._term_zero_mask[:n_sel],
                             dones=np.ones(n_sel, dtype=np.float32),
                             legal_mask=self.pending_mask[sel, p],
                         )

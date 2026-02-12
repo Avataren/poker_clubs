@@ -137,6 +137,7 @@ class NFSPTrainer:
 
         # torch.compile for kernel fusion (ROCm/CUDA)
         if self.device.type == "cuda":
+            torch.set_float32_matmul_precision('high')
             try:
                 self.br_net = torch.compile(self.br_net)
                 self.br_target = torch.compile(self.br_target)

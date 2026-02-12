@@ -30,7 +30,7 @@ class NFSPConfig:
 
     # Training
     total_episodes: int = 10_000_000
-    batch_size: int = 65536
+    batch_size: int = 8192
     br_lr: float = 1e-4      # best response learning rate
     as_lr: float = 1e-4      # average strategy learning rate (low to stabilize averaging)
     gamma: float = 1.0       # episodic, no discounting

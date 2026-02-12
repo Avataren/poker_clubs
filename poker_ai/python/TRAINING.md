@@ -33,7 +33,7 @@ to all training stages:
 | `--br-buffer-size` | 2000000 | ~250k hands of recent experience; ~30x batch size for diverse sampling |
 | `--as-buffer-size` | 4000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
 | `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
-| `--batch-size` | 65536 | Better GPU utilization; stable gradient estimates |
+| `--batch-size` | 8192 | 2x base for slightly lower gradient noise without throughput hit |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
 | `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
@@ -50,7 +50,7 @@ python scripts/train.py \
   --num-players 2 \
   --device cuda \
   --num-envs 1024 \
-  --batch-size 65536 \
+  --batch-size 8192 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 200000000 \
@@ -100,7 +100,7 @@ python scripts/train.py \
   --num-players 6 \
   --device cuda \
   --num-envs 256 \
-  --batch-size 65536 \
+  --batch-size 8192 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 100000000 \
@@ -149,7 +149,7 @@ python scripts/train.py \
   --num-players 9 \
   --device cuda \
   --num-envs 128 \
-  --batch-size 65536 \
+  --batch-size 8192 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 60000000 \
