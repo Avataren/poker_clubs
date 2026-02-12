@@ -7,7 +7,7 @@ from typing import Optional
 @dataclass
 class NFSPConfig:
     # Environment
-    num_players: int = 6
+    num_players: int = 2
     starting_stack: int = 10000
     small_blind: int = 50
     big_blind: int = 100

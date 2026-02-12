@@ -109,16 +109,27 @@ class SelfPlayWorker:
         self.env_idx = np.arange(self.num_envs, dtype=np.intp)
         self.hist_offsets = np.arange(self.max_hist, dtype=np.int64)
         self.static_obs = np.empty((self.num_envs, static_dim), dtype=np.float32)
-        self.next_static = np.empty((self.num_envs, static_dim), dtype=np.float32)
         self.hist_dim = config.history_input_dim
         self.pre_mask = np.empty((self.num_envs, config.num_actions), dtype=bool)
         self.pre_players = np.empty(self.num_envs, dtype=np.intp)
         self.ah_batch = np.empty((self.num_envs, self.max_hist, self.hist_dim), dtype=np.float32)
         self.ah_lens_batch = np.empty(self.num_envs, dtype=np.int64)
-        self.next_ah_all = np.empty((self.num_envs, self.max_hist, self.hist_dim), dtype=np.float32)
-        self.next_ah_lens_all = np.empty(self.num_envs, dtype=np.int64)
         self.actions_np = np.empty(self.num_envs, dtype=np.int64)
         self.action_records = np.empty((self.num_envs, self.hist_dim), dtype=np.float32)
+        # Per-player pending transition tracking for correct BR transitions.
+        # Instead of storing (obs, action, next_player_obs) on every step,
+        # we defer BR buffer pushes until the same player acts again (non-terminal)
+        # or the hand ends (terminal), giving correct same-player next_obs.
+        self.pending_obs = np.zeros((config.num_envs, config.num_players, static_dim), dtype=np.float32)
+        self.pending_ah = np.zeros(
+            (config.num_envs, config.num_players, config.max_history_len, config.history_input_dim),
+            dtype=np.float32,
+        )
+        self.pending_ah_len = np.zeros((config.num_envs, config.num_players), dtype=np.int64)
+        self.pending_mask = np.zeros((config.num_envs, config.num_players, config.num_actions), dtype=bool)
+        self.pending_action = np.zeros((config.num_envs, config.num_players), dtype=np.int64)
+        self.pending_valid = np.zeros((config.num_envs, config.num_players), dtype=bool)
+        self.pending_is_br = np.zeros((config.num_envs, config.num_players), dtype=bool)
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
@@ -196,6 +207,7 @@ class SelfPlayWorker:
         self.ah_arrays[:] = 0.0
         self.ah_lens[:] = 0
         self.ah_pos[:] = 0
+        self.pending_valid[:] = False
         for i in range(self.num_envs):
             player, obs, mask = results[i]
             self.prev_obs[i] = obs
@@ -204,7 +216,12 @@ class SelfPlayWorker:
         self._initialized = True
 
     def run_episodes(self, epsilon: float, eta: float | None = None) -> int:
-        """Run continuous self-play until at least num_envs episodes complete."""
+        """Run continuous self-play until at least num_envs episodes complete.
+
+        Uses per-player pending transition tracking so that BR buffer entries
+        always pair the same player's obs with that player's next obs (or a
+        terminal reward), instead of the wrong-player obs returned by the env.
+        """
         if eta is None:
             eta = self.config.eta_start
         if not self._initialized:
@@ -213,11 +230,12 @@ class SelfPlayWorker:
         n = self.num_envs
         num_players = self.num_players
         env_idx = self.env_idx
+        static_dim = self.static_obs.shape[1]
         total_steps = 0
         completed_episodes = 0
 
         while completed_episodes < n:
-            # Prepare full batch tensors
+            # Prepare full batch tensors for the current player in each env
             players = self.prev_player
             np.take(self.prev_obs, _STATIC_COLS, axis=1, out=self.static_obs)
 
@@ -231,7 +249,7 @@ class SelfPlayWorker:
             ah_len_t = self._to_device(self.ah_lens_batch)
             mask_t = self._to_device(self.pre_mask)
 
-            # Classify AS vs BR
+            # Classify AS vs BR for the current player in each env
             is_as = self.use_as[env_idx, players]
             as_idx = np.where(is_as)[0]
             br_idx = np.where(~is_as)[0]
@@ -248,81 +266,98 @@ class SelfPlayWorker:
                         obs_t[br_idx], ah_t[br_idx], ah_len_t[br_idx], mask_t[br_idx], epsilon
                     ).cpu().numpy()
 
-            # Snapshot pre-step state
-            pre_static = self.static_obs
-            pre_mask = self.pre_mask
-            pre_players = self.pre_players
-            pre_ah = self.ah_batch
-            pre_ah_lens = self.ah_lens_batch
+            pre_players = self.pre_players  # safe copy from above
 
-            # Batch step ALL envs
+            # --- Flush pending non-terminal BR transitions ---
+            # When the same player acts again, their pending transition gets
+            # the correct next_state (this player's current obs).
+            has_pending_br = (
+                self.pending_valid[env_idx, pre_players]
+                & self.pending_is_br[env_idx, pre_players]
+            )
+            if has_pending_br.any():
+                sel = np.where(has_pending_br)[0]
+                sel_p = pre_players[sel]
+                n_sel = len(sel)
+                self.br_buffer.push_batch(
+                    obs=self.pending_obs[sel, sel_p],
+                    action_history=self.pending_ah[sel, sel_p],
+                    history_length=self.pending_ah_len[sel, sel_p],
+                    actions=self.pending_action[sel, sel_p],
+                    rewards=np.zeros(n_sel, dtype=np.float32),
+                    next_obs=self.static_obs[sel],
+                    next_action_history=self.ah_batch[sel],
+                    next_history_length=self.ah_lens_batch[sel],
+                    next_legal_mask=self.pre_mask[sel],
+                    dones=np.zeros(n_sel, dtype=np.float32),
+                    legal_mask=self.pending_mask[sel, sel_p],
+                )
+
+            # --- Store current state as pending for the acting player ---
+            self.pending_obs[env_idx, pre_players] = self.static_obs
+            self.pending_ah[env_idx, pre_players] = self.ah_batch
+            self.pending_ah_len[env_idx, pre_players] = self.ah_lens_batch
+            self.pending_mask[env_idx, pre_players] = self.pre_mask
+            self.pending_action[env_idx, pre_players] = actions_np
+            self.pending_valid[env_idx, pre_players] = True
+            self.pending_is_br[env_idx, pre_players] = ~is_as
+
+            # --- Push to AS buffer for BR-policy actions (supervised, no next_obs needed) ---
+            if br_idx.size > 0:
+                self.as_buffer.push_batch(
+                    obs=self.static_obs[br_idx],
+                    action_history=self.ah_batch[br_idx],
+                    history_length=self.ah_lens_batch[br_idx],
+                    actions=actions_np[br_idx],
+                    legal_mask=self.pre_mask[br_idx],
+                )
+
+            # --- Step all envs ---
             next_players_arr, next_obs_batch, next_masks_batch, rewards_batch, dones_arr = (
                 self.env.step_batch_dense(actions_np)
             )
             total_steps += n
 
-            # Compute next static features in batch
-            np.take(next_obs_batch, _STATIC_COLS, axis=1, out=self.next_static)
-
-            # Update action histories with the just-taken action before computing next state histories.
+            # Update action histories with the just-taken action
             np.take(_ACTION_TEMPLATES, actions_np, axis=0, out=self.action_records)
             self.action_records[:, 0] = pre_players / max(1, num_players - 1)
             self._append_actions_all(self.action_records)
 
-            # Build next action history arrays (vectorized where possible)
-            self.next_ah_all.fill(0.0)
-            self.next_ah_lens_all.fill(0)
-            alive = ~dones_arr
-            if alive.any():
-                alive_idx = np.where(alive)[0]
-                alive_next_p = next_players_arr[alive_idx]
-                alive_histories, alive_lengths = self._gather_histories(
-                    alive_idx, alive_next_p
-                )
-                self.next_ah_all[alive_idx] = alive_histories
-                self.next_ah_lens_all[alive_idx] = alive_lengths
-
-            # Gather per-player rewards (already in big blinds from Rust engine)
-            player_rewards = rewards_batch[env_idx, pre_players]
-
-            # Push BR transitions in batch (for non-AS envs)
-            br_mask = ~is_as
-            if br_mask.any():
-                br_sel = np.where(br_mask)[0]
-                self.br_buffer.push_batch(
-                    obs=pre_static[br_sel],
-                    action_history=pre_ah[br_sel],
-                    history_length=pre_ah_lens[br_sel],
-                    actions=actions_np[br_sel],
-                    rewards=player_rewards[br_sel],
-                    next_obs=self.next_static[br_sel],
-                    next_action_history=self.next_ah_all[br_sel],
-                    next_history_length=self.next_ah_lens_all[br_sel],
-                    next_legal_mask=next_masks_batch[br_sel],
-                    dones=dones_arr[br_sel].astype(np.float32),
-                    legal_mask=pre_mask[br_sel],
-                )
-
-                # NFSP supervised buffer should train on BR behavior-policy actions.
-                self.as_buffer.push_batch(
-                    obs=pre_static[br_sel],
-                    action_history=pre_ah[br_sel],
-                    history_length=pre_ah_lens[br_sel],
-                    actions=actions_np[br_sel],
-                    legal_mask=pre_mask[br_sel],
-                )
-
-            # Update state for alive envs
-            if alive.any():
-                alive_idx = np.where(alive)[0]
-                self.prev_obs[alive_idx] = next_obs_batch[alive_idx]
-                self.prev_mask[alive_idx] = next_masks_batch[alive_idx]
-                self.prev_player[alive_idx] = next_players_arr[alive_idx]
-
-            # Batch-reset done envs
+            # --- Flush terminal BR transitions for done envs ---
+            # Every player who acted this hand (pending_valid) and used BR
+            # gets a terminal transition with their actual reward.
             done_indices = np.where(dones_arr)[0]
             if len(done_indices) > 0:
                 completed_episodes += len(done_indices)
+                for p in range(num_players):
+                    has_p = (
+                        self.pending_valid[done_indices, p]
+                        & self.pending_is_br[done_indices, p]
+                    )
+                    if has_p.any():
+                        sel = done_indices[has_p]
+                        n_sel = len(sel)
+                        self.br_buffer.push_batch(
+                            obs=self.pending_obs[sel, p],
+                            action_history=self.pending_ah[sel, p],
+                            history_length=self.pending_ah_len[sel, p],
+                            actions=self.pending_action[sel, p],
+                            rewards=rewards_batch[sel, p],
+                            next_obs=np.zeros((n_sel, static_dim), dtype=np.float32),
+                            next_action_history=np.zeros(
+                                (n_sel, self.max_hist, self.hist_dim), dtype=np.float32
+                            ),
+                            next_history_length=np.zeros(n_sel, dtype=np.int64),
+                            next_legal_mask=np.zeros(
+                                (n_sel, self.config.num_actions), dtype=bool
+                            ),
+                            dones=np.ones(n_sel, dtype=np.float32),
+                            legal_mask=self.pending_mask[sel, p],
+                        )
+                # Clear pending for done envs
+                self.pending_valid[done_indices] = False
+
+                # Reset done envs
                 reset_players, reset_obs, reset_masks = self.env.reset_batch_dense(done_indices)
                 self.ah_arrays[done_indices] = 0.0
                 self.ah_lens[done_indices] = 0
@@ -333,5 +368,13 @@ class SelfPlayWorker:
                 self.use_as[done_indices] = (
                     np.random.random((len(done_indices), num_players)) < eta
                 )
+
+            # Update state for alive envs
+            alive = ~dones_arr
+            if alive.any():
+                alive_idx = np.where(alive)[0]
+                self.prev_obs[alive_idx] = next_obs_batch[alive_idx]
+                self.prev_mask[alive_idx] = next_masks_batch[alive_idx]
+                self.prev_player[alive_idx] = next_players_arr[alive_idx]
 
         return total_steps

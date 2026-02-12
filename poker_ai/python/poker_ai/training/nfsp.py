@@ -22,40 +22,72 @@ from poker_ai.env.poker_env import PokerEnv
 from poker_ai.model.state_encoder import HAND_STRENGTH_START, STATIC_FEATURE_SIZE
 
 
-# --- Suit permutation augmentation ---
+# --- Card augmentation (suit perm × hole swap × flop perm) ---
 # Card encoding: 7 slots × 52 one-hot (indices 0-363 in static features).
+#   Slots: [hole0, hole1, flop0, flop1, flop2, turn, river]
 # Within each 52-dim slot, layout is suit*13 + rank_offset (4 suits × 13 ranks).
-# Suits are interchangeable in Hold'em, so permuting them produces valid data.
-# We precompute all 24 permutation index arrays for the card region.
+#
+# Valid symmetries (all independent, composable):
+#   1. Suit permutation (24): suits are interchangeable in Hold'em
+#   2. Hole card swap (2): hole card order doesn't matter
+#   3. Flop permutation (6): flop card order doesn't matter
+# Total: 24 × 2 × 6 = 288 augmentations (minus identity = 287)
+#
+# We precompute all 288 index arrays for the card region at import time.
 
-def _build_suit_permutation_indices() -> np.ndarray:
-    """Build (24, 364) index arrays for all suit permutations over card features."""
+def _build_card_augmentation_indices() -> np.ndarray:
+    """Build (288, 364) index arrays for all card augmentations."""
     from itertools import permutations
-    perms = list(permutations(range(4)))  # 24 permutations of 4 suits
-    num_card_features = 364  # 7 cards × 52
-    indices = np.zeros((24, num_card_features), dtype=np.int64)
-    for pi, perm in enumerate(perms):
-        for card_slot in range(7):  # 2 hole + 5 community
-            base = card_slot * 52
-            for old_suit in range(4):
-                new_suit = perm[old_suit]
-                for rank in range(13):
-                    indices[pi, base + new_suit * 13 + rank] = base + old_suit * 13 + rank
+    suit_perms = list(permutations(range(4)))       # 24
+    hole_perms = [(0, 1), (1, 0)]                   # 2
+    flop_perms = list(permutations(range(3)))        # 6
+
+    num_aug = len(suit_perms) * len(hole_perms) * len(flop_perms)  # 288
+    num_card_features = 364  # 7 slots × 52
+    indices = np.zeros((num_aug, num_card_features), dtype=np.int64)
+
+    idx = 0
+    for suit_perm in suit_perms:
+        # Build suit remapping for one 52-dim slot
+        slot_remap = np.zeros(52, dtype=np.int64)
+        for old_suit in range(4):
+            new_suit = suit_perm[old_suit]
+            for rank in range(13):
+                slot_remap[new_suit * 13 + rank] = old_suit * 13 + rank
+
+        for hole_perm in hole_perms:
+            for flop_perm in flop_perms:
+                # Slot reordering: [hole0, hole1, flop0, flop1, flop2, turn, river]
+                slot_order = [
+                    hole_perm[0], hole_perm[1],             # hole cards
+                    2 + flop_perm[0], 2 + flop_perm[1], 2 + flop_perm[2],  # flop
+                    5, 6,                                    # turn, river (fixed)
+                ]
+                for new_slot, old_slot in enumerate(slot_order):
+                    dst_base = new_slot * 52
+                    src_base = old_slot * 52
+                    indices[idx, dst_base:dst_base + 52] = src_base + slot_remap
+                idx += 1
+
     return indices
 
-_SUIT_PERM_INDICES = _build_suit_permutation_indices()  # (24, 364)
+_CARD_AUG_INDICES = _build_card_augmentation_indices()  # (288, 364)
 
 
-def apply_suit_augmentation(obs: torch.Tensor) -> torch.Tensor:
-    """Apply a random suit permutation to the card features of a batch.
+def apply_card_augmentation(obs: torch.Tensor, aug_idx: int | None = None) -> torch.Tensor:
+    """Apply a random card augmentation (suit perm × hole swap × flop perm).
 
     Args:
         obs: (batch, STATIC_FEATURE_SIZE) tensor
+        aug_idx: optional augmentation index (1-287). If None, picks randomly.
+                 Pass the same value for obs and next_obs in DQN transitions
+                 to preserve temporal consistency.
     Returns:
         augmented obs with permuted card features (in-place safe)
     """
-    perm_idx = np.random.randint(1, 24)  # skip identity (0)
-    idx = _SUIT_PERM_INDICES[perm_idx]  # (364,)
+    if aug_idx is None:
+        aug_idx = np.random.randint(1, 288)  # skip identity (0)
+    idx = _CARD_AUG_INDICES[aug_idx]  # (364,)
     aug = obs.clone()
     aug[:, :364] = obs[:, idx]
     return aug
@@ -227,9 +259,11 @@ class NFSPTrainer:
         dones = self._to_device(dones_np)
         masks = self._to_device(masks_np)
 
-        # Suit permutation augmentation (permute card features for both obs and next_obs)
-        obs = apply_suit_augmentation(obs)
-        next_obs = apply_suit_augmentation(next_obs)
+        # Suit permutation augmentation — same permutation for obs and next_obs
+        # to preserve temporal consistency within each DQN transition.
+        br_aug_idx = np.random.randint(1, 288)
+        obs = apply_card_augmentation(obs, br_aug_idx)
+        next_obs = apply_card_augmentation(next_obs, br_aug_idx)
 
         with torch.autocast(
             device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
@@ -280,7 +314,7 @@ class NFSPTrainer:
         masks = self._to_device(masks_np)
 
         # Suit permutation augmentation
-        obs = apply_suit_augmentation(obs)
+        obs = apply_card_augmentation(obs)
 
         with torch.autocast(
             device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
@@ -654,13 +688,65 @@ class NFSPTrainer:
         torch.save(checkpoint, path / "checkpoint_latest.pt")
         print(f"  Saved checkpoint at episode {episode:,}")
 
+    def _migrate_dueling_state_dict(self, old_sd: dict) -> dict:
+        """Migrate pre-dueling checkpoint (value_head) to dueling (value_stream + advantage_stream).
+
+        Maps old value_head weights into the advantage_stream (same shape: residual_dim → 9).
+        The value_stream (residual_dim → 1) gets fresh random init since it didn't exist before.
+        """
+        new_sd = {}
+        migrated = False
+        for key, val in old_sd.items():
+            if ".value_head." in key:
+                # Map value_head → advantage_stream (both output num_actions)
+                new_key = key.replace(".value_head.", ".advantage_stream.")
+                new_sd[new_key] = val
+                migrated = True
+            else:
+                new_sd[key] = val
+
+        if migrated:
+            print("  Migrated old value_head → advantage_stream (value_stream freshly initialized)")
+
+        return new_sd
+
     def load_checkpoint(self, path: str):
         checkpoint = torch.load(path, map_location=self.device, weights_only=True)
-        self._unwrap(self.br_net).load_state_dict(checkpoint["br_net"])
-        self._unwrap(self.br_target).load_state_dict(checkpoint["br_target"])
-        self._unwrap(self.as_net).load_state_dict(checkpoint["as_net"])
-        self.br_optimizer.load_state_dict(checkpoint["br_optimizer"])
-        self.as_optimizer.load_state_dict(checkpoint["as_optimizer"])
+
+        # Detect old checkpoint format (pre-dueling: has value_head, no value_stream)
+        br_sd = checkpoint["br_net"]
+        is_old_format = any(".value_head." in k for k in br_sd)
+
+        if is_old_format:
+            print("  Detected pre-dueling checkpoint, migrating BR networks...")
+            br_sd = self._migrate_dueling_state_dict(br_sd)
+            bt_sd = self._migrate_dueling_state_dict(checkpoint["br_target"])
+            # strict=False: value_stream weights stay at their random init
+            self._unwrap(self.br_net).load_state_dict(br_sd, strict=False)
+            self._unwrap(self.br_target).load_state_dict(bt_sd, strict=False)
+            # Reset BR optimizer since architecture changed
+            self.br_optimizer = torch.optim.Adam(
+                self.br_net.parameters(), lr=self.config.br_lr
+            )
+            print("  BR optimizer reset (new architecture parameters)")
+        else:
+            self._unwrap(self.br_net).load_state_dict(br_sd)
+            self._unwrap(self.br_target).load_state_dict(checkpoint["br_target"])
+            self.br_optimizer.load_state_dict(checkpoint["br_optimizer"])
+
+        as_sd = checkpoint["as_net"]
+        if is_old_format:
+            print("  Migrating AS network...")
+            as_sd = self._migrate_dueling_state_dict(as_sd)
+            self._unwrap(self.as_net).load_state_dict(as_sd, strict=False)
+            # Reset AS optimizer too — parameter set changed
+            self.as_optimizer = torch.optim.Adam(
+                self.as_net.parameters(), lr=self.config.as_lr
+            )
+            print("  AS optimizer reset (new architecture parameters)")
+        else:
+            self._unwrap(self.as_net).load_state_dict(as_sd)
+            self.as_optimizer.load_state_dict(checkpoint["as_optimizer"])
         if self.use_amp:
             if "br_scaler" in checkpoint:
                 self.br_scaler.load_state_dict(checkpoint["br_scaler"])

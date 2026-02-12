@@ -255,7 +255,7 @@ impl BatchPokerEnv {
 
             if done {
                 obs_flat.extend(std::iter::repeat(0.0f32).take(590));
-                masks_flat.extend(std::iter::repeat(false).take(8));
+                masks_flat.extend(std::iter::repeat(false).take(9));
                 let rewards: Vec<f64> = table
                     .rewards
                     .iter()
