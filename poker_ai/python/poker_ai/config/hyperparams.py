@@ -30,14 +30,14 @@ class NFSPConfig:
 
     # Training
     total_episodes: int = 10_000_000
-    batch_size: int = 4096
+    batch_size: int = 65536
     br_lr: float = 1e-4      # best response learning rate
     as_lr: float = 1e-4      # average strategy learning rate (low to stabilize averaging)
     gamma: float = 1.0       # episodic, no discounting
     huber_delta: float = 10.0  # Huber loss beta — squared error for <10 BB, linear above
 
     # Replay buffers
-    br_buffer_size: int = 1_000_000   # circular buffer for RL (~125k hands of recent experience)
+    br_buffer_size: int = 2_000_000   # circular buffer for RL (~250k hands of recent experience)
     as_buffer_size: int = 4_000_000   # reservoir for SL (large to preserve long-run average)
 
     # Update frequencies — steps per training round

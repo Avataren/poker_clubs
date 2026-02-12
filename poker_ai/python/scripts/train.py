@@ -3,6 +3,9 @@
 
 import argparse
 
+import torch
+torch.set_float32_matmul_precision('high')
+
 from poker_ai.config.hyperparams import NFSPConfig
 from poker_ai.training.nfsp import NFSPTrainer
 
@@ -10,7 +13,7 @@ from poker_ai.training.nfsp import NFSPTrainer
 def main():
     parser = argparse.ArgumentParser(description="Train poker AI with NFSP")
     parser.add_argument("--num-players", type=int, default=2, help="Number of players")
-    parser.add_argument("--num-envs", type=int, default=512, help="Parallel environments")
+    parser.add_argument("--num-envs", type=int, default=1024, help="Parallel environments")
     parser.add_argument("--episodes", type=int, default=10_000_000, help="Total episodes")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint")
@@ -25,6 +28,7 @@ def main():
     parser.add_argument("--eta-ramp-steps", type=int, default=None, help="Eta linear ramp steps")
     parser.add_argument("--br-lr", type=float, default=1e-4)
     parser.add_argument("--as-lr", type=float, default=1e-4)
+    parser.add_argument("--br-buffer-size", type=int, default=None, help="BR circular buffer size")
     parser.add_argument("--as-buffer-size", type=int, default=None, help="AS reservoir buffer size")
     parser.add_argument("--epsilon-start", type=float, default=None, help="Initial BR exploration epsilon")
     parser.add_argument("--epsilon-end", type=float, default=None, help="Final BR exploration epsilon")
@@ -64,6 +68,8 @@ def main():
         config_kwargs["epsilon_end"] = args.epsilon_end
     if args.epsilon_decay_steps is not None:
         config_kwargs["epsilon_decay_steps"] = args.epsilon_decay_steps
+    if args.br_buffer_size is not None:
+        config_kwargs["br_buffer_size"] = args.br_buffer_size
     if args.as_buffer_size is not None:
         config_kwargs["as_buffer_size"] = args.as_buffer_size
     if args.lr_warmup_steps is not None:

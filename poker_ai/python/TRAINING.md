@@ -30,10 +30,10 @@ to all training stages:
 | `--eta-ramp-steps` | 200000000 | Linear ramp over ~25M episodes (200M env steps) |
 | `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
 | `--br-lr` | 0.0001 | Best response learning rate |
-| `--br-buffer-size` | 1000000 | ~125k hands of recent experience; keeps RAM in check |
+| `--br-buffer-size` | 2000000 | ~250k hands of recent experience; ~30x batch size for diverse sampling |
 | `--as-buffer-size` | 4000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
 | `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
-| `--batch-size` | 4096 | Fills 24GB VRAM well, stable gradient estimates |
+| `--batch-size` | 65536 | Better GPU utilization; stable gradient estimates |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
 | `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
@@ -50,13 +50,13 @@ python scripts/train.py \
   --num-players 2 \
   --device cuda \
   --num-envs 1024 \
-  --batch-size 4096 \
+  --batch-size 65536 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 200000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
-  --br-buffer-size 1000000 \
+  --br-buffer-size 2000000 \
   --as-buffer-size 4000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
@@ -100,13 +100,13 @@ python scripts/train.py \
   --num-players 6 \
   --device cuda \
   --num-envs 256 \
-  --batch-size 4096 \
+  --batch-size 65536 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 100000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
-  --br-buffer-size 1000000 \
+  --br-buffer-size 2000000 \
   --as-buffer-size 4000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
@@ -149,13 +149,13 @@ python scripts/train.py \
   --num-players 9 \
   --device cuda \
   --num-envs 128 \
-  --batch-size 4096 \
+  --batch-size 65536 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 60000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
-  --br-buffer-size 1000000 \
+  --br-buffer-size 2000000 \
   --as-buffer-size 4000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
@@ -267,5 +267,5 @@ so the model works across different blind levels and tournaments.
 - **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
   with the same arguments to continue where you left off
 - The reward signal is normalized to big blinds, so models transfer across blind levels
-- **RAM usage:** the 4M AS reservoir uses ~10GB, 1M BR circular uses ~6GB (~16GB total).
-  With 31GB system RAM this leaves plenty for the OS and Rust engine.
+- **RAM usage:** the 4M AS reservoir uses ~10GB, 2M BR circular uses ~12GB (~22GB total).
+  With 31GB system RAM this leaves ~9GB for the OS and Rust engine.
