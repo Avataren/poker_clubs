@@ -37,8 +37,8 @@ class NFSPConfig:
     huber_delta: float = 10.0  # Huber loss beta — squared error for <10 BB, linear above
 
     # Replay buffers
-    br_buffer_size: int = 2_000_000   # circular buffer for RL (2M: per-player transitions double rate)
-    as_buffer_size: int = 5_000_000   # reservoir for SL (large to preserve long-run average)
+    br_buffer_size: int = 1_000_000   # circular buffer for RL (~125k hands of recent experience)
+    as_buffer_size: int = 4_000_000   # reservoir for SL (large to preserve long-run average)
 
     # Update frequencies — steps per training round
     br_train_steps: int = 8     # BR gradient steps per self-play batch
@@ -61,7 +61,7 @@ class NFSPConfig:
     # Epsilon-greedy for BR exploration
     epsilon_start: float = 0.10
     epsilon_end: float = 0.003
-    epsilon_decay_steps: int = 200_000_000  # ~25M episodes — explore in first half, exploit in second
+    epsilon_decay_steps: int = 200_000_000  # ~25M episodes — explore first quarter, exploit rest
 
     # Eta scheduling (anticipatory parameter): P(use AS policy) during self-play.
     # eta=0.1 means 10% AS / 90% BR. Higher eta → more average strategy play.

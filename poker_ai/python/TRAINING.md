@@ -30,8 +30,8 @@ to all training stages:
 | `--eta-ramp-steps` | 200000000 | Linear ramp over ~25M episodes (200M env steps) |
 | `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
 | `--br-lr` | 0.0001 | Best response learning rate |
-| `--as-buffer-size` | 5000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
-| `--br-buffer-size` | 2000000 | Per-player transitions double the rate vs old code; 2M prevents staleness |
+| `--br-buffer-size` | 1000000 | ~125k hands of recent experience; keeps RAM in check |
+| `--as-buffer-size` | 4000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
 | `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
 | `--batch-size` | 4096 | Fills 24GB VRAM well, stable gradient estimates |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
@@ -39,7 +39,7 @@ to all training stages:
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
 | `--epsilon-start` | 0.10 | Enough exploration while Q-values are still random |
 | `--epsilon-end` | 0.003 | Near-deterministic late in training |
-| `--epsilon-decay-steps` | 200000000 | Explore first half (~25M episodes), exploit second half |
+| `--epsilon-decay-steps` | 200000000 | Explore first ~25M episodes, exploit remaining ~75M |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -56,8 +56,8 @@ python scripts/train.py \
   --eta-ramp-steps 200000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
-  --br-buffer-size 2000000 \
-  --as-buffer-size 5000000 \
+  --br-buffer-size 1000000 \
+  --as-buffer-size 4000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
   --epsilon-start 0.10 \
@@ -106,8 +106,8 @@ python scripts/train.py \
   --eta-ramp-steps 100000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
-  --br-buffer-size 2000000 \
-  --as-buffer-size 5000000 \
+  --br-buffer-size 1000000 \
+  --as-buffer-size 4000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
   --epsilon-start 0.04 \
@@ -155,8 +155,8 @@ python scripts/train.py \
   --eta-ramp-steps 60000000 \
   --br-lr 0.0001 \
   --as-lr 0.0001 \
-  --br-buffer-size 2000000 \
-  --as-buffer-size 5000000 \
+  --br-buffer-size 1000000 \
+  --as-buffer-size 4000000 \
   --br-train-steps 8 \
   --as-train-steps 4 \
   --epsilon-start 0.03 \
@@ -191,7 +191,7 @@ Critical convergence fixes:
 | **Card augmentation** | Independent random perm for obs/next_obs | Same permutation for both | Temporal consistency in DQN transitions |
 | **Default players** | 6 | 2 | Matches eval; NFSP convergence guarantees are for 2-player |
 | **Epsilon schedule** | 0.06 → 0.003 over 400M steps | 0.10 → 0.003 over 200M steps | More exploration early (Q-values start random), faster decay |
-| **BR buffer** | 1M | 2M | Per-player transitions roughly double the insertion rate |
+| **AS buffer** | 5M | 4M | Saves ~3GB RAM; 4M still preserves long-run average well |
 | **step_batch mask** | `.take(8)` (wrong) | `.take(9)` | Off-by-one in non-dense API mask padding |
 
 **Old checkpoints are incompatible** — they trained on corrupted transitions.
@@ -267,5 +267,5 @@ so the model works across different blind levels and tournaments.
 - **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
   with the same arguments to continue where you left off
 - The reward signal is normalized to big blinds, so models transfer across blind levels
-- **RAM usage:** the 5M reservoir buffer uses ~13GB RAM. With 31GB system RAM this
-  leaves plenty for the OS and Rust engine. Don't go above 5M without more RAM.
+- **RAM usage:** the 4M AS reservoir uses ~10GB, 1M BR circular uses ~6GB (~16GB total).
+  With 31GB system RAM this leaves plenty for the OS and Rust engine.
