@@ -39,7 +39,7 @@ to all training stages:
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
 | `--epsilon-start` | 0.10 | Enough exploration while Q-values are still random |
 | `--epsilon-end` | 0.003 | Near-deterministic late in training |
-| `--epsilon-decay-steps` | 200000000 | Explore first ~25M episodes, exploit remaining ~75M |
+| `--epsilon-decay-steps` | 400000000 | Explore first ~50M episodes, exploit second half |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -62,7 +62,7 @@ python scripts/train.py \
   --as-train-steps 4 \
   --epsilon-start 0.10 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 200000000 \
+  --epsilon-decay-steps 400000000 \
   --huber-delta 10.0 \
   --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
@@ -190,7 +190,7 @@ Critical convergence fixes:
 | **Terminal rewards** | Only last-to-act player got reward | All players get terminal transitions | Most players' rewards were lost; ~93% of training signal missing |
 | **Card augmentation** | Independent random perm for obs/next_obs | Same permutation for both | Temporal consistency in DQN transitions |
 | **Default players** | 6 | 2 | Matches eval; NFSP convergence guarantees are for 2-player |
-| **Epsilon schedule** | 0.06 → 0.003 over 400M steps | 0.10 → 0.003 over 200M steps | More exploration early (Q-values start random), faster decay |
+| **Epsilon schedule** | 0.06 → 0.003 over 400M steps | 0.10 → 0.003 over 400M steps | Higher start — Q-values are random early, need more exploration |
 | **AS buffer** | 5M | 4M | Saves ~3GB RAM; 4M still preserves long-run average well |
 | **step_batch mask** | `.take(8)` (wrong) | `.take(9)` | Off-by-one in non-dense API mask padding |
 

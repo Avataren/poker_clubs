@@ -61,7 +61,7 @@ class NFSPConfig:
     # Epsilon-greedy for BR exploration
     epsilon_start: float = 0.10
     epsilon_end: float = 0.003
-    epsilon_decay_steps: int = 200_000_000  # ~25M episodes — explore first quarter, exploit rest
+    epsilon_decay_steps: int = 400_000_000  # ~50M episodes — explore first half, exploit second half
 
     # Eta scheduling (anticipatory parameter): P(use AS policy) during self-play.
     # eta=0.1 means 10% AS / 90% BR. Higher eta → more average strategy play.
