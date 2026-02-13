@@ -304,7 +304,7 @@ class TableSeatWidget extends StatelessWidget {
 
             if (player!.isBot)
               Positioned(
-                top: avatarTop - (avatarSize * 0.18),
+                top: avatarTop - (avatarSize * 0.35), // Moved up from 0.18
                 left: avatarLeft + avatarSize * 0.78,
                 child: Container(
                   padding: EdgeInsets.all(seatSize * 0.025),
@@ -341,7 +341,7 @@ class TableSeatWidget extends StatelessWidget {
             // Rendered LAST to be on top of other elements
             if (player!.isBot && !isTournament && onRemoveBot != null)
               Positioned(
-                top: avatarTop - (avatarSize * 0.20),
+                top: avatarTop - (avatarSize * 0.37), // Moved up from 0.20
                 left: avatarLeft + avatarSize * 1.18, // More spacing from bot icon
                 child: Material(
                   color: Colors.transparent,
