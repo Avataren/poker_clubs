@@ -80,6 +80,10 @@ yarn-error.log*
 .env.local
 .env.*.local
 
+# Docker deployment
+deploy/.env
+deploy/models/
+
 # Temporary files
 *.swp
 *.swo

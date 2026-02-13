@@ -1,0 +1,16 @@
+services:
+  poker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "${HOST_PORT:-8080}:80"
+    volumes:
+      - ./models:/models:ro
+      - poker_data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  poker_data:

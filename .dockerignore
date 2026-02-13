@@ -1,0 +1,13 @@
+backend/target
+poker_client/.dart_tool
+poker_client/build
+poker_client/.idea
+poker_client/android/.gradle
+poker_client/ios/Pods
+poker_ai
+client
+.git
+*.db
+*.db-shm
+*.db-wal
+deploy/models
