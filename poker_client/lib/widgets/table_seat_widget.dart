@@ -321,11 +321,28 @@ class TableSeatWidget extends StatelessWidget {
                 ),
               ),
 
+            if (lastAction != null && lastAction!.isNotEmpty)
+              Positioned(
+                top: namePlateTop - (seatSize * 0.22),
+                left: 0,
+                right: 0,
+                child: Center(child: _buildLastActionBadge(badgeFontSize)),
+              ),
+
+            if (player!.isWinner && showingDown)
+              Positioned(
+                top: avatarTop + avatarSize * 0.2,
+                left: 0,
+                right: 0,
+                child: Center(child: _buildWinnerBadge(badgeFontSize)),
+              ),
+
             // Remove bot button (cash games only) - positioned to the right
+            // Rendered LAST to be on top of other elements
             if (player!.isBot && !isTournament && onRemoveBot != null)
               Positioned(
                 top: avatarTop - (avatarSize * 0.18),
-                left: avatarLeft + avatarSize * 1.06,
+                left: avatarLeft + avatarSize * 1.15, // Increased spacing from bot icon
                 child: Tooltip(
                   message: 'Remove bot',
                   child: MouseRegion(
@@ -348,22 +365,6 @@ class TableSeatWidget extends StatelessWidget {
                     ),
                   ),
                 ),
-              ),
-
-            if (lastAction != null && lastAction!.isNotEmpty)
-              Positioned(
-                top: namePlateTop - (seatSize * 0.22),
-                left: 0,
-                right: 0,
-                child: Center(child: _buildLastActionBadge(badgeFontSize)),
-              ),
-
-            if (player!.isWinner && showingDown)
-              Positioned(
-                top: avatarTop + avatarSize * 0.2,
-                left: 0,
-                right: 0,
-                child: Center(child: _buildWinnerBadge(badgeFontSize)),
               ),
           ],
         ),
