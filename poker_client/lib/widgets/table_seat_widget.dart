@@ -351,7 +351,7 @@ class TableSeatWidget extends StatelessWidget {
                     message: 'Remove bot',
                     child: InkWell(
                       onTap: () {
-                        print('Remove bot clicked at seat $seatIndex');
+                        print('Remove bot clicked at seat $seatNumber');
                         onRemoveBot?.call();
                       },
                       customBorder: const CircleBorder(),
