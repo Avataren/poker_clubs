@@ -345,10 +345,15 @@ class TableSeatWidget extends StatelessWidget {
                 left: avatarLeft + avatarSize * 1.18, // More spacing from bot icon
                 child: Material(
                   color: Colors.transparent,
+                  elevation: 8, // High elevation to ensure it's on top
+                  shadowColor: Colors.transparent,
                   child: Tooltip(
                     message: 'Remove bot',
                     child: InkWell(
-                      onTap: onRemoveBot,
+                      onTap: () {
+                        print('Remove bot clicked at seat $seatIndex');
+                        onRemoveBot?.call();
+                      },
                       customBorder: const CircleBorder(),
                       child: Container(
                         padding: EdgeInsets.all(seatSize * 0.025),
