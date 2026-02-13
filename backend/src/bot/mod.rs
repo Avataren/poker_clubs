@@ -89,9 +89,12 @@ impl BotManager {
 
         // Use UUID to prevent collision on restart
         let user_id = format!("bot_{}", Uuid::new_v4());
+        
+        // Encode strategy in username for client-side color coding
+        let strategy_tag = strategy_name.unwrap_or("balanced");
         let username = name.unwrap_or_else(|| {
             let base = BOT_NAMES[(idx as usize - 1) % BOT_NAMES.len()];
-            format!("{} (Bot)", base)
+            format!("{} [{}]", base, strategy_tag)
         });
 
         let bot = BotPlayer::new(user_id.clone(), username.clone(), strategy);

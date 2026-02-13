@@ -72,4 +72,11 @@ class Player {
   bool get isSittingOut => state == 'SittingOut';
   bool get isWaitingForHand => state == 'WaitingForHand';
   bool get isBot => userId.startsWith('bot_');
+  
+  /// Extract bot strategy from username (format: "Name [strategy]")
+  String? get botStrategy {
+    if (!isBot) return null;
+    final match = RegExp(r'\[([^\]]+)\]').firstMatch(username);
+    return match?.group(1);
+  }
 }

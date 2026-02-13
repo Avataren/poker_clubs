@@ -170,6 +170,31 @@ class TableSeatWidget extends StatelessWidget {
     return player!.isFolded || player!.isSittingOut || player!.isDisconnected;
   }
 
+  /// Get bot indicator color based on strategy
+  /// Gradient from green (easiest) to red (hardest)
+  Color _getBotColor() {
+    if (player == null || !player!.isBot) return Colors.grey[800]!;
+    
+    final strategy = player!.botStrategy;
+    if (strategy == null) return Colors.grey[800]!;
+    
+    // ONNX personalities - gradient from green (easy) to red (hard)
+    if (strategy == 'onnx_nit') {
+      return const Color(0xFF4CAF50); // Green - easiest (too tight)
+    } else if (strategy == 'onnx_calling_station') {
+      return const Color(0xFF9CCC65); // Light green - easy (calls too much)
+    } else if (strategy == 'onnx_maniac') {
+      return const Color(0xFFFF9800); // Orange - medium (aggressive but random)
+    } else if (strategy == 'onnx_pro') {
+      return const Color(0xFFFF5722); // Deep orange - hard (solid play)
+    } else if (strategy == 'onnx_gto') {
+      return const Color(0xFFF44336); // Red - hardest (game theory optimal)
+    }
+    
+    // Scripted strategies - grey
+    return Colors.grey[700]!;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEmpty = player == null;
@@ -282,7 +307,7 @@ class TableSeatWidget extends StatelessWidget {
                 child: Container(
                   padding: EdgeInsets.all(seatSize * 0.025),
                   decoration: BoxDecoration(
-                    color: Colors.grey[800],
+                    color: _getBotColor(),
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.white54, width: 1),
                   ),
