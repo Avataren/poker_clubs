@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 /// In-memory state for a running tournament
 pub(crate) struct TournamentState {
     pub(crate) tournament: Tournament,
+    #[allow(dead_code)]
     pub(crate) blind_schedule: BlindSchedule,
     pub(crate) prize_structure: PrizeStructure,
 }
@@ -669,6 +670,7 @@ impl TournamentContext {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn credit_prize(
         &self,
         club_id: &str,
