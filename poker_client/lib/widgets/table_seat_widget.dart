@@ -1096,17 +1096,19 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
                     curve: Curves.easeInOut,
                     left: targetOffset.dx,
                     top: targetOffset.dy,
-                    child: FractionalTranslation(
-                      translation: const Offset(-0.5, 0),
-                      child: AnimatedScale(
-                        duration: const Duration(milliseconds: 1000),
-                        scale: 0.8,
-                        child: ChipStackWidget(
-                          amount: potAmount,
-                          smallBlind: widget.smallBlind,
-                          scale: (tableWidth / 600).clamp(0.7, 1.2),
-                          showAmount: true,
-                          textColor: Colors.lightGreenAccent,
+                    child: IgnorePointer(
+                      child: FractionalTranslation(
+                        translation: const Offset(-0.5, 0),
+                        child: AnimatedScale(
+                          duration: const Duration(milliseconds: 1000),
+                          scale: 0.8,
+                          child: ChipStackWidget(
+                            amount: potAmount,
+                            smallBlind: widget.smallBlind,
+                            scale: (tableWidth / 600).clamp(0.7, 1.2),
+                            showAmount: true,
+                            textColor: Colors.lightGreenAccent,
+                          ),
                         ),
                       ),
                     ),
@@ -1146,27 +1148,29 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       Positioned(
         left: centerOffset.dx,
         top: centerOffset.dy,
-        child: FractionalTranslation(
-          translation: const Offset(-0.5, -0.5),
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: tableWidth * 0.025,
-              vertical: tableWidth * 0.01,
-            ),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(tableWidth * 0.015),
-              border: Border.all(
-                color: const Color(0xFF4caf50).withValues(alpha: 0.6),
-                width: 1.5,
+        child: IgnorePointer(
+          child: FractionalTranslation(
+            translation: const Offset(-0.5, -0.5),
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: tableWidth * 0.025,
+                vertical: tableWidth * 0.01,
               ),
-            ),
-            child: Text(
-              potText,
-              style: TextStyle(
-                color: Colors.lightGreenAccent,
-                fontSize: fontSize,
-                fontWeight: FontWeight.bold,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(tableWidth * 0.015),
+                border: Border.all(
+                  color: const Color(0xFF4caf50).withValues(alpha: 0.6),
+                  width: 1.5,
+                ),
+              ),
+              child: Text(
+                potText,
+                style: TextStyle(
+                  color: Colors.lightGreenAccent,
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
@@ -1399,11 +1403,13 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
     return Positioned(
       left: (tableWidth / 2) + x - (chipStackSize / 2),
       top: (tableHeight / 2) + y - (chipStackSize * 0.75),
-      child: ChipStackWidget(
-        amount: player.currentBet,
-        smallBlind: widget.smallBlind,
-        scale: (tableWidth / 600).clamp(0.7, 1.2),
-        showAmount: true,
+      child: IgnorePointer(
+        child: ChipStackWidget(
+          amount: player.currentBet,
+          smallBlind: widget.smallBlind,
+          scale: (tableWidth / 600).clamp(0.7, 1.2),
+          showAmount: true,
+        ),
       ),
     );
   }
@@ -1469,16 +1475,18 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
       top: animationStarted
           ? targetCardTop
           : (tableHeight / 2) - (geometry.cardHeight / 2),
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 100),
-        opacity: 1.0,
-        child: Transform.rotate(
-          angle: targetRotation,
-          child: CardWidget(
-            card: card,
-            width: geometry.cardWidth,
-            height: geometry.cardHeight,
-            isShowdown: false,
+      child: IgnorePointer(
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 100),
+          opacity: 1.0,
+          child: Transform.rotate(
+            angle: targetRotation,
+            child: CardWidget(
+              card: card,
+              width: geometry.cardWidth,
+              height: geometry.cardHeight,
+              isShowdown: false,
+            ),
           ),
         ),
       ),
