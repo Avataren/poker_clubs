@@ -16,11 +16,21 @@ class AverageStrategyONNXWrapper(nn.Module):
 
     ONNX doesn't handle complex Python logic well, so we create a simple
     forward pass that takes all inputs and returns action probabilities.
+
+    Pre-computes position indices as registered buffers so that the ONNX
+    graph uses constant tensors instead of Range ops (which tract cannot
+    handle).
     """
 
-    def __init__(self, as_net: AverageStrategyNet):
+    def __init__(self, as_net: AverageStrategyNet, max_seq_len: int = 30):
         super().__init__()
         self.as_net = as_net
+        # Pre-compute position indices as constant buffers to avoid
+        # torch.arange in the ONNX graph (tract doesn't support Range).
+        self.register_buffer("pos_ids", torch.arange(max_seq_len, dtype=torch.long))
+        self.register_buffer(
+            "positions", torch.arange(max_seq_len, dtype=torch.long).unsqueeze(0)
+        )
 
     def forward(
         self,
@@ -29,11 +39,35 @@ class AverageStrategyONNXWrapper(nn.Module):
         history_lengths: torch.Tensor,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # Keep history_lengths as an explicit ONNX input for backend compatibility.
-        # Current ActionHistoryMLP ignores lengths, so this is a no-op numerically.
-        history_lengths_f = history_lengths.to(action_history.dtype).view(-1, 1, 1)
-        action_history = action_history + history_lengths_f * 0.0
-        return self.as_net(obs, action_history, history_lengths, legal_mask)
+        history_hidden = self._encode_history(action_history, history_lengths)
+        return self.as_net.net.policy(obs, history_hidden, legal_mask)
+
+    def _encode_history(
+        self, action_seq: torch.Tensor, lengths: torch.Tensor
+    ) -> torch.Tensor:
+        """Re-implementation of ActionHistoryTransformer.forward using
+        pre-computed position buffers instead of torch.arange."""
+        enc = self.as_net.history_encoder
+        dtype = action_seq.dtype
+
+        # Masking (uses pre-computed positions buffer)
+        valid_mask_f = (self.positions < lengths.unsqueeze(1)).to(dtype)
+        pad_mask = (1.0 - valid_mask_f) * torch.finfo(dtype).min
+
+        # Project input and add positional embeddings (uses pre-computed pos_ids)
+        x = enc.input_proj(action_seq)
+        x = x + enc.pos_embed(self.pos_ids).unsqueeze(0)
+
+        # Transformer encoder
+        x = enc.transformer(x, src_key_padding_mask=pad_mask)
+
+        # Mean pool over valid positions
+        valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)
+        x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts
+        has_history = (valid_counts > 0.5).to(dtype)
+        x = x * has_history
+
+        return enc.output_proj(x)
 
 
 def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> NFSPConfig:
@@ -136,7 +170,7 @@ def export_to_onnx(
     as_net.load_state_dict(checkpoint["as_net"])
     as_net.eval()
 
-    wrapper = AverageStrategyONNXWrapper(as_net)
+    wrapper = AverageStrategyONNXWrapper(as_net, max_seq_len=config.max_history_len)
     wrapper.eval()
 
     # Create dummy inputs
@@ -153,19 +187,23 @@ def export_to_onnx(
 
     # Export
     try:
+        # Only mark batch dimension as dynamic; keep seq_len fixed so that
+        # tract-onnx (Rust) can resolve Reshape / Range nodes used by the
+        # transformer's multi-head attention without symbolic dimension issues.
+        dynamic = {
+            "obs": {0: "batch_size"},
+            "action_history": {0: "batch_size"},
+            "history_lengths": {0: "batch_size"},
+            "legal_mask": {0: "batch_size"},
+            "action_probs": {0: "batch_size"},
+        }
         torch.onnx.export(
             wrapper,
             (obs, action_history, history_lengths, legal_mask),
             str(output_file),
             input_names=["obs", "action_history", "history_lengths", "legal_mask"],
             output_names=["action_probs"],
-            dynamic_axes={
-                "obs": {0: "batch_size"},
-                "action_history": {0: "batch_size", 1: "seq_len"},
-                "history_lengths": {0: "batch_size"},
-                "legal_mask": {0: "batch_size"},
-                "action_probs": {0: "batch_size"},
-            },
+            dynamic_axes=dynamic,
             opset_version=opset_version,
             do_constant_folding=True,
             dynamo=use_dynamo,

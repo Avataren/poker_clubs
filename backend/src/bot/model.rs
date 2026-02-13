@@ -27,9 +27,26 @@ struct ModelRuntime {
 
 impl ModelRuntime {
     fn load(path: &Path) -> Result<Self, String> {
-        let plan = tract_onnx::onnx()
+        let mut model = tract_onnx::onnx()
             .model_for_path(path)
-            .map_err(|e| format!("failed to read ONNX model {}: {e}", path.display()))?
+            .map_err(|e| format!("failed to read ONNX model {}: {e}", path.display()))?;
+
+        // Fix dynamic axes to concrete shapes so tract can optimize the
+        // transformer's multi-head attention Reshape nodes.
+        model
+            .set_input_fact(0, f32::fact([1, OBS_DIM]).into())
+            .map_err(|e| format!("failed to set obs input shape: {e}"))?;
+        model
+            .set_input_fact(1, f32::fact([1, MAX_HISTORY_LEN, HISTORY_DIM]).into())
+            .map_err(|e| format!("failed to set action_history input shape: {e}"))?;
+        model
+            .set_input_fact(2, i64::fact([1]).into())
+            .map_err(|e| format!("failed to set history_lengths input shape: {e}"))?;
+        model
+            .set_input_fact(3, InferenceFact::dt_shape(bool::datum_type(), &[1, NUM_ACTIONS]))
+            .map_err(|e| format!("failed to set legal_mask input shape: {e}"))?;
+
+        let plan = model
             .into_optimized()
             .map_err(|e| format!("failed to optimize ONNX model {}: {e}", path.display()))?
             .into_runnable()

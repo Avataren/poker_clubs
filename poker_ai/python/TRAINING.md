@@ -4,7 +4,7 @@
 
 Training follows a 3-stage pipeline: heads-up (2p) → 6-max (6p) → full ring (9p).
 Each stage fine-tunes from the previous checkpoint. The network architecture is
-player-count agnostic (fixed 590-dim observation), so weights transfer directly.
+player-count agnostic (fixed 462-dim observation), so weights transfer directly.
 
 **Important:** v4 fixed critical transition bugs — old checkpoints are incompatible.
 Start Stage 1 from scratch.
@@ -205,7 +205,7 @@ Key improvements over v2:
 |---|---|---|---|
 | **Action space** | 8 actions (overlapping raises) | 9 actions (0.25×–1.5× pot) | Better strategic coverage, cleaner pot-relative sizing |
 | **History encoding** | 7-dim (coarse 5-cat one-hot) | 11-dim (9-action one-hot + bet/pot ratio) | Richer action history for pattern recognition |
-| **Observation** | 569 floats, 25 game state features | 590 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking |
+| **Observation** | 569 floats, 25 game state features | 462 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking |
 | **Head network** | 256-dim heads | 512-dim heads | More capacity for value/policy heads |
 | **Legal mask** | `logits.clamp(min=-1e9)` | `torch.where(mask, logits, -1e9)` | Proper masking — clamp affected legal actions too |
 | **Epsilon** | 0.12 → 0.003 over 20M | 0.10 → 0.003 over 200M steps | Sufficient exploration for 9 actions, less BR noise |
@@ -227,17 +227,28 @@ After each stage, export the AS network for use in the backend:
 
 ```bash
 python scripts/export_onnx.py \
-  checkpoints/hu/checkpoint_best.pt \
-  --output models/poker_as_hu.onnx
+  checkpoints/hu/checkpoint_latest.pt \
+  --output ../../backend/models/poker_as_hu.onnx \
+  --verify
 
 python scripts/export_onnx.py \
-  checkpoints/6max/checkpoint_best.pt \
-  --output models/poker_as_6max.onnx
+  checkpoints/6max/checkpoint_latest.pt \
+  --output ../../backend/models/poker_as_6max.onnx \
+  --verify
 
 python scripts/export_onnx.py \
-  checkpoints/9ring/checkpoint_best.pt \
-  --output models/poker_as_9ring.onnx
+  checkpoints/9ring/checkpoint_latest.pt \
+  --output ../../backend/models/poker_as_9ring.onnx \
+  --verify
 ```
+
+The `--verify` flag checks that the ONNX model output matches the PyTorch model
+within tolerance (1e-5). The export wrapper pre-computes position indices as
+constant tensors so that the Rust backend (tract-onnx) can optimize the
+transformer's multi-head attention without symbolic dimension issues.
+
+**Note:** The sequence length axis is fixed at export time (default: 30). The
+batch dimension remains dynamic but the backend always uses batch=1.
 
 ## Backend Integration
 
