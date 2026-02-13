@@ -384,13 +384,13 @@ class _GameScreenState extends State<GameScreen> {
   ButtonStyle _actionButtonStyle(Color color) {
     return ElevatedButton.styleFrom(
       backgroundColor: color,
-      foregroundColor: Colors.white,
+      foregroundColor: Colors.black,
       textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      elevation: 3,
-      shadowColor: Colors.black54,
-      // Add border for extra contrast
-      side: BorderSide(color: Colors.black.withOpacity(0.3), width: 1),
+      elevation: 4,
+      shadowColor: Colors.black87,
+      // Add border for depth
+      side: BorderSide(color: Colors.black.withOpacity(0.4), width: 1.5),
     );
   }
 
@@ -1332,7 +1332,7 @@ class _GameScreenState extends State<GameScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: ElevatedButton(
               onPressed: () => _playerAction('Fold'),
-              style: _actionButtonStyle(Colors.red.shade700),
+              style: _actionButtonStyle(Colors.red),
               child: const Text('Fold'),
             ),
           ),
@@ -1342,12 +1342,12 @@ class _GameScreenState extends State<GameScreen> {
             child: canCheck
                 ? ElevatedButton(
                     onPressed: () => _playerAction('Check'),
-                    style: _actionButtonStyle(Colors.blue.shade700),
+                    style: _actionButtonStyle(Colors.blue),
                     child: const Text('Check'),
                   )
                 : ElevatedButton(
                     onPressed: () => _playerAction('Call'),
-                    style: _actionButtonStyle(Colors.orange.shade800),
+                    style: _actionButtonStyle(Colors.orange),
                     child: Text('Call \$$toCall'),
                   ),
           ),
@@ -1383,7 +1383,7 @@ class _GameScreenState extends State<GameScreen> {
                       onPressed: () =>
                           setState(() => _showBetPanel = !_showBetPanel),
                       style: _actionButtonStyle(
-                        _showBetPanel ? Colors.grey.shade700 : Colors.green.shade700,
+                        _showBetPanel ? Colors.grey : Colors.green,
                       ),
                       child: Text(gs.currentBet > 0 ? 'Raise' : 'Bet'),
                     ),
@@ -1396,7 +1396,7 @@ class _GameScreenState extends State<GameScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: ElevatedButton(
                 onPressed: () => _playerAction('AllIn'),
-                style: _actionButtonStyle(Colors.purple.shade700),
+                style: _actionButtonStyle(Colors.purple),
                 child: const Text('All In'),
               ),
             ),

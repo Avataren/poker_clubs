@@ -341,24 +341,32 @@ class TableSeatWidget extends StatelessWidget {
             // Rendered LAST to be on top of other elements
             if (player!.isBot && !isTournament && onRemoveBot != null)
               Positioned(
-                top: avatarTop - (avatarSize * 0.18),
-                left: avatarLeft + avatarSize * 1.15, // Increased spacing from bot icon
-                child: Tooltip(
-                  message: 'Remove bot',
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
+                top: avatarTop - (avatarSize * 0.20),
+                left: avatarLeft + avatarSize * 1.18, // More spacing from bot icon
+                child: Material(
+                  color: Colors.transparent,
+                  child: Tooltip(
+                    message: 'Remove bot',
+                    child: InkWell(
                       onTap: onRemoveBot,
+                      customBorder: const CircleBorder(),
                       child: Container(
-                        padding: EdgeInsets.all(seatSize * 0.020),
+                        padding: EdgeInsets.all(seatSize * 0.025),
                         decoration: BoxDecoration(
                           color: Colors.red[700],
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white54, width: 1),
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.5),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
                         child: Icon(
                           Icons.close,
-                          size: seatSize * 0.10,
+                          size: seatSize * 0.12,
                           color: Colors.white,
                         ),
                       ),
