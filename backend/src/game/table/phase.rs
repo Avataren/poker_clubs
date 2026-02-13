@@ -30,6 +30,21 @@ impl PokerTable {
             player.reset_for_new_round();
         }
         self.pot.end_betting_round();
+        
+        // Return uncallable bets immediately (e.g., when a player has chips
+        // that nobody else can match because everyone else is all-in for less).
+        // This is standard poker etiquette - these amounts should not sit in
+        // the pot when they cannot possibly be won by anyone else.
+        let uncontested = self.pot.calculate_side_pots(&self.player_bets());
+        for (player_idx, amount) in uncontested {
+            self.players[player_idx].add_chips(amount);
+            tracing::info!(
+                "Returned ${} uncallable bet to {}",
+                amount,
+                self.players[player_idx].username
+            );
+        }
+        
         self.current_bet = 0;
         self.raises_this_round = 0;
 
