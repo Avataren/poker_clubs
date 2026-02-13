@@ -31,24 +31,10 @@ impl PokerTable {
         }
         self.pot.end_betting_round();
         
-        // Return uncallable bets immediately (e.g., when a player has chips
-        // that nobody else can match because everyone else is all-in for less).
-        // This is standard poker etiquette - these amounts should not sit in
+        // Return uncallable bets immediately ONLY if all remaining active players
+        // are all-in. This prevents duplicate returns on subsequent streets.
+        // This is standard poker etiquette - uncallable bets should not sit in
         // the pot when they cannot possibly be won by anyone else.
-        let uncontested = self.pot.calculate_side_pots(&self.player_bets());
-        for (player_idx, amount) in uncontested {
-            self.players[player_idx].add_chips(amount);
-            tracing::info!(
-                "Returned ${} uncallable bet to {}",
-                amount,
-                self.players[player_idx].username
-            );
-        }
-        
-        self.current_bet = 0;
-        self.raises_this_round = 0;
-
-        // If only one player is active in hand, they win immediately (no showdown)
         let active_in_hand: Vec<usize> = self
             .players
             .iter()
@@ -56,6 +42,26 @@ impl PokerTable {
             .filter(|(_, p)| p.is_active_in_hand())
             .map(|(idx, _)| idx)
             .collect();
+        
+        let all_active_allin = active_in_hand.len() > 1 && 
+            active_in_hand.iter().all(|&idx| self.players[idx].stack == 0);
+        
+        if all_active_allin {
+            let uncontested = self.pot.calculate_side_pots(&self.player_bets());
+            for (player_idx, amount) in uncontested {
+                self.players[player_idx].add_chips(amount);
+                tracing::info!(
+                    "Returned ${} uncallable bet to {}",
+                    amount,
+                    self.players[player_idx].username
+                );
+            }
+        }
+        
+        self.current_bet = 0;
+        self.raises_this_round = 0;
+
+        // If only one player is active in hand, they win immediately (no showdown)
 
         if active_in_hand.len() == 1 {
             let winner_idx = active_in_hand[0];
