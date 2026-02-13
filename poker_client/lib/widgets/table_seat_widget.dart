@@ -135,6 +135,7 @@ class TableSeatWidget extends StatelessWidget {
   final double cardHeight;
   final String? lastAction;
   final String? avatarUrl;
+  final bool isTournament;
 
   const TableSeatWidget({
     super.key,
@@ -156,6 +157,7 @@ class TableSeatWidget extends StatelessWidget {
     this.cardHeight = 50.0,
     this.lastAction,
     this.avatarUrl,
+    this.isTournament = false,
   });
 
   bool get _hasCards {
@@ -315,6 +317,29 @@ class TableSeatWidget extends StatelessWidget {
                     Icons.smart_toy,
                     size: seatSize * 0.13,
                     color: Colors.white70,
+                  ),
+                ),
+              ),
+
+            // Remove bot button (cash games only)
+            if (player!.isBot && !isTournament && onRemoveBot != null)
+              Positioned(
+                top: avatarTop - (avatarSize * 0.18),
+                left: avatarLeft + avatarSize * 0.50,
+                child: GestureDetector(
+                  onTap: onRemoveBot,
+                  child: Container(
+                    padding: EdgeInsets.all(seatSize * 0.020),
+                    decoration: BoxDecoration(
+                      color: Colors.red[700],
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white54, width: 1),
+                    ),
+                    child: Icon(
+                      Icons.close,
+                      size: seatSize * 0.10,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -624,6 +649,7 @@ class PokerTableWidget extends StatefulWidget {
   final int smallBlind;
   final int potTotal;
   final List<PotInfo> pots;
+  final String? tournamentId; // null for cash games
 
   const PokerTableWidget({
     super.key,
@@ -641,6 +667,7 @@ class PokerTableWidget extends StatefulWidget {
     this.smallBlind = 10,
     this.potTotal = 0,
     this.pots = const [],
+    this.tournamentId,
   });
 
   @override
@@ -1328,6 +1355,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           cardHeight: geometry.cardHeight,
           lastAction: player?.lastAction,
           avatarUrl: player?.avatarUrl,
+          isTournament: widget.tournamentId != null,
         ),
       ),
     );

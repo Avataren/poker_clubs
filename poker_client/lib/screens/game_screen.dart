@@ -1003,6 +1003,7 @@ class _GameScreenState extends State<GameScreen> {
             smallBlind: widget.table.smallBlind,
             potTotal: _gameState!.potTotal,
             pots: _gameState!.pots,
+            tournamentId: _gameState!.tournamentId,
           ),
 
           // Table center overlay (community cards) - responsive positioning
