@@ -227,6 +227,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
                                   },
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.green,
+                                    foregroundColor: Colors.black,
                                   ),
                                   child: const Text('Select'),
                                 )
@@ -234,6 +235,7 @@ class _ClubsScreenState extends State<ClubsScreen> with WidgetsBindingObserver {
                                   onPressed: () => _joinClub(club.id),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.blue,
+                                    foregroundColor: Colors.black,
                                   ),
                                   child: const Text('Join'),
                                 ),

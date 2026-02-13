@@ -182,6 +182,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 style: ElevatedButton.styleFrom(
                                   padding: const EdgeInsets.all(16),
                                   backgroundColor: Colors.green,
+                                  foregroundColor: Colors.black,
                                 ),
                                 child: const Text('Register'),
                               ),
@@ -207,6 +208,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 style: ElevatedButton.styleFrom(
                                   padding: const EdgeInsets.all(16),
                                   backgroundColor: Colors.green,
+                                  foregroundColor: Colors.black,
                                 ),
                                 child: const Text('Register'),
                               ),

@@ -535,7 +535,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
                 label: const Text('Watch'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
+                  foregroundColor: Colors.black,
                 ),
               ),
             ),
@@ -564,7 +564,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.purple,
-            foregroundColor: Colors.white,
+            foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
@@ -577,7 +577,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           label: const Text('Start Now', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.green.shade700,
-            foregroundColor: Colors.white,
+            foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
@@ -590,7 +590,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           label: const Text('Cancel', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade700,
-            foregroundColor: Colors.white,
+            foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
@@ -601,7 +601,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           label: const Text('Delete', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade900,
-            foregroundColor: Colors.white,
+            foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
@@ -662,7 +662,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           label: const Text('Unregister', style: TextStyle(fontSize: 13)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
+            foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         );
@@ -676,7 +676,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
           ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.green,
-            foregroundColor: Colors.white,
+            foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
         );
@@ -697,7 +697,7 @@ class _TournamentDetailScreenState extends State<TournamentDetailScreen>
         label: const Text('In Progress', style: TextStyle(fontSize: 13)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.orange,
-          foregroundColor: Colors.white,
+          foregroundColor: Colors.black,
           padding: const EdgeInsets.symmetric(vertical: 12),
         ),
       );

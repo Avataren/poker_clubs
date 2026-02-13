@@ -940,8 +940,8 @@ class _GameScreenState extends State<GameScreen> {
                             Navigator.pop(context);
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red.shade700,
-                            foregroundColor: Colors.white,
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.black,
                           ),
                           child: const Text('Leave Table'),
                         ),
@@ -1284,7 +1284,10 @@ class _GameScreenState extends State<GameScreen> {
                 !myPlayer.shownCards![i])
               ElevatedButton(
                 onPressed: () => _wsService.showCards([i]),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.black,
+                ),
                 child: Text('Show Card ${i + 1}'),
               ),
           if (myPlayer.shownCards != null &&
@@ -1299,6 +1302,7 @@ class _GameScreenState extends State<GameScreen> {
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.amber[700],
+                foregroundColor: Colors.black,
               ),
               child: const Text('Show All'),
             ),

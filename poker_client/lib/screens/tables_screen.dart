@@ -385,6 +385,7 @@ class _TablesScreenState extends State<TablesScreen>
                               },
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.orange,
+                                foregroundColor: Colors.black,
                               ),
                               child: const Text('Join'),
                             ),
