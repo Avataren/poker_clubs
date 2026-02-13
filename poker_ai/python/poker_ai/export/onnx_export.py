@@ -1,6 +1,8 @@
 """Export trained Average Strategy network to ONNX format."""
 
 import copy
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -68,11 +70,50 @@ def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> N
     return config
 
 
+def _resolve_checkpoint_path(checkpoint_path: str) -> Path:
+    """Resolve checkpoint path from common working directories."""
+    raw_path = Path(checkpoint_path).expanduser()
+    candidates = [raw_path]
+
+    if not raw_path.is_absolute():
+        candidates.append(Path.cwd() / raw_path)
+        # .../poker_ai/python/poker_ai/export/onnx_export.py -> .../poker_ai/python
+        python_root = Path(__file__).resolve().parents[2]
+        candidates.append(python_root / raw_path)
+
+    unique_candidates: list[Path] = []
+    seen = set()
+    for candidate in candidates:
+        norm = str(candidate.resolve(strict=False))
+        if norm in seen:
+            continue
+        seen.add(norm)
+        unique_candidates.append(candidate.resolve(strict=False))
+        if candidate.is_file():
+            return candidate.resolve(strict=False)
+
+    fallback_paths: list[str] = []
+    for path in unique_candidates:
+        latest = path.parent / "checkpoint_latest.pt"
+        if latest.is_file():
+            fallback_paths.append(str(latest))
+
+    searched_paths = ", ".join(str(path) for path in unique_candidates)
+    fallback_msg = ""
+    if fallback_paths:
+        fallback_msg = f" Try one of: {', '.join(sorted(set(fallback_paths)))}."
+
+    raise FileNotFoundError(
+        f"Checkpoint file not found: '{checkpoint_path}'. Searched: {searched_paths}.{fallback_msg}"
+    )
+
+
 def export_to_onnx(
     checkpoint_path: str,
     output_path: str = "poker_as_net.onnx",
     config: NFSPConfig | None = None,
     opset_version: int = 17,
+    use_dynamo: bool = False,
 ) -> None:
     """Export the Average Strategy network to ONNX.
 
@@ -81,11 +122,13 @@ def export_to_onnx(
         output_path: Path for the output ONNX model
         config: NFSPConfig (uses default if None)
         opset_version: ONNX opset version
+        use_dynamo: Use the torch.export-based ONNX exporter (requires onnxscript)
     """
     if config is None:
         config = NFSPConfig()
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    checkpoint_file = _resolve_checkpoint_path(checkpoint_path)
+    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
     config = infer_config_from_checkpoint(checkpoint, config)
 
     # Load model
@@ -105,24 +148,37 @@ def export_to_onnx(
     history_lengths = torch.tensor([max_seq_len], dtype=torch.long)
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
 
+    output_file = Path(output_path).expanduser()
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
     # Export
-    torch.onnx.export(
-        wrapper,
-        (obs, action_history, history_lengths, legal_mask),
-        output_path,
-        input_names=["obs", "action_history", "history_lengths", "legal_mask"],
-        output_names=["action_probs"],
-        dynamic_axes={
-            "obs": {0: "batch_size"},
-            "action_history": {0: "batch_size", 1: "seq_len"},
-            "history_lengths": {0: "batch_size"},
-            "legal_mask": {0: "batch_size"},
-            "action_probs": {0: "batch_size"},
-        },
-        opset_version=opset_version,
-        do_constant_folding=True,
-    )
-    print(f"Exported ONNX model to {output_path}")
+    try:
+        torch.onnx.export(
+            wrapper,
+            (obs, action_history, history_lengths, legal_mask),
+            str(output_file),
+            input_names=["obs", "action_history", "history_lengths", "legal_mask"],
+            output_names=["action_probs"],
+            dynamic_axes={
+                "obs": {0: "batch_size"},
+                "action_history": {0: "batch_size", 1: "seq_len"},
+                "history_lengths": {0: "batch_size"},
+                "legal_mask": {0: "batch_size"},
+                "action_probs": {0: "batch_size"},
+            },
+            opset_version=opset_version,
+            do_constant_folding=True,
+            dynamo=use_dynamo,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "onnxscript" and use_dynamo:
+            raise ModuleNotFoundError(
+                "Dynamo ONNX export requires 'onnxscript'. Install it with "
+                "`pip install onnxscript`, or rerun without `--dynamo`."
+            ) from exc
+        raise
+
+    print(f"Exported ONNX model to {output_file}")
 
 
 def verify_onnx(
@@ -137,7 +193,8 @@ def verify_onnx(
     if config is None:
         config = NFSPConfig()
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    checkpoint_file = _resolve_checkpoint_path(checkpoint_path)
+    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
     config = infer_config_from_checkpoint(checkpoint, config)
 
     # Load PyTorch model
@@ -170,7 +227,7 @@ def verify_onnx(
         pytorch_out = as_net(obs, action_history, history_lengths, legal_mask).numpy()
 
     # ONNX output
-    session = ort.InferenceSession(onnx_path)
+    session = ort.InferenceSession(str(Path(onnx_path).expanduser()))
     onnx_out = session.run(
         None,
         {

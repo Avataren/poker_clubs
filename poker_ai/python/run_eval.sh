@@ -13,9 +13,9 @@ fi
 while true; do
   "$PYTHON_BIN" scripts/milestone_eval.py \
     --checkpoint-dir checkpoints/hu \
-    --device cuda \
-    --num-hands 20000 \
-    --exploitability-hands 5000 \
+    --device cpu \
+    --num-hands 50000 \
+    --exploitability-hands 15000 \
     --milestone-every 1000000 \
     --min-episode 1000000 \
     --csv logs/hu/milestones.csv \

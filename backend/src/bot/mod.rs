@@ -13,7 +13,8 @@ use crate::game::table::{current_timestamp_ms, is_bot_identity, PokerTable};
 use crate::game::{GamePhase, PlayerAction};
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Once;
 use strategy::{BotGameView, BotPosition, BotStrategy, SimpleStrategy};
 use uuid::Uuid;
 
@@ -52,6 +53,14 @@ pub struct BotManager {
     next_bot_name_idx: u32,
 }
 
+static DOTENV_INIT: Once = Once::new();
+
+fn ensure_dotenv_loaded() {
+    DOTENV_INIT.call_once(|| {
+        dotenvy::dotenv().ok();
+    });
+}
+
 /// Bot names to cycle through.
 const BOT_NAMES: &[&str] = &[
     "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Hank", "Ivy", "Jack", "Karen",
@@ -72,7 +81,9 @@ impl BotManager {
         table_id: &str,
         name: Option<String>,
         strategy_name: Option<&str>,
-    ) -> (String, String) {
+    ) -> Result<(String, String), String> {
+        let strategy = build_strategy(strategy_name)?;
+
         let idx = self.next_bot_name_idx;
         self.next_bot_name_idx += 1;
 
@@ -83,12 +94,10 @@ impl BotManager {
             format!("{} (Bot)", base)
         });
 
-        let strategy = build_strategy(strategy_name);
-
         let bot = BotPlayer::new(user_id.clone(), username.clone(), strategy);
         self.bots.entry(table_id.to_string()).or_default().push(bot);
 
-        (user_id, username)
+        Ok((user_id, username))
     }
 
     /// Register an existing user as a bot (for tournament bots created in DB)
@@ -98,11 +107,12 @@ impl BotManager {
         user_id: String,
         username: String,
         strategy_name: Option<&str>,
-    ) {
-        let strategy = build_strategy(strategy_name);
+    ) -> Result<(), String> {
+        let strategy = build_strategy(strategy_name)?;
 
         let bot = BotPlayer::new(user_id, username, strategy);
         self.bots.entry(table_id.to_string()).or_default().push(bot);
+        Ok(())
     }
 
     /// Remove a bot from a table.
@@ -231,50 +241,80 @@ impl BotManager {
     }
 }
 
-fn build_strategy(strategy_name: Option<&str>) -> Box<dyn BotStrategy> {
+fn build_strategy(strategy_name: Option<&str>) -> Result<Box<dyn BotStrategy>, String> {
     match strategy_name {
-        Some("tight") => Box::new(SimpleStrategy::tight()),
-        Some("aggressive") => Box::new(SimpleStrategy::aggressive()),
-        Some("calling_station") => Box::new(strategy::CallingStation),
-        Some("model") => match env::var("POKER_BOT_MODEL_ONNX") {
-            Ok(path) if !path.trim().is_empty() => load_model_strategy(&path),
-            _ => {
-                tracing::warn!(
-                    "Bot strategy `model` requested but POKER_BOT_MODEL_ONNX is not set; falling back to balanced strategy"
-                );
-                Box::new(SimpleStrategy::balanced())
+        Some("tight") => Ok(Box::new(SimpleStrategy::tight())),
+        Some("aggressive") => Ok(Box::new(SimpleStrategy::aggressive())),
+        Some("calling_station") => Ok(Box::new(strategy::CallingStation)),
+        Some("balanced") | None => Ok(Box::new(SimpleStrategy::balanced())),
+        Some("model") => {
+            ensure_dotenv_loaded();
+
+            match env::var("POKER_BOT_MODEL_ONNX") {
+                Ok(path) => {
+                    let trimmed = path.trim();
+                    if trimmed.is_empty() {
+                        Err("Bot strategy `model` requested but POKER_BOT_MODEL_ONNX is empty".to_string())
+                    } else {
+                        load_model_strategy(trimmed)
+                    }
+                }
+                Err(_) => Err(
+                    "Bot strategy `model` requested but POKER_BOT_MODEL_ONNX is not set".to_string(),
+                ),
             }
-        },
+        }
         Some(name) if name.starts_with("model:") => {
             let path = name.trim_start_matches("model:").trim();
             if path.is_empty() {
-                tracing::warn!(
-                    "Bot strategy `model:` requested with empty path; falling back to balanced strategy"
-                );
-                Box::new(SimpleStrategy::balanced())
+                Err("Bot strategy `model:` requested with an empty path".to_string())
             } else {
                 load_model_strategy(path)
             }
         }
-        _ => Box::new(SimpleStrategy::balanced()),
+        Some(other) => Err(format!(
+            "Unknown bot strategy `{other}`. Supported strategies: balanced, tight, aggressive, calling_station, model, model:/path/to/model.onnx"
+        )),
     }
 }
 
-fn load_model_strategy(path: &str) -> Box<dyn BotStrategy> {
-    match model::ModelStrategy::from_path(Path::new(path)) {
+fn load_model_strategy(path: &str) -> Result<Box<dyn BotStrategy>, String> {
+    let resolved_path = resolve_model_path(path);
+
+    match model::ModelStrategy::from_path(&resolved_path) {
         Ok(strategy) => {
-            tracing::info!("Loaded ONNX model bot strategy from {}", path);
-            Box::new(strategy)
-        }
-        Err(err) => {
-            tracing::warn!(
-                "Failed to load ONNX model bot strategy from {}: {}. Falling back to balanced strategy.",
+            tracing::info!(
+                "Loaded ONNX model bot strategy from {} (resolved to {})",
                 path,
-                err
+                resolved_path.display()
             );
-            Box::new(SimpleStrategy::balanced())
+            Ok(Box::new(strategy))
         }
+        Err(err) => Err(format!(
+            "Failed to load ONNX model bot strategy from {path} (resolved to {}): {err}",
+            resolved_path.display(),
+        )),
     }
+}
+
+fn resolve_model_path(path: &str) -> PathBuf {
+    let trimmed = path.trim();
+
+    if trimmed == "~" {
+        if let Some(home) = env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+        return PathBuf::from(trimmed);
+    }
+
+    if let Some(remainder) = trimmed.strip_prefix("~/") {
+        if let Some(home) = env::var_os("HOME") {
+            return PathBuf::from(home).join(remainder);
+        }
+        return PathBuf::from(trimmed);
+    }
+
+    PathBuf::from(trimmed)
 }
 
 impl Default for BotManager {
@@ -393,21 +433,26 @@ fn compute_position(table: &PokerTable, player_idx: usize) -> BotPosition {
 mod tests {
     use super::*;
     use crate::game::constants::BOT_ACTION_THINK_DELAY_MS;
+    use std::path::PathBuf;
 
     #[test]
     fn test_bot_manager_add_remove() {
         let mut mgr = BotManager::new();
 
-        let (id1, name1) = mgr.add_bot("table_1", None, None);
+        let (id1, name1) = mgr
+            .add_bot("table_1", None, None)
+            .expect("default bot strategy should be valid");
         assert!(id1.starts_with("bot_"));
         assert!(name1.contains("Bot"));
         assert!(mgr.is_bot(&id1));
 
-        let (id2, _) = mgr.add_bot(
-            "table_1",
-            Some("Custom Bot".to_string()),
-            Some("aggressive"),
-        );
+        let (id2, _) = mgr
+            .add_bot(
+                "table_1",
+                Some("Custom Bot".to_string()),
+                Some("aggressive"),
+            )
+            .expect("aggressive bot strategy should be valid");
         assert!(id2.starts_with("bot_"));
         assert!(mgr.is_bot(&id2));
 
@@ -419,9 +464,15 @@ mod tests {
     #[test]
     fn test_bot_manager_unique_ids() {
         let mut mgr = BotManager::new();
-        let (id1, _) = mgr.add_bot("t1", None, None);
-        let (id2, _) = mgr.add_bot("t1", None, None);
-        let (id3, _) = mgr.add_bot("t2", None, None);
+        let (id1, _) = mgr
+            .add_bot("t1", None, None)
+            .expect("default bot strategy should be valid");
+        let (id2, _) = mgr
+            .add_bot("t1", None, None)
+            .expect("default bot strategy should be valid");
+        let (id3, _) = mgr
+            .add_bot("t2", None, None)
+            .expect("default bot strategy should be valid");
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
     }
@@ -430,7 +481,9 @@ mod tests {
     fn test_collect_bot_actions_skips_completed_round() {
         let mut mgr = BotManager::new();
         let table_id = "table_1".to_string();
-        let (bot_id, bot_name) = mgr.add_bot(&table_id, None, None);
+        let (bot_id, bot_name) = mgr
+            .add_bot(&table_id, None, None)
+            .expect("default bot strategy should be valid");
 
         let mut table = PokerTable::new(table_id.clone(), "Test Table".to_string(), 50, 100);
         table
@@ -502,5 +555,35 @@ mod tests {
         assert_eq!(actions.len(), 1, "fallback should queue a bot action");
         assert_eq!(actions[0].0, table_id);
         assert_eq!(actions[0].1, "bot_like_user");
+    }
+
+    #[test]
+    fn test_add_bot_with_invalid_model_path_returns_error() {
+        let mut mgr = BotManager::new();
+        let err = mgr
+            .add_bot(
+                "table_model_error",
+                None,
+                Some("model:/tmp/does-not-exist-model.onnx"),
+            )
+            .expect_err("invalid model path should fail bot creation");
+        assert!(err.contains("Failed to load ONNX model bot strategy from"));
+        assert!(mgr
+            .bots
+            .get("table_model_error")
+            .map(|bots| bots.is_empty())
+            .unwrap_or(true));
+    }
+
+    #[test]
+    fn test_resolve_model_path_expands_tilde_home() {
+        let home = env::var("HOME").expect("HOME should be set for tests");
+        let resolved = resolve_model_path("~/models/test.onnx");
+        assert_eq!(resolved, PathBuf::from(home).join("models/test.onnx"));
+    }
+
+    #[test]
+    fn test_resolve_model_path_keeps_absolute_path() {
+        assert_eq!(resolve_model_path("/tmp/test.onnx"), PathBuf::from("/tmp/test.onnx"));
     }
 }

@@ -198,6 +198,11 @@ Export the trained average strategy network for use in the Rust backend:
 python scripts/export_onnx.py checkpoints/checkpoint_latest.pt -o poker_as_net.onnx --verify
 ```
 
+Notes:
+- `checkpoint_best.pt` only exists if you have promoted a best checkpoint (e.g., via `scripts/milestone_eval.py`).
+- The exporter defaults to the legacy ONNX path for PyTorch 2.9+ compatibility.
+- Use `--dynamo` for the new exporter (requires `pip install onnxscript`).
+
 ## Benchmarking
 
 Measure engine speed (hands/sec):

@@ -858,9 +858,19 @@ impl TournamentContext {
                 // Register bots with the bot manager
                 if is_bot {
                     tracing::info!("Registering bot {} for SNG table {}", username, table_id);
-                    self.game_server
+                    if let Err(e) = self
+                        .game_server
                         .register_bot(&table_id, registration.user_id.clone(), username, None)
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to register bot {} ({}) for table {}: {}",
+                            registration.user_id,
+                            tournament.id,
+                            table_id,
+                            e
+                        );
+                    }
                 }
 
                 // Update registration with table assignment
@@ -1063,9 +1073,19 @@ impl TournamentContext {
                 // Register bots with the bot manager
                 if is_bot {
                     tracing::info!("Registering bot {} for MTT table {}", username, table_id);
-                    self.game_server
+                    if let Err(e) = self
+                        .game_server
                         .register_bot(&table_id, registration.user_id.clone(), username, None)
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to register bot {} ({}) for table {}: {}",
+                            registration.user_id,
+                            tournament.id,
+                            table_id,
+                            e
+                        );
+                    }
                 }
 
                 // Update registration with table assignment

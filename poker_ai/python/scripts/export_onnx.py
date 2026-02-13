@@ -13,10 +13,15 @@ def main():
     parser.add_argument("-o", "--output", default="poker_as_net.onnx", help="Output ONNX path")
     parser.add_argument("--verify", action="store_true", help="Verify ONNX output matches PyTorch")
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version")
+    parser.add_argument(
+        "--dynamo",
+        action="store_true",
+        help="Use torch.export-based ONNX exporter (requires onnxscript)",
+    )
     args = parser.parse_args()
 
     config = NFSPConfig()
-    export_to_onnx(args.checkpoint, args.output, config, args.opset)
+    export_to_onnx(args.checkpoint, args.output, config, args.opset, use_dynamo=args.dynamo)
 
     if args.verify:
         verify_onnx(args.checkpoint, args.output, config)

@@ -95,26 +95,29 @@ impl GameServer {
         // Register bot in manager
         let (bot_user_id, bot_username) = {
             let mut bot_mgr = self.bot_manager.write().await;
-            bot_mgr.add_bot(table_id, name, strategy)
+            bot_mgr.add_bot(table_id, name, strategy)?
         };
         let avatar_index: i32 = rand::thread_rng().gen_range(1..25);
 
         // Seat the bot at the table
-        {
+        let seat_result = {
             let mut tables = self.tables.write().await;
             let table = tables
                 .get_mut(table_id)
                 .ok_or_else(|| "Table not found".to_string())?;
             table
                 .add_player(bot_user_id.clone(), bot_username.clone(), buyin)
-                .map_err(|e| {
-                    // Clean up bot registration on failure
-                    // (can't await here, so we'll do a blocking attempt)
-                    e.to_string()
-                })?;
+                .map_err(|e| e.to_string())?;
             if let Some(player) = table.players.iter_mut().find(|p| p.user_id == bot_user_id) {
                 player.avatar_index = avatar_index;
             }
+            Ok::<(), String>(())
+        };
+
+        if let Err(err) = seat_result {
+            let mut bot_mgr = self.bot_manager.write().await;
+            let _ = bot_mgr.remove_bot(table_id, &bot_user_id);
+            return Err(err);
         }
 
         self.notify_table_update(table_id).await;
@@ -138,11 +141,11 @@ impl GameServer {
         user_id: String,
         username: String,
         strategy: Option<&str>,
-    ) {
+    ) -> Result<(), String> {
         let mut bot_mgr = self.bot_manager.write().await;
 
         // Register this user as a bot for this table
-        bot_mgr.register_existing_bot(table_id, user_id.clone(), username.clone(), strategy);
+        bot_mgr.register_existing_bot(table_id, user_id.clone(), username.clone(), strategy)?;
 
         tracing::info!(
             "Registered existing user {} ({}) as bot on table {}",
@@ -150,6 +153,7 @@ impl GameServer {
             user_id,
             table_id
         );
+        Ok(())
     }
 
     /// Remove a bot from a table.

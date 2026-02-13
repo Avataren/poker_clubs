@@ -22,7 +22,9 @@ pub struct OAuthConfig {
 
 impl Config {
     pub fn from_env() -> Self {
-        dotenvy::dotenv().ok();
+        if let Err(e) = dotenvy::dotenv() {
+            tracing::warn!("Failed to load .env file: {e}");
+        }
 
         let is_production = env::var("POKER_ENV")
             .map(|v| v.eq_ignore_ascii_case("production"))
