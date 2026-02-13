@@ -22,19 +22,9 @@ impl PokerTable {
     }
 
     pub(crate) fn advance_phase(&mut self) {
-        // Record when phase changed
-        self.last_phase_change_time = Some(current_timestamp_ms());
-
-        // Reset current bets for new betting round
-        for player in &mut self.players {
-            player.reset_for_new_round();
-        }
-        self.pot.end_betting_round();
-        
-        // Return uncallable bets immediately ONLY if all remaining active players
-        // are all-in. This prevents duplicate returns on subsequent streets.
-        // This is standard poker etiquette - uncallable bets should not sit in
-        // the pot when they cannot possibly be won by anyone else.
+        // Return uncallable bets BEFORE advancing and resetting
+        // This handles cases where a player has chips that nobody can match because
+        // others are all-in for less. Standard poker etiquette.
         let active_in_hand: Vec<usize> = self
             .players
             .iter()
@@ -43,10 +33,8 @@ impl PokerTable {
             .map(|(idx, _)| idx)
             .collect();
         
-        let all_active_allin = active_in_hand.len() > 1 && 
-            active_in_hand.iter().all(|&idx| self.players[idx].stack == 0);
-        
-        if all_active_allin {
+        // Only return uncallable bets on PreFlop -> Flop transition
+        if active_in_hand.len() > 1 && self.phase == GamePhase::PreFlop {
             let pot_before = self.pot.total();
             let uncontested = self.pot.calculate_side_pots(&self.player_bets());
             let pot_after = self.pot.total();
@@ -62,6 +50,15 @@ impl PokerTable {
                 );
             }
         }
+
+        // Record when phase changed
+        self.last_phase_change_time = Some(current_timestamp_ms());
+
+        // Reset current bets for new betting round
+        for player in &mut self.players {
+            player.reset_for_new_round();
+        }
+        self.pot.end_betting_round();
         
         self.current_bet = 0;
         self.raises_this_round = 0;

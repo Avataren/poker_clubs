@@ -2475,4 +2475,80 @@ mod tests {
             "player should be removed automatically at the next hand start"
         );
     }
+
+    #[test]
+    fn test_uncallable_bets_returned_immediately_when_all_allin() {
+        // Test that when players are all-in and one has chips nobody can match,
+        // those uncallable chips are returned immediately before dealing the next street.
+        let mut table = PokerTable::new("test".to_string(), "Test Table".to_string(), 10, 20);
+
+        // Player 0: 500 chips
+        // Player 1: 200 chips (will go all-in)
+        // Player 2: 100 chips (will go all-in)
+        table.take_seat("p0".to_string(), "Player 0".to_string(), 0, 500).unwrap();
+        table.take_seat("p1".to_string(), "Player 1".to_string(), 1, 200).unwrap();
+        table.take_seat("p2".to_string(), "Player 2".to_string(), 2, 100).unwrap();
+
+        table.start_new_hand();
+        assert_eq!(table.phase, GamePhase::PreFlop);
+
+        // After blinds posted, three players with different stacks
+        // We'll have all of them bet/call until all are all-in
+
+        // First player raises all-in with smallest stack (100)
+        let actor1 = table.players[table.current_player].user_id.clone();
+        table.handle_action(&actor1, PlayerAction::Raise(100)).unwrap();
+
+        // Second player calls
+        let actor2 = table.players[table.current_player].user_id.clone();
+        table.handle_action(&actor2, PlayerAction::Call).unwrap();
+
+        // Third player raises all-in to 200
+        let actor3 = table.players[table.current_player].user_id.clone();
+        table.handle_action(&actor3, PlayerAction::Raise(200)).unwrap();
+
+        // Back to first player (now must call additional 100)
+        let actor4 = table.players[table.current_player].user_id.clone();
+        
+        // Measure stack BEFORE the final action that will trigger auto-advance
+        let player_with_stack = table.players.iter().position(|p| p.is_active_in_hand() && p.stack > 0).unwrap();
+        let stack_before_final_action = table.players[player_with_stack].stack;
+        
+        table.handle_action(&actor4, PlayerAction::Call).unwrap();
+
+        // All players should be either all-in or have matched the bet
+        let all_allin = table.players.iter().filter(|p| p.is_active_in_hand() && p.stack == 0).count();
+        assert_eq!(all_allin, 2, "Two players should be all-in");
+
+        // The final handle_action should have triggered advance_phase which returns uncallable bets
+        // Verify we advanced past PreFlop
+        assert_ne!(table.phase, GamePhase::PreFlop, "Should have advanced past PreFlop");
+
+        // Verify the player with remaining stack got back their uncallable chips
+        let stack_after = table.players[player_with_stack].stack;
+        
+        assert!(
+            stack_after > stack_before_final_action,
+            "Player should have received uncallable chips back (had {}, now has {})",
+            stack_before_final_action,
+            stack_after
+        );
+
+        // Advance again manually - uncallable bet should NOT be returned again
+        let stack_before_next = table.players[player_with_stack].stack;
+        let pot_before_next = table.pot.total();
+        
+        table.advance_phase();
+        
+        assert_eq!(
+            table.players[player_with_stack].stack,
+            stack_before_next,
+            "Player stack should not change on subsequent advance (no duplicate return)"
+        );
+        assert_eq!(
+            table.pot.total(),
+            pot_before_next,
+            "Pot should not change on subsequent advance (no duplicate return)"
+        );
+    }
 }
