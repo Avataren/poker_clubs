@@ -47,13 +47,18 @@ impl PokerTable {
             active_in_hand.iter().all(|&idx| self.players[idx].stack == 0);
         
         if all_active_allin {
+            let pot_before = self.pot.total();
             let uncontested = self.pot.calculate_side_pots(&self.player_bets());
+            let pot_after = self.pot.total();
+            
             for (player_idx, amount) in uncontested {
                 self.players[player_idx].add_chips(amount);
                 tracing::info!(
-                    "Returned ${} uncallable bet to {}",
+                    "Returned ${} uncallable bet to {} (pot was ${}, now ${})",
                     amount,
-                    self.players[player_idx].username
+                    self.players[player_idx].username,
+                    pot_before,
+                    pot_after
                 );
             }
         }
