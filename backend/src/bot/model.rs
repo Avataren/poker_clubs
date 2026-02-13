@@ -21,6 +21,85 @@ const NUM_ACTIONS: usize = 9;
 
 type OnnxPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, TypedModel>;
 
+/// Personality configuration for ONNX model inference.
+#[derive(Debug, Clone)]
+pub struct Personality {
+    /// Name of this personality
+    pub name: &'static str,
+    /// Temperature for softmax sampling (lower = more deterministic, higher = more random)
+    /// Default 1.0 means use raw probabilities
+    pub temperature: f32,
+    /// Bias towards aggressive actions (positive) or passive actions (negative)
+    /// Range: -1.0 to 1.0
+    pub aggression_bias: f32,
+    /// Tendency to call rather than fold (positive) or fold more (negative)
+    /// Range: -1.0 to 1.0  
+    pub calling_bias: f32,
+}
+
+impl Personality {
+    /// GTO player - uses raw model probabilities without bias
+    pub fn gto() -> Self {
+        Self {
+            name: "GTO",
+            temperature: 1.0,
+            aggression_bias: 0.0,
+            calling_bias: 0.0,
+        }
+    }
+
+    /// Professional player - slightly lower temperature for more consistent play
+    pub fn pro() -> Self {
+        Self {
+            name: "Pro",
+            temperature: 0.8,
+            aggression_bias: 0.1,
+            calling_bias: -0.1,
+        }
+    }
+
+    /// Nit - very tight and passive player
+    pub fn nit() -> Self {
+        Self {
+            name: "Nit",
+            temperature: 0.6,
+            aggression_bias: -0.5,
+            calling_bias: -0.6,
+        }
+    }
+
+    /// Calling station - calls too much, rarely folds
+    pub fn calling_station() -> Self {
+        Self {
+            name: "Calling Station",
+            temperature: 1.2,
+            aggression_bias: -0.3,
+            calling_bias: 0.8,
+        }
+    }
+
+    /// Maniac - very aggressive and unpredictable
+    pub fn maniac() -> Self {
+        Self {
+            name: "Maniac",
+            temperature: 1.5,
+            aggression_bias: 0.8,
+            calling_bias: 0.3,
+        }
+    }
+
+    /// Get all available personalities
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::gto(),
+            Self::pro(),
+            Self::nit(),
+            Self::calling_station(),
+            Self::maniac(),
+        ]
+    }
+}
+
 struct ModelRuntime {
     plan: OnnxPlan,
 }
@@ -133,15 +212,84 @@ impl ModelRuntime {
 pub struct ModelStrategy {
     runtime: Mutex<ModelRuntime>,
     fallback: SimpleStrategy,
+    personality: Personality,
 }
 
 impl ModelStrategy {
     pub fn from_path(path: &Path) -> Result<Self, String> {
+        Self::from_path_with_personality(path, Personality::gto())
+    }
+
+    pub fn from_path_with_personality(path: &Path, personality: Personality) -> Result<Self, String> {
         let runtime = ModelRuntime::load(path)?;
         Ok(Self {
             runtime: Mutex::new(runtime),
             fallback: SimpleStrategy::balanced(),
+            personality,
         })
+    }
+
+    /// Apply personality adjustments to raw model probabilities
+    fn apply_personality(&self, probs: &mut [f32; NUM_ACTIONS]) {
+        // Action indices: 0=Fold, 1=Check, 2=Call, 3=MinBet, 4=HalfPot, 5=Pot, 6=2xPot, 7=3xPot, 8=AllIn
+        
+        // Apply aggression bias
+        // Aggressive actions: MinBet(3), HalfPot(4), Pot(5), 2xPot(6), 3xPot(7), AllIn(8)
+        // Passive actions: Fold(0), Check(1), Call(2)
+        if self.personality.aggression_bias.abs() > 0.01 {
+            let bias = self.personality.aggression_bias;
+            for i in 0..NUM_ACTIONS {
+                let multiplier = match i {
+                    0 => 1.0 - bias.max(0.0) * 0.5, // Fold less when aggressive
+                    1 | 2 => 1.0 - bias.abs() * 0.3, // Check/Call affected by aggression
+                    3..=8 => 1.0 + bias.max(0.0) * 0.5, // Raise more when aggressive
+                    _ => 1.0,
+                };
+                probs[i] *= multiplier;
+            }
+        }
+
+        // Apply calling bias
+        if self.personality.calling_bias.abs() > 0.01 {
+            let bias = self.personality.calling_bias;
+            probs[0] *= 1.0 - bias.max(0.0) * 0.8; // Fold less when calling bias is positive
+            probs[2] *= 1.0 + bias.max(0.0) * 0.6; // Call more when calling bias is positive
+            
+            if bias < 0.0 {
+                // Fold more when calling bias is negative
+                probs[0] *= 1.0 + (-bias) * 0.5;
+            }
+        }
+
+        // Normalize to ensure probabilities sum to 1
+        let sum: f32 = probs.iter().sum();
+        if sum > 0.0 {
+            for p in probs.iter_mut() {
+                *p /= sum;
+            }
+        }
+
+        // Apply temperature scaling
+        if (self.personality.temperature - 1.0).abs() > 0.01 {
+            // Apply softmax with temperature
+            let temp = self.personality.temperature;
+            
+            // Convert to log space, scale, then back
+            let max_logit = probs.iter().copied().fold(f32::NEG_INFINITY, f32::max).ln();
+            let mut sum = 0.0;
+            for p in probs.iter_mut() {
+                let logit = p.ln();
+                *p = ((logit - max_logit) / temp).exp();
+                sum += *p;
+            }
+            
+            // Normalize
+            if sum > 0.0 {
+                for p in probs.iter_mut() {
+                    *p /= sum;
+                }
+            }
+        }
     }
 }
 
@@ -179,7 +327,10 @@ impl BotStrategy for ModelStrategy {
         };
 
         match probs {
-            Ok(probs) => {
+            Ok(mut probs) => {
+                // Apply personality adjustments to probabilities
+                self.apply_personality(&mut probs);
+                
                 for action_idx in rank_actions(&probs, &legal_mask) {
                     if let Some(action) = discrete_to_player_action(action_idx, table, player_idx) {
                         return action;

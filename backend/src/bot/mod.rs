@@ -256,7 +256,7 @@ fn build_strategy(strategy_name: Option<&str>) -> Result<Box<dyn BotStrategy>, S
                     if trimmed.is_empty() {
                         Err("Bot strategy `model` requested but POKER_BOT_MODEL_ONNX is empty".to_string())
                     } else {
-                        load_model_strategy(trimmed)
+                        load_model_strategy(trimmed, None)
                     }
                 }
                 Err(_) => Err(
@@ -264,24 +264,36 @@ fn build_strategy(strategy_name: Option<&str>) -> Result<Box<dyn BotStrategy>, S
                 ),
             }
         }
+        // ONNX model personalities
+        Some("onnx_gto") => load_model_with_personality(model::Personality::gto()),
+        Some("onnx_pro") => load_model_with_personality(model::Personality::pro()),
+        Some("onnx_nit") => load_model_with_personality(model::Personality::nit()),
+        Some("onnx_calling_station") => load_model_with_personality(model::Personality::calling_station()),
+        Some("onnx_maniac") => load_model_with_personality(model::Personality::maniac()),
         Some(name) if name.starts_with("model:") => {
             let path = name.trim_start_matches("model:").trim();
             if path.is_empty() {
                 Err("Bot strategy `model:` requested with an empty path".to_string())
             } else {
-                load_model_strategy(path)
+                load_model_strategy(path, None)
             }
         }
         Some(other) => Err(format!(
-            "Unknown bot strategy `{other}`. Supported strategies: balanced, tight, aggressive, calling_station, model, model:/path/to/model.onnx"
+            "Unknown bot strategy `{other}`. Supported strategies: balanced, tight, aggressive, calling_station, model, onnx_gto, onnx_pro, onnx_nit, onnx_calling_station, onnx_maniac, model:/path/to/model.onnx"
         )),
     }
 }
 
-fn load_model_strategy(path: &str) -> Result<Box<dyn BotStrategy>, String> {
+fn load_model_strategy(path: &str, personality: Option<model::Personality>) -> Result<Box<dyn BotStrategy>, String> {
     let resolved_path = resolve_model_path(path);
 
-    match model::ModelStrategy::from_path(&resolved_path) {
+    let strategy = if let Some(p) = personality {
+        model::ModelStrategy::from_path_with_personality(&resolved_path, p)
+    } else {
+        model::ModelStrategy::from_path(&resolved_path)
+    };
+
+    match strategy {
         Ok(strategy) => {
             tracing::info!(
                 "Loaded ONNX model bot strategy from {} (resolved to {})",
@@ -294,6 +306,24 @@ fn load_model_strategy(path: &str) -> Result<Box<dyn BotStrategy>, String> {
             "Failed to load ONNX model bot strategy from {path} (resolved to {}): {err}",
             resolved_path.display(),
         )),
+    }
+}
+
+fn load_model_with_personality(personality: model::Personality) -> Result<Box<dyn BotStrategy>, String> {
+    ensure_dotenv_loaded();
+
+    match env::var("POKER_BOT_MODEL_ONNX") {
+        Ok(path) => {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                Err("ONNX personality requested but POKER_BOT_MODEL_ONNX is empty".to_string())
+            } else {
+                load_model_strategy(trimmed, Some(personality))
+            }
+        }
+        Err(_) => Err(
+            "ONNX personality requested but POKER_BOT_MODEL_ONNX is not set".to_string(),
+        ),
     }
 }
 

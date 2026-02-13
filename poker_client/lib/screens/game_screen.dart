@@ -286,7 +286,9 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _showAddBotDialog() {
-    String selectedStrategy = 'balanced';
+    String botType = 'onnx'; // Default to ONNX models
+    String scriptedStrategy = 'balanced';
+    String onnxPersonality = 'onnx_gto'; // Default to GTO
 
     showDialog(
       context: context,
@@ -297,28 +299,54 @@ class _GameScreenState extends State<GameScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Select bot strategy:'),
+              const Text('Bot Type:', style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               DropdownButton<String>(
-                value: selectedStrategy,
+                value: botType,
                 isExpanded: true,
                 items: const [
-                  DropdownMenuItem(value: 'balanced', child: Text('Balanced')),
-                  DropdownMenuItem(value: 'tight', child: Text('Tight')),
-                  DropdownMenuItem(
-                    value: 'aggressive',
-                    child: Text('Aggressive'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'calling_station',
-                    child: Text('Calling Station'),
-                  ),
-                  DropdownMenuItem(value: 'model', child: Text('Model (ONNX)')),
+                  DropdownMenuItem(value: 'onnx', child: Text('ONNX AI Model')),
+                  DropdownMenuItem(value: 'scripted', child: Text('Scripted Strategy')),
                 ],
                 onChanged: (value) {
-                  setDialogState(() => selectedStrategy = value!);
+                  setDialogState(() => botType = value!);
                 },
               ),
+              const SizedBox(height: 16),
+              if (botType == 'onnx') ...[
+                const Text('AI Personality:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                DropdownButton<String>(
+                  value: onnxPersonality,
+                  isExpanded: true,
+                  items: const [
+                    DropdownMenuItem(value: 'onnx_gto', child: Text('GTO (Recommended)')),
+                    DropdownMenuItem(value: 'onnx_pro', child: Text('Pro')),
+                    DropdownMenuItem(value: 'onnx_nit', child: Text('Nit')),
+                    DropdownMenuItem(value: 'onnx_calling_station', child: Text('Calling Station')),
+                    DropdownMenuItem(value: 'onnx_maniac', child: Text('Maniac')),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() => onnxPersonality = value!);
+                  },
+                ),
+              ] else ...[
+                const Text('Strategy:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                DropdownButton<String>(
+                  value: scriptedStrategy,
+                  isExpanded: true,
+                  items: const [
+                    DropdownMenuItem(value: 'balanced', child: Text('Balanced')),
+                    DropdownMenuItem(value: 'tight', child: Text('Tight')),
+                    DropdownMenuItem(value: 'aggressive', child: Text('Aggressive')),
+                    DropdownMenuItem(value: 'calling_station', child: Text('Calling Station')),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() => scriptedStrategy = value!);
+                  },
+                ),
+              ],
             ],
           ),
           actions: [
@@ -328,7 +356,8 @@ class _GameScreenState extends State<GameScreen> {
             ),
             ElevatedButton(
               onPressed: () {
-                _wsService.addBot(widget.table.id, strategy: selectedStrategy);
+                final strategy = botType == 'onnx' ? onnxPersonality : scriptedStrategy;
+                _wsService.addBot(widget.table.id, strategy: strategy);
                 Navigator.pop(context);
               },
               child: const Text('Add Bot'),
