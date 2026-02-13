@@ -337,12 +337,12 @@ class TableSeatWidget extends StatelessWidget {
                 child: Center(child: _buildWinnerBadge(badgeFontSize)),
               ),
 
-            // Remove bot button (cash games only) - positioned to the right
+            // Remove bot button (cash games only) - positioned to the right at avatar level
             // Rendered LAST to be on top of other elements
             if (player!.isBot && !isTournament && onRemoveBot != null)
               Positioned(
-                top: avatarTop - (avatarSize * 0.37), // Moved up from 0.20
-                left: avatarLeft + avatarSize * 1.18, // More spacing from bot icon
+                top: avatarTop + (avatarSize * 0.3), // Middle of avatar
+                left: avatarLeft + avatarSize * 1.05, // Right edge of avatar
                 child: Material(
                   color: Colors.transparent,
                   elevation: 8, // High elevation to ensure it's on top
