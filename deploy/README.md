@@ -68,8 +68,36 @@ docker compose down
 # Rebuild after code changes
 docker compose up --build -d
 
-# Reset database (destroys data)
+# Clear database (interactive, with confirmation)
+./clear-db.sh
+
+# Reset database (immediate, destroys data)
 docker compose down -v
+```
+
+## Database Management
+
+### Clear Database (Development)
+
+For development, use the interactive script:
+
+```bash
+./clear-db.sh
+```
+
+This will:
+- ✓ Prompt for confirmation (requires typing "DELETE")
+- ✓ Stop the container
+- ✓ Delete the database volume
+- ✓ Optionally restart with fresh database
+
+### Quick Database Reset
+
+For automation/scripts:
+
+```bash
+docker compose down -v  # Deletes volumes immediately
+docker compose up -d    # Restart with fresh DB
 ```
 
 ## Database Backups
