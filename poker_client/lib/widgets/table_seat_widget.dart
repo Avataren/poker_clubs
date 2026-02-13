@@ -321,24 +321,30 @@ class TableSeatWidget extends StatelessWidget {
                 ),
               ),
 
-            // Remove bot button (cash games only)
+            // Remove bot button (cash games only) - positioned to the right
             if (player!.isBot && !isTournament && onRemoveBot != null)
               Positioned(
                 top: avatarTop - (avatarSize * 0.18),
-                left: avatarLeft + avatarSize * 0.50,
-                child: GestureDetector(
-                  onTap: onRemoveBot,
-                  child: Container(
-                    padding: EdgeInsets.all(seatSize * 0.020),
-                    decoration: BoxDecoration(
-                      color: Colors.red[700],
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white54, width: 1),
-                    ),
-                    child: Icon(
-                      Icons.close,
-                      size: seatSize * 0.10,
-                      color: Colors.white,
+                left: avatarLeft + avatarSize * 1.06,
+                child: Tooltip(
+                  message: 'Remove bot',
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: onRemoveBot,
+                      child: Container(
+                        padding: EdgeInsets.all(seatSize * 0.020),
+                        decoration: BoxDecoration(
+                          color: Colors.red[700],
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white54, width: 1),
+                        ),
+                        child: Icon(
+                          Icons.close,
+                          size: seatSize * 0.10,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 ),
