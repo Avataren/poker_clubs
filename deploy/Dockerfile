@@ -41,7 +41,7 @@ RUN printf '%s\n' \
   "}" > lib/config.dart && \
   sed -i 's/static const String baseUrl = AppConfig.httpBaseUrl;/static final String baseUrl = AppConfig.httpBaseUrl;/' lib/services/api_service.dart
 
-RUN flutter build web --release
+RUN flutter build web --release --wasm
 
 # =============================================================================
 # Stage 3: Runtime image with nginx + backend binary
