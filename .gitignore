@@ -83,6 +83,7 @@ yarn-error.log*
 # Docker deployment
 deploy/.env
 deploy/models/
+deploy/backups/
 
 # Temporary files
 *.swp

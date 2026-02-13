@@ -71,3 +71,114 @@ docker compose up --build -d
 # Reset database (destroys data)
 docker compose down -v
 ```
+
+## Database Backups
+
+The SQLite database is stored in a Docker named volume `poker_data` and mounted at `/data/poker.db` inside the container.
+
+### Quick Backup/Restore Scripts
+
+**Create a backup:**
+```bash
+./backup.sh
+```
+
+**Restore from backup:**
+```bash
+./restore.sh  # Interactive - will show list of backups to choose from
+```
+
+Backups are stored in `./backups/` directory with timestamp filenames (e.g., `poker-20260213-140530.db`). The backup script automatically keeps only the last 30 backups.
+
+### Manual Backup
+
+```bash
+# Create backup directory
+mkdir -p backups
+
+# Backup database from running container
+docker compose exec poker sqlite3 /data/poker.db ".backup '/data/poker-backup.db'"
+docker compose cp poker:/data/poker-backup.db ./backups/poker-$(date +%Y%m%d-%H%M%S).db
+
+# Or using docker cp directly from the volume
+docker run --rm -v poker_data:/data -v $(pwd)/backups:/backup \
+  debian:bookworm-slim cp /data/poker.db /backup/poker-$(date +%Y%m%d-%H%M%S).db
+```
+
+### Automated Backup Script
+
+Create `backup.sh`:
+
+```bash
+#!/bin/bash
+set -e
+
+BACKUP_DIR="./backups"
+DATE=$(date +%Y%m%d-%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/poker-$DATE.db"
+
+mkdir -p "$BACKUP_DIR"
+
+echo "Creating backup: $BACKUP_FILE"
+docker run --rm \
+  -v poker_data:/data:ro \
+  -v $(pwd)/backups:/backup \
+  debian:bookworm-slim \
+  cp /data/poker.db /backup/poker-$DATE.db
+
+# Keep only last 30 backups
+ls -t "$BACKUP_DIR"/poker-*.db | tail -n +31 | xargs -r rm
+
+echo "Backup complete. Keeping last 30 backups."
+```
+
+Make it executable and run:
+
+```bash
+chmod +x backup.sh
+./backup.sh
+```
+
+### Schedule Automatic Backups (cron)
+
+Add to crontab (`crontab -e`):
+
+```bash
+# Backup every day at 2 AM
+0 2 * * * cd /path/to/poker/deploy && ./backup.sh >> backup.log 2>&1
+```
+
+### Restore from Backup
+
+```bash
+# Stop the container
+docker compose down
+
+# Restore backup to volume
+docker run --rm \
+  -v poker_data:/data \
+  -v $(pwd)/backups:/backup \
+  debian:bookworm-slim \
+  cp /backup/poker-YYYYMMDD-HHMMSS.db /data/poker.db
+
+# Start container
+docker compose up -d
+```
+
+### Export Volume to Host (for migration)
+
+```bash
+# Export entire volume
+docker run --rm \
+  -v poker_data:/data:ro \
+  -v $(pwd):/backup \
+  debian:bookworm-slim \
+  tar czf /backup/poker_data_backup.tar.gz -C /data .
+
+# Import on new host
+docker run --rm \
+  -v poker_data:/data \
+  -v $(pwd):/backup \
+  debian:bookworm-slim \
+  tar xzf /backup/poker_data_backup.tar.gz -C /data
+```
