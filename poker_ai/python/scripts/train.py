@@ -56,6 +56,8 @@ def main():
                         help="AS LR warmup episodes after unfreeze (ramp from 1%% to 100%%, default 2M)")
     parser.add_argument("--save-buffers", action="store_true",
                         help="Save replay buffers alongside checkpoints (large files, enables perfect resume)")
+    parser.add_argument("--bootstrap-as", action="store_true",
+                        help="On resume without saved buffers, pre-fill AS buffer by running AS self-play")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -130,6 +132,8 @@ def main():
 
     if args.resume:
         trainer.load_checkpoint(args.resume)
+        if args.bootstrap_as:
+            trainer.bootstrap_as_buffer()
 
     trainer.train()
 

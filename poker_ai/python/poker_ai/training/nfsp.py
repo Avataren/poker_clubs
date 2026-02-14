@@ -17,8 +17,8 @@ from poker_ai.config.hyperparams import NFSPConfig
 from poker_ai.model.network import BestResponseNet, AverageStrategyNet
 from poker_ai.training.circular_buffer import CircularBuffer
 from poker_ai.training.reservoir import ReservoirBuffer
-from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record
-from poker_ai.env.poker_env import PokerEnv
+from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record, _STATIC_COLS
+from poker_ai.env.poker_env import PokerEnv, BatchPokerEnv
 from poker_ai.model.state_encoder import HAND_STRENGTH_START, STATIC_FEATURE_SIZE
 
 
@@ -812,6 +812,132 @@ class NFSPTrainer:
             print("  Migrated old value_head → advantage_stream (value_stream freshly initialized)")
 
         return new_sd
+
+    def bootstrap_as_buffer(self, target_size: int | None = None):
+        """Pre-fill AS buffer by running the AS network in self-play.
+
+        This generates (state, action) pairs that are consistent with the
+        current AS strategy, preventing AS training from overwriting the
+        historical average with only recent BR-policy data after resume.
+        """
+        if target_size is None:
+            target_size = self.config.as_buffer_size
+
+        if len(self.as_buffer) >= target_size:
+            print(f"  AS buffer already has {len(self.as_buffer):,} samples, skipping bootstrap")
+            return
+
+        needed = target_size - len(self.as_buffer)
+        print(f"  Bootstrapping AS buffer: generating {needed:,} samples from AS self-play...")
+        t0 = time.time()
+
+        num_envs = self.config.num_envs
+        env = BatchPokerEnv(
+            num_envs=num_envs,
+            num_players=self.config.num_players,
+            starting_stack=self.config.starting_stack,
+            small_blind=self.config.small_blind,
+            big_blind=self.config.big_blind,
+        )
+        max_hist = self.config.max_history_len
+        hist_dim = self.config.history_input_dim
+
+        # Use unwrapped AS network for inference
+        as_model = self._unwrap(self.as_net)
+        as_model.eval()
+
+        # Init envs
+        results = env.reset_all()
+        prev_obs = np.zeros((num_envs, self.config.input_dim), dtype=np.float32)
+        prev_mask = np.zeros((num_envs, self.config.num_actions), dtype=bool)
+        prev_player = np.zeros(num_envs, dtype=np.intp)
+        ah_arrays = np.zeros((num_envs, self.config.num_players, max_hist, hist_dim), dtype=np.float32)
+        ah_lens = np.zeros((num_envs, self.config.num_players), dtype=np.int64)
+        ah_pos = np.zeros((num_envs, self.config.num_players), dtype=np.int64)
+
+        for i in range(num_envs):
+            player, obs, mask = results[i]
+            prev_obs[i] = obs
+            prev_mask[i] = mask
+            prev_player[i] = player
+
+        env_idx = np.arange(num_envs, dtype=np.intp)
+        offsets = np.arange(max_hist, dtype=np.int64)
+        static_obs = np.empty((num_envs, len(_STATIC_COLS)), dtype=np.float32)
+        ah_batch = np.empty((num_envs, max_hist, hist_dim), dtype=np.float32)
+        ah_lens_batch = np.empty(num_envs, dtype=np.int64)
+        actions_np = np.empty(num_envs, dtype=np.int64)
+        samples_added = 0
+
+        while samples_added < needed:
+            players = prev_player
+            np.take(prev_obs, _STATIC_COLS, axis=1, out=static_obs)
+
+            # Gather action histories
+            ah_batch.fill(0.0)
+            np.copyto(ah_lens_batch, ah_lens[env_idx, players], casting="unsafe")
+            starts = (ah_pos[env_idx, players] - ah_lens_batch) % max_hist
+            gather_idx = (starts[:, None] + offsets[None, :]) % max_hist
+            ring = ah_arrays[env_idx, players]
+            gathered = ring[np.arange(num_envs)[:, None], gather_idx]
+            valid = offsets[None, :] < ah_lens_batch[:, None]
+            ah_batch[valid] = gathered[valid]
+
+            obs_t = torch.from_numpy(static_obs).to(self.device)
+            ah_t = torch.from_numpy(ah_batch).to(self.device)
+            ah_len_t = torch.from_numpy(ah_lens_batch).to(self.device)
+            mask_t = torch.from_numpy(prev_mask).to(self.device)
+
+            with torch.inference_mode():
+                actions_gpu = as_model.select_action(obs_t, ah_t, ah_len_t, mask_t)
+                actions_np[:] = actions_gpu.cpu().numpy()
+
+            # Push ALL actions to AS buffer
+            self.as_buffer.push_batch(
+                obs=static_obs,
+                action_history=ah_batch,
+                history_length=ah_lens_batch,
+                actions=actions_np,
+                legal_mask=prev_mask,
+            )
+            samples_added += num_envs
+
+            # Build action records and append to all players' histories
+            action_records = np.zeros((num_envs, hist_dim), dtype=np.float32)
+            for i in range(9):
+                mask_i = actions_np == i
+                if mask_i.any():
+                    action_records[mask_i, 1 + i] = 1.0
+                    action_records[mask_i, 10] = min(i / 8.0, 1.0)
+            for p in range(self.config.num_players):
+                action_records[:, 0] = players / max(1, self.config.num_players - 1)
+            for p in range(self.config.num_players):
+                pos = ah_pos[env_idx, p]
+                ah_arrays[env_idx, p, pos] = action_records
+                ah_lens[env_idx, p] = np.minimum(ah_lens[env_idx, p] + 1, max_hist)
+                ah_pos[env_idx, p] = (pos + 1) % max_hist
+
+            # Step envs
+            next_players, next_obs, next_masks, _, dones = env.step_batch_dense(actions_np)
+
+            # Handle resets
+            done_idx = np.where(dones)[0]
+            for d in done_idx:
+                ah_arrays[d] = 0.0
+                ah_lens[d] = 0
+                ah_pos[d] = 0
+
+            prev_obs[:] = next_obs
+            prev_mask[:] = next_masks
+            prev_player[:] = next_players
+
+            if samples_added % (num_envs * 100) == 0:
+                elapsed = time.time() - t0
+                rate = samples_added / max(elapsed, 1)
+                print(f"    bootstrap: {samples_added:,}/{needed:,} samples ({rate:.0f}/s)")
+
+        elapsed = time.time() - t0
+        print(f"  AS buffer bootstrapped: {len(self.as_buffer):,} samples ({elapsed:.1f}s)")
 
     def load_checkpoint(self, path: str):
         checkpoint = torch.load(path, map_location=self.device, weights_only=True)
