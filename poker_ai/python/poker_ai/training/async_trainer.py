@@ -173,9 +173,14 @@ class AsyncNFSPTrainer(NFSPTrainer):
         self._self_play_thread.start()
         print("Self-play thread started")
 
-        # Minimum buffer fill before training begins
-        min_br_samples = max(self.config.batch_size, int(0.05 * self.config.br_buffer_size))
-        min_as_samples = max(self.config.batch_size, int(0.05 * self.config.as_buffer_size))
+        # Minimum buffer fill before training begins.
+        # Must be large enough that each training round doesn't oversample the buffer.
+        # With br_train_steps=24, batch=16384: 393K BR samples per round.
+        # Require 3x that so each sample is drawn <0.33 times per round on average.
+        br_per_round = self.config.br_train_steps * self.config.batch_size
+        as_per_round = self.config.as_train_steps * self.config.batch_size
+        min_br_samples = max(self.config.batch_size, 3 * br_per_round)
+        min_as_samples = max(self.config.batch_size, 3 * as_per_round)
         warmup_done = False
 
         try:
