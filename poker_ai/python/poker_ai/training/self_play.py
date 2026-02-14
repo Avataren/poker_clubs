@@ -69,6 +69,7 @@ class SelfPlayWorker:
         device: torch.device,
         br_inference: BestResponseNet | None = None,
         as_inference: AverageStrategyNet | None = None,
+        pause_check: callable = None,
     ):
         self.config = config
         # Use separate inference copies if provided (async training),
@@ -78,6 +79,7 @@ class SelfPlayWorker:
         self.br_buffer = br_buffer
         self.as_buffer = as_buffer
         self.device = device
+        self._pause_check = pause_check
         self.env = BatchPokerEnv(
             num_envs=config.num_envs,
             num_players=config.num_players,
@@ -246,6 +248,10 @@ class SelfPlayWorker:
         completed_episodes = 0
 
         while completed_episodes < n:
+            # Check for pause request (async training: weight sync, eval)
+            if self._pause_check is not None:
+                self._pause_check()
+
             # Prepare full batch tensors for the current player in each env
             players = self.prev_player
             np.take(self.prev_obs, _STATIC_COLS, axis=1, out=self.static_obs)

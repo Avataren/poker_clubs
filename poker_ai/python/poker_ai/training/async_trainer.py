@@ -53,12 +53,13 @@ class AsyncNFSPTrainer(NFSPTrainer):
             except Exception as e:
                 print(f"torch.compile not available for inference copies: {e}")
 
-        # Re-create worker with inference copies
+        # Re-create worker with inference copies and pause callback
         self.worker = SelfPlayWorker(
             config, self.br_net, self.as_net,
             self.br_buffer, self.as_buffer, self.device,
             br_inference=self.br_inference,
             as_inference=self.as_inference,
+            pause_check=self._handle_pause_in_worker,
         )
 
         # Threading primitives
@@ -75,6 +76,13 @@ class AsyncNFSPTrainer(NFSPTrainer):
         inf_params = sum(p.numel() for p in self._unwrap(self.br_inference).parameters())
         inf_params += sum(p.numel() for p in self._unwrap(self.as_inference).parameters())
         print(f"Async mode: inference copy VRAM ~{inf_params * 4 / 1e6:.1f} MB")
+
+    def _handle_pause_in_worker(self):
+        """Called from inside run_episodes() to check for pause requests."""
+        if self._pause_event.is_set():
+            self._paused_ack.set()
+            while self._pause_event.is_set() and not self._stop_event.is_set():
+                time.sleep(0.001)
 
     def _pause_self_play(self):
         """Request self-play pause and wait for acknowledgment."""
