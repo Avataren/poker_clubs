@@ -603,6 +603,9 @@ class NFSPTrainer:
         max_hist = self.config.max_history_len
         hand_returns_bb100 = np.zeros(num_hands, dtype=np.float64)
         seat_returns_bb100: list[list[float]] = [[], []]
+        action_counts = np.zeros(9, dtype=np.int64)  # track hero action distribution
+        eval_model = self._unwrap(self.as_net)
+        eval_model.eval()
 
         for hand_idx in range(num_hands):
             hero_seat = hand_idx % 2  # balance positional bias across buttons/blinds
@@ -620,7 +623,8 @@ class NFSPTrainer:
                     mask_t = torch.tensor(mask, device=self.device).unsqueeze(0)
 
                     with torch.no_grad():
-                        action = self._unwrap(self.as_net).select_action(obs_t, ah_t, ah_len_t, mask_t).item()
+                        action = eval_model.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
+                    action_counts[action] += 1
                 else:
                     action = self._select_baseline_action(opponent, obs, mask)
 
@@ -635,6 +639,14 @@ class NFSPTrainer:
                     hand_bb100 = float(rewards[hero_seat]) * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[hero_seat].append(hand_bb100)
+
+        # Log action distribution for debugging
+        total_actions = action_counts.sum()
+        if total_actions > 0:
+            pcts = action_counts / total_actions * 100
+            action_names = ["fold", "call", "min", "0.5x", "0.75x", "1x", "1.5x", "2x", "allin"]
+            dist_str = " ".join(f"{action_names[i]}:{pcts[i]:.1f}%" for i in range(9))
+            print(f"    [{opponent}] actions: {dist_str}")
 
         mean_bb100 = float(hand_returns_bb100.mean()) if num_hands > 0 else 0.0
         std_bb100 = float(hand_returns_bb100.std(ddof=1)) if num_hands > 1 else 0.0
