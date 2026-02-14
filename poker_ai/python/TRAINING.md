@@ -53,6 +53,8 @@ to all training stages:
 | `--num-envs` | 2048 | Larger inference batches for better GPU utilization |
 | `--freeze-as` | flag | Freeze AS weights permanently on resume |
 | `--as-freeze-duration` | 5000000 | Episodes to freeze AS before unfreezing (buffer diversity) |
+| `--as-warmup-episodes` | 2000000 | AS LR warmup after unfreeze (ramp from 1% → 100%) |
+| `--save-buffers` | flag | Save replay buffers alongside checkpoints (~5GB compressed) |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -90,19 +92,31 @@ python scripts/train.py \
 
 Resume from a checkpoint with schedules pinned to their final values (no re-warmup).
 
-**IMPORTANT:** Use `--as-freeze-duration` when resuming. The AS reservoir buffer is not
-saved in checkpoints, so on resume it fills with only the current BR policy's actions
-instead of the historical average. Training AS immediately on this data destroys the
-average strategy. `--as-freeze-duration N` freezes AS for N episodes while the buffer
-accumulates diverse data from evolving BR policies, then unfreezes AS training.
+**IMPORTANT:** Use `--as-freeze-duration` and `--as-warmup-episodes` when resuming.
+The AS reservoir buffer is not saved in checkpoints (unless `--save-buffers` was used),
+so on resume it fills with only the current BR policy's actions instead of the
+historical average. Training AS immediately on this data destroys the average strategy.
 
-A good value is ~5M episodes — the 4M-sample AS buffer turns over ~10 times in that
-period, accumulating data from many different BR policies as BR evolves during training.
+- `--as-freeze-duration N` freezes AS for N episodes while the buffer accumulates
+  diverse data from evolving BR policies.
+- `--as-warmup-episodes M` ramps the AS learning rate from 1% → 100% over M episodes
+  after unfreezing, preventing catastrophic overwriting of the averaged strategy.
+- The AS optimizer is automatically reset when the freeze ends (discards stale Adam
+  momentum that would cause wild updates on the new buffer data).
+
+If you used `--save-buffers` during the original training run, buffers are loaded
+automatically on resume and freeze/warmup are less critical (but still recommended).
+
+A good value is ~5M episodes for both freeze and warmup — the 4M-sample AS buffer
+turns over ~10 times in that period, accumulating data from many different BR policies
+as BR evolves during training.
 
 ```bash
 python scripts/train.py \
   --resume checkpoints/hu/checkpoint_107000000.pt \
   --as-freeze-duration 5000000 \
+  --as-warmup-episodes 5000000 \
+  --save-buffers \
   --device cuda --async --train-ahead 100 --sync-every 25 \
   --num-envs 2048 \
   --batch-size 16384 \
@@ -318,13 +332,17 @@ so the model works across different blind levels and tournaments.
   does inference)
 - **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
   with the same arguments to continue where you left off. Pin schedules to final
-  values (epsilon, eta, warmup) to avoid re-ramping. **Always use `--as-freeze-duration`**
-  to delay AS training until the buffer has diverse data from evolving BR policies.
+  values (epsilon, eta, warmup) to avoid re-ramping. **Always use `--as-freeze-duration`
+  and `--as-warmup-episodes`** to protect the AS network from collapsing on narrow
+  post-resume buffer data. Use `--save-buffers` to avoid this problem on future resumes.
 - The reward signal is normalized to big blinds, so models transfer across blind levels
 - **RAM usage:** the 4M AS reservoir uses ~10GB, 2M BR circular uses ~12GB (~22GB total).
   With 31GB system RAM this leaves ~9GB for the OS and Rust engine.
-- **Async mode** runs self-play and training concurrently. Buffers are not saved in
-  checkpoints, so they refill from scratch on resume — this is normal and training
-  waits for buffer warmup before starting gradient updates. **Use `--as-freeze-duration`**
-  on resume so AS training waits until the buffer has accumulated diverse data from
-  evolving BR policies instead of training on current-BR-only actions.
+- **Async mode** runs self-play and training concurrently. Unless `--save-buffers` was
+  used, buffers refill from scratch on resume — training waits for buffer warmup before
+  starting gradient updates. **Use `--as-freeze-duration` + `--as-warmup-episodes`**
+  on resume so AS training waits for diverse data and ramps in gently.
+- **Buffer persistence** (`--save-buffers`): saves BR and AS buffers as compressed
+  `.npz` files (~5GB total) alongside each checkpoint. On resume, buffers are loaded
+  automatically if found in the checkpoint directory. Buffer sizes are clamped to the
+  current capacity, so you can resize buffers across resumes.
