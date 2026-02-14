@@ -486,6 +486,18 @@ class NFSPTrainer:
 
     def evaluate(self, episode: int):
         """Evaluate AS network vs baselines."""
+        # Fingerprint: deterministic forward pass to detect silent model changes
+        eval_model = self._unwrap(self.as_net)
+        eval_model.eval()
+        with torch.no_grad():
+            probe_obs = torch.zeros(1, 462, device=self.device)
+            probe_ah = torch.zeros(1, self.config.max_history_len, 11, device=self.device)
+            probe_len = torch.zeros(1, device=self.device, dtype=torch.long)
+            probe_mask = torch.ones(1, 9, device=self.device, dtype=torch.bool)
+            probe_probs = eval_model(probe_obs, probe_ah, probe_len, probe_mask)
+            top3 = probe_probs[0].topk(3)
+            print(f"  [eval probe] top3: {list(zip(top3.indices.tolist(), [f'{v:.4f}' for v in top3.values.tolist()]))}")
+
         vs_random = self._eval_vs_random(num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs_caller(num_hands=self.config.eval_hands)
         vs_tag = self._eval_vs_tag(num_hands=self.config.eval_hands)
