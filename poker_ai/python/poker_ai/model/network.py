@@ -70,11 +70,14 @@ class ActionHistoryTransformer(nn.Module):
 
         # All-float masking to avoid Triton codegen bug with bool types on ROCm.
         if lengths is not None:
+            # Clamp to min 1 so softmax always has at least one unmasked position
+            # (lengths==0 rows are zeroed out after pooling via has_history below)
+            safe_lengths = lengths.clamp(min=1)
             positions = torch.arange(seq_len, device=action_seq.device).unsqueeze(0)
             # valid_mask: 1.0 for valid positions, 0.0 for padding (no bools)
-            valid_mask_f = (positions < lengths.unsqueeze(1)).to(dtype)  # (batch, seq_len)
-            # Additive attention mask: 0.0 for valid, -inf for padding
-            pad_mask = (1.0 - valid_mask_f) * torch.finfo(dtype).min
+            valid_mask_f = (positions < safe_lengths.unsqueeze(1)).to(dtype)  # (batch, seq_len)
+            # Additive attention mask: 0.0 for valid, large negative for padding
+            pad_mask = (1.0 - valid_mask_f) * (-1e4)
         else:
             valid_mask_f = None
             pad_mask = None
@@ -91,9 +94,8 @@ class ActionHistoryTransformer(nn.Module):
         if valid_mask_f is not None:
             valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
             x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
-            # Zero out output for fully empty histories (lengths==0 → valid_counts==1
-            # but input was all-zero so output is near-zero; multiply to ensure exact zero)
-            has_history = (valid_counts > 0.5).to(dtype)  # (batch, 1) float
+            # Zero out output for fully empty histories (lengths==0)
+            has_history = (lengths > 0).unsqueeze(1).to(dtype)  # (batch, 1) float
             x = x * has_history
         else:
             x = x.mean(dim=1)
@@ -198,8 +200,9 @@ class PokerNet(nn.Module):
         q_values = v + a - a.mean(dim=-1, keepdim=True)
 
         # Mask illegal actions (float math only — no bools for ROCm Triton compat)
+        # Use -1e4 instead of dtype.min to avoid float16 overflow in log_softmax
         if legal_mask is not None:
-            neg_inf = torch.finfo(policy_logits.dtype).min
+            neg_inf = -1e4
             illegal_f = 1.0 - legal_mask.to(policy_logits.dtype)  # 1.0=illegal, 0.0=legal
             policy_logits = policy_logits + illegal_f * neg_inf
             q_values = q_values + illegal_f * neg_inf
