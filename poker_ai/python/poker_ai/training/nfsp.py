@@ -491,13 +491,13 @@ class NFSPTrainer:
         eval_model.eval()
         with torch.no_grad():
             torch.manual_seed(42)
-            probe_obs = torch.randn(1, 462, device=self.device)
+            probe_obs = torch.randn(1, 462, device=self.device) * 0.1
             probe_ah = torch.zeros(1, self.config.max_history_len, 11, device=self.device)
             probe_len = torch.zeros(1, device=self.device, dtype=torch.long)
             probe_mask = torch.ones(1, 9, device=self.device, dtype=torch.bool)
-            probe_probs = eval_model(probe_obs, probe_ah, probe_len, probe_mask)
-            top3 = probe_probs[0].topk(3)
-            print(f"  [eval probe] top3: {list(zip(top3.indices.tolist(), [f'{v:.4f}' for v in top3.values.tolist()]))}")
+            probe_logits = eval_model.forward_logits(probe_obs, probe_ah, probe_len, probe_mask)
+            top3 = probe_logits[0].topk(3)
+            print(f"  [eval probe] logits top3: {list(zip(top3.indices.tolist(), [f'{v:.2f}' for v in top3.values.tolist()]))}")
 
         vs_random = self._eval_vs_random(num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs_caller(num_hands=self.config.eval_hands)
