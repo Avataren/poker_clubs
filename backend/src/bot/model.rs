@@ -270,16 +270,23 @@ impl ModelStrategy {
 
         // Apply temperature scaling
         if (self.personality.temperature - 1.0).abs() > 0.01 {
-            // Apply softmax with temperature
             let temp = self.personality.temperature;
             
-            // Convert to log space, scale, then back
-            let max_logit = probs.iter().copied().fold(f32::NEG_INFINITY, f32::max).ln();
+            // Find max logit for numerical stability
+            let max_logit = probs.iter()
+                .copied()
+                .filter(|&p| p > 0.0)
+                .map(|p| p.ln())
+                .fold(f32::NEG_INFINITY, f32::max);
+            
+            // Apply temperature: exp(log(p) / T)
             let mut sum = 0.0;
             for p in probs.iter_mut() {
-                let logit = p.ln();
-                *p = ((logit - max_logit) / temp).exp();
-                sum += *p;
+                if *p > 0.0 {
+                    let logit = p.ln();
+                    *p = ((logit - max_logit) / temp).exp();
+                    sum += *p;
+                }
             }
             
             // Normalize
@@ -319,6 +326,19 @@ impl BotStrategy for ModelStrategy {
         }
 
         let obs = encode_static_observation(table, player_idx);
+        
+        // Debug: log hand strength for strong hands
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            if let Some(player) = table.players.get(player_idx) {
+                if player.hole_cards.len() >= 2 {
+                    let preflop = preflop_strength(player.hole_cards[0], player.hole_cards[1]);
+                    if preflop > 0.85 {
+                        tracing::debug!("Strong hand detected: preflop_strength={:.2}", preflop);
+                    }
+                }
+            }
+        }
+        
         let (history_flat, history_len) = encode_action_history(table);
         let probs = match self.runtime.lock() {
             Ok(runtime) => runtime.infer_action_probs(obs, history_flat, history_len, legal_mask),
@@ -329,6 +349,29 @@ impl BotStrategy for ModelStrategy {
             Ok(mut probs) => {
                 // Apply personality adjustments to probabilities
                 self.apply_personality(&mut probs);
+                
+                // Log probabilities for debugging (remove after verification)
+                if tracing::enabled!(tracing::Level::DEBUG) {
+                    let mut prob_strs: Vec<String> = Vec::new();
+                    for (i, &p) in probs.iter().enumerate() {
+                        if legal_mask[i] && p > 0.01 {
+                            let action_name = match i {
+                                0 => "Fold",
+                                1 => "Check/Call",
+                                2 => "Raise0.25x",
+                                3 => "Raise0.4x",
+                                4 => "Raise0.6x",
+                                5 => "Raise0.8x",
+                                6 => "Raise1.0x",
+                                7 => "Raise1.5x",
+                                8 => "AllIn",
+                                _ => "Unknown",
+                            };
+                            prob_strs.push(format!("{}={:.1}%", action_name, p * 100.0));
+                        }
+                    }
+                    tracing::debug!("Model probs: [{}]", prob_strs.join(", "));
+                }
                 
                 // Sample from the probability distribution (matching training behavior)
                 let action_idx = sample_action(&probs, &legal_mask);
