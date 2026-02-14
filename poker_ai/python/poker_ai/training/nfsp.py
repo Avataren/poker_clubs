@@ -125,7 +125,12 @@ class NFSPTrainer:
         print(f"Model: hidden={config.hidden_dim}, residual={config.residual_dim}, "
               f"history_hidden={config.history_hidden_dim}, batch={config.batch_size}")
         if config.freeze_as:
-            print("AS network FROZEN — skipping AS gradient updates (preserving checkpoint average strategy)")
+            print("AS network FROZEN permanently — skipping all AS gradient updates")
+        elif config.as_freeze_duration > 0:
+            print(f"AS network frozen for first {config.as_freeze_duration:,} episodes after resume")
+
+        # AS freeze tracking (set actual unfreeze episode in load_checkpoint)
+        self._as_unfreeze_episode = 0  # 0 = no freeze active
 
         # Networks
         self.br_net = BestResponseNet(config).to(self.device)
@@ -194,6 +199,14 @@ class NFSPTrainer:
         self.total_episodes = 0
         self.br_updates = 0
         self.as_updates = 0
+
+    def is_as_frozen(self) -> bool:
+        """Check if AS training is currently frozen."""
+        if self.config.freeze_as:
+            return True
+        if self._as_unfreeze_episode > 0 and self.total_episodes < self._as_unfreeze_episode:
+            return True
+        return False
 
     def get_epsilon(self) -> float:
         """Get current epsilon for exploration."""
@@ -396,7 +409,7 @@ class NFSPTrainer:
 
             # Train AS (supervised) — multiple gradient steps
             as_loss = 0.0
-            if not self.config.freeze_as:
+            if not self.is_as_frozen():
                 for _ in range(self.config.as_train_steps):
                     as_loss = self.train_as_step()
                 if as_loss > 0 and self.as_updates % 50 == 0:
@@ -765,3 +778,9 @@ class NFSPTrainer:
         self.total_steps = checkpoint["total_steps"]
         self.total_episodes = checkpoint["episode"]
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
+
+        # Set AS freeze duration if configured
+        if self.config.as_freeze_duration > 0:
+            self._as_unfreeze_episode = self.total_episodes + self.config.as_freeze_duration
+            print(f"  AS frozen until episode {self._as_unfreeze_episode:,} "
+                  f"({self.config.as_freeze_duration:,} episodes from now)")

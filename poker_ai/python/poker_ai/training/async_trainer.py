@@ -70,6 +70,7 @@ class AsyncNFSPTrainer(NFSPTrainer):
         self._self_play_error = None  # store exception from self-play thread
         # Track self-play rounds to pace training
         self._self_play_rounds = 0
+        self._as_unfroze_logged = False
 
         inf_params = sum(p.numel() for p in self._unwrap(self.br_inference).parameters())
         inf_params += sum(p.numel() for p in self._unwrap(self.as_inference).parameters())
@@ -304,7 +305,11 @@ class AsyncNFSPTrainer(NFSPTrainer):
 
                 # Train AS (supervised) — skip if frozen (resume without historical buffer)
                 as_loss = 0.0
-                if not self.config.freeze_as:
+                if not self.is_as_frozen():
+                    if not self._as_unfroze_logged and self._as_unfreeze_episode > 0:
+                        print(f"AS network UNFROZEN at episode {episode_count:,} — "
+                              f"buffer has {len(self.as_buffer):,} samples from diverse BR policies")
+                        self._as_unfroze_logged = True
                     for _ in range(self.config.as_train_steps):
                         as_loss = self.train_as_step()
                     if as_loss > 0 and self.as_updates % 50 == 0:

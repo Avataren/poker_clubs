@@ -48,7 +48,10 @@ def main():
     parser.add_argument("--train-ahead", type=int, default=None,
                         help="Max training rounds ahead of self-play (async mode, default 50)")
     parser.add_argument("--freeze-as", action="store_true",
-                        help="Freeze AS network (skip AS training). Use when resuming to preserve historical average strategy.")
+                        help="Freeze AS network permanently (skip all AS training).")
+    parser.add_argument("--as-freeze-duration", type=int, default=None,
+                        help="Episodes to freeze AS after resume before unfreezing (e.g. 10000000). "
+                             "Lets buffer accumulate diverse BR data before AS trains on it.")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -106,6 +109,8 @@ def main():
         config_kwargs["train_ahead"] = args.train_ahead
     if args.freeze_as:
         config_kwargs["freeze_as"] = True
+    if args.as_freeze_duration is not None:
+        config_kwargs["as_freeze_duration"] = args.as_freeze_duration
 
     config = NFSPConfig(**config_kwargs)
 

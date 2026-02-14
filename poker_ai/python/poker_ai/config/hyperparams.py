@@ -75,7 +75,8 @@ class NFSPConfig:
     train_ahead: int = 50  # max training rounds ahead of self-play before sleeping
 
     # Resume options
-    freeze_as: bool = False  # skip AS gradient updates (use when resuming — buffer lacks historical average)
+    freeze_as: bool = False  # skip AS gradient updates permanently (overridden by as_freeze_duration)
+    as_freeze_duration: int = 0  # episodes to freeze AS after resume (0 = no freeze unless freeze_as=True)
 
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda
