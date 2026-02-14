@@ -183,22 +183,23 @@ class CircularBuffer:
             n = self.size
             if n == 0:
                 return
-            np.savez_compressed(
-                path,
+            # Snapshot under lock, compress/write outside
+            snapshot = dict(
                 obs=self.obs[:n].astype(np.float16),
                 action_history=self.action_history[:n].astype(np.float16),
-                history_length=self.history_length[:n],
-                actions=self.actions[:n],
+                history_length=self.history_length[:n].copy(),
+                actions=self.actions[:n].copy(),
                 rewards=self.rewards[:n].astype(np.float16),
                 next_obs=self.next_obs[:n].astype(np.float16),
                 next_action_history=self.next_action_history[:n].astype(np.float16),
-                next_history_length=self.next_history_length[:n],
-                next_legal_mask=self.next_legal_mask[:n],
+                next_history_length=self.next_history_length[:n].copy(),
+                next_legal_mask=self.next_legal_mask[:n].copy(),
                 dones=self.dones[:n].astype(np.float16),
-                legal_mask=self.legal_mask[:n],
+                legal_mask=self.legal_mask[:n].copy(),
                 position=np.array([self.position]),
                 size=np.array([n]),
             )
+        np.savez_compressed(path, **snapshot)
 
     def load(self, path: str) -> None:
         """Load buffer contents from a .npz file."""

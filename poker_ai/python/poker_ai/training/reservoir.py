@@ -155,16 +155,17 @@ class ReservoirBuffer:
             n = self.size
             if n == 0:
                 return
-            np.savez_compressed(
-                path,
+            # Snapshot under lock, compress/write outside
+            snapshot = dict(
                 obs=self.obs[:n].astype(np.float16),
                 action_history=self.action_history[:n].astype(np.float16),
-                history_length=self.history_length[:n],
-                actions=self.actions[:n],
-                legal_mask=self.legal_mask[:n],
+                history_length=self.history_length[:n].copy(),
+                actions=self.actions[:n].copy(),
+                legal_mask=self.legal_mask[:n].copy(),
                 size=np.array([n]),
                 total_seen=np.array([self.total_seen]),
             )
+        np.savez_compressed(path, **snapshot)
 
     def load(self, path: str) -> None:
         """Load buffer contents from a .npz file."""

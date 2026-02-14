@@ -191,9 +191,13 @@ class AsyncNFSPTrainer(NFSPTrainer):
             self._resume_self_play()
             next_eval += self.config.eval_every
 
-        # Checkpointing
+        # Checkpointing (pause self-play if saving buffers to avoid lock contention)
         while episode_count >= next_checkpoint:
+            if self.config.save_buffers:
+                self._pause_self_play()
             self.save_checkpoint(next_checkpoint)
+            if self.config.save_buffers:
+                self._resume_self_play()
             next_checkpoint += self.config.checkpoint_every
 
         return next_log, next_eval, next_checkpoint

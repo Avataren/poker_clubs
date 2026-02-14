@@ -740,14 +740,15 @@ class NFSPTrainer:
 
         if self.config.save_buffers:
             import time as _time
+            import shutil
             t0 = _time.time()
             br_path = path / f"br_buffer_{episode}.npz"
             as_path = path / f"as_buffer_{episode}.npz"
             self.br_buffer.save(str(br_path))
             self.as_buffer.save(str(as_path))
-            # Also save as "latest" for easy resume
-            self.br_buffer.save(str(path / "br_buffer_latest.npz"))
-            self.as_buffer.save(str(path / "as_buffer_latest.npz"))
+            # Copy to "latest" (avoids re-compressing)
+            shutil.copy2(br_path, path / "br_buffer_latest.npz")
+            shutil.copy2(as_path, path / "as_buffer_latest.npz")
             elapsed = _time.time() - t0
             br_mb = br_path.stat().st_size / 1e6 if br_path.exists() else 0
             as_mb = as_path.stat().st_size / 1e6 if as_path.exists() else 0
