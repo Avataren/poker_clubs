@@ -224,6 +224,9 @@ class NFSPTrainer:
                 print(f"  AS optimizer reset + LR warmup over {self.config.as_warmup_episodes:,} episodes")
             else:
                 print("  AS optimizer reset (stale Adam state discarded)")
+            # Apply LR schedule immediately so the first training step uses
+            # the correct (warmup-scaled) LR, not the raw base LR.
+            self._update_lr()
         return False
 
     def get_epsilon(self) -> float:
