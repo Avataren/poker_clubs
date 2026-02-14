@@ -9,7 +9,6 @@ use crate::game::hand::evaluate_hand;
 use crate::game::player::PlayerState;
 use crate::game::table::PokerTable;
 use crate::game::{GamePhase, PlayerAction};
-use std::cmp::Ordering;
 use std::path::Path;
 use std::sync::Mutex;
 use tract_onnx::prelude::*;
@@ -331,11 +330,12 @@ impl BotStrategy for ModelStrategy {
                 // Apply personality adjustments to probabilities
                 self.apply_personality(&mut probs);
                 
-                for action_idx in rank_actions(&probs, &legal_mask) {
-                    if let Some(action) = discrete_to_player_action(action_idx, table, player_idx) {
-                        return action;
-                    }
+                // Sample from the probability distribution (matching training behavior)
+                let action_idx = sample_action(&probs, &legal_mask);
+                if let Some(action) = discrete_to_player_action(action_idx, table, player_idx) {
+                    return action;
                 }
+                
                 safe_fallback_action(table, player_idx)
                     .unwrap_or_else(|| self.fallback.decide(view))
             }
@@ -351,14 +351,57 @@ impl BotStrategy for ModelStrategy {
     }
 }
 
-fn rank_actions(probs: &[f32; NUM_ACTIONS], legal_mask: &[bool; NUM_ACTIONS]) -> Vec<usize> {
-    let mut candidates: Vec<usize> = (0..NUM_ACTIONS).filter(|&idx| legal_mask[idx]).collect();
-    candidates.sort_by(|&a, &b| {
-        let pa = sanitize_prob(probs[a]);
-        let pb = sanitize_prob(probs[b]);
-        pb.partial_cmp(&pa).unwrap_or(Ordering::Equal)
-    });
-    candidates
+fn sample_action(probs: &[f32; NUM_ACTIONS], legal_mask: &[bool; NUM_ACTIONS]) -> usize {
+    use rand::Rng;
+    
+    // Normalize probabilities over legal actions
+    let mut legal_probs = [0.0f32; NUM_ACTIONS];
+    let mut total = 0.0f32;
+    for i in 0..NUM_ACTIONS {
+        if legal_mask[i] {
+            let p = sanitize_prob(probs[i]).max(0.0);
+            legal_probs[i] = p;
+            total += p;
+        }
+    }
+    
+    // Fallback to uniform if all probs are zero/invalid
+    if total <= 0.0 {
+        let legal_actions: Vec<usize> = (0..NUM_ACTIONS)
+            .filter(|&idx| legal_mask[idx])
+            .collect();
+        if legal_actions.is_empty() {
+            return 1; // Check/Call as last resort
+        }
+        return legal_actions[rand::thread_rng().gen_range(0..legal_actions.len())];
+    }
+    
+    // Normalize to sum to 1.0
+    for p in legal_probs.iter_mut() {
+        *p /= total;
+    }
+    
+    // Sample using cumulative distribution
+    let mut rng = rand::thread_rng();
+    let r: f32 = rng.gen();
+    let mut cumulative = 0.0f32;
+    
+    for i in 0..NUM_ACTIONS {
+        if legal_mask[i] {
+            cumulative += legal_probs[i];
+            if r <= cumulative {
+                return i;
+            }
+        }
+    }
+    
+    // Fallback to last legal action (in case of floating point errors)
+    for i in (0..NUM_ACTIONS).rev() {
+        if legal_mask[i] {
+            return i;
+        }
+    }
+    1 // Check/Call
 }
 
 fn sanitize_prob(p: f32) -> f32 {
