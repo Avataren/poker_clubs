@@ -490,7 +490,8 @@ class NFSPTrainer:
         eval_model = self._unwrap(self.as_net)
         eval_model.eval()
         with torch.no_grad():
-            probe_obs = torch.zeros(1, 462, device=self.device)
+            torch.manual_seed(42)
+            probe_obs = torch.randn(1, 462, device=self.device)
             probe_ah = torch.zeros(1, self.config.max_history_len, 11, device=self.device)
             probe_len = torch.zeros(1, device=self.device, dtype=torch.long)
             probe_mask = torch.ones(1, 9, device=self.device, dtype=torch.bool)
