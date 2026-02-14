@@ -489,15 +489,24 @@ class NFSPTrainer:
         # Fingerprint: deterministic forward pass to detect silent model changes
         eval_model = self._unwrap(self.as_net)
         eval_model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type=self.device.type, enabled=False):
             torch.manual_seed(42)
-            probe_obs = torch.randn(1, 462, device=self.device) * 0.1
-            probe_ah = torch.zeros(1, self.config.max_history_len, 11, device=self.device)
+            probe_obs = torch.randn(1, 462, device=self.device, dtype=torch.float32) * 0.01
+            probe_ah = torch.zeros(1, self.config.max_history_len, 11, device=self.device, dtype=torch.float32)
             probe_len = torch.zeros(1, device=self.device, dtype=torch.long)
             probe_mask = torch.ones(1, 9, device=self.device, dtype=torch.bool)
             probe_logits = eval_model.forward_logits(probe_obs, probe_ah, probe_len, probe_mask)
-            top3 = probe_logits[0].topk(3)
-            print(f"  [eval probe] logits top3: {list(zip(top3.indices.tolist(), [f'{v:.2f}' for v in top3.values.tolist()]))}")
+            if probe_logits.isnan().any():
+                # Check where NaN originates
+                h = eval_model.history_encoder(probe_ah, probe_len)
+                x = torch.cat([probe_obs, h], dim=-1)
+                trunk_out = eval_model.net.trunk(x)
+                print(f"  [eval probe] NaN debug: history={h.isnan().any().item()}, "
+                      f"trunk={trunk_out.isnan().any().item()}, "
+                      f"trunk_range=[{trunk_out.min().item():.2f}, {trunk_out.max().item():.2f}]")
+            else:
+                top3 = probe_logits[0].topk(3)
+                print(f"  [eval probe] logits top3: {list(zip(top3.indices.tolist(), [f'{v:.2f}' for v in top3.values.tolist()]))}")
 
         vs_random = self._eval_vs_random(num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs_caller(num_hands=self.config.eval_hands)
