@@ -3,11 +3,18 @@
 Uses a double-buffered GPU approach: inference network copies for self-play
 run on a background thread while the main thread trains on the training networks.
 Weights are periodically synced from training → inference copies.
+
+IMPORTANT: Weight sync must pause self-play to avoid a CUDA data race.
+Different threads use different CUDA streams, so an in-place weight copy
+on one stream can race with a forward pass on another stream reading the
+same parameter tensors. We use a pause/acknowledge handshake to ensure
+self-play has finished its current run_episodes() before syncing.
 """
 
 import copy
 import math
 import threading
+import traceback
 import time
 
 import numpy as np
@@ -56,9 +63,11 @@ class AsyncNFSPTrainer(NFSPTrainer):
 
         # Threading primitives
         self._stop_event = threading.Event()
-        self._pause_event = threading.Event()  # set = paused
+        self._pause_event = threading.Event()  # main thread sets to request pause
+        self._paused_ack = threading.Event()   # self-play sets to acknowledge pause
         self._step_lock = threading.Lock()
         self._self_play_thread = None
+        self._self_play_error = None  # store exception from self-play thread
         # Track self-play rounds to pace training
         self._self_play_rounds = 0
 
@@ -66,8 +75,36 @@ class AsyncNFSPTrainer(NFSPTrainer):
         inf_params += sum(p.numel() for p in self._unwrap(self.as_inference).parameters())
         print(f"Async mode: inference copy VRAM ~{inf_params * 4 / 1e6:.1f} MB")
 
+    def _pause_self_play(self):
+        """Request self-play pause and wait for acknowledgment."""
+        # If self-play thread has crashed, don't wait
+        if self._self_play_error is not None:
+            raise RuntimeError(
+                f"Self-play thread crashed: {self._self_play_error}"
+            ) from self._self_play_error
+        self._pause_event.set()
+        if not self._paused_ack.wait(timeout=30.0):
+            # Check if thread crashed while we were waiting
+            if self._self_play_error is not None:
+                raise RuntimeError(
+                    f"Self-play thread crashed: {self._self_play_error}"
+                ) from self._self_play_error
+            print("WARNING: self-play pause timeout — waiting indefinitely")
+            self._paused_ack.wait()
+
+    def _resume_self_play(self):
+        """Resume self-play after pause."""
+        self._paused_ack.clear()
+        self._pause_event.clear()
+
     def _sync_inference_weights(self):
-        """Copy training network weights to inference copies."""
+        """Copy training network weights to inference copies.
+
+        Pauses self-play to avoid CUDA data race between the weight copy
+        (main thread's stream) and forward passes (self-play thread's stream)
+        on the same parameter tensors.
+        """
+        self._pause_self_play()
         with torch.no_grad():
             for p_inf, p_train in zip(
                 self._unwrap(self.br_inference).parameters(),
@@ -79,24 +116,42 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 self._unwrap(self.as_net).parameters(),
             ):
                 p_inf.data.copy_(p_train.data)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+        self._resume_self_play()
 
     def _self_play_loop(self):
         """Background thread: run self-play episodes continuously."""
-        torch.set_float32_matmul_precision("high")
-        while not self._stop_event.is_set():
-            # Check if paused (e.g. during evaluation)
-            if self._pause_event.is_set():
-                time.sleep(0.01)
-                continue
+        try:
+            torch.set_float32_matmul_precision("high")
+            while not self._stop_event.is_set():
+                # Check if paused (e.g. during weight sync or evaluation)
+                if self._pause_event.is_set():
+                    self._paused_ack.set()  # acknowledge we're paused
+                    while self._pause_event.is_set() and not self._stop_event.is_set():
+                        time.sleep(0.001)
+                    continue
 
-            epsilon = self.get_epsilon()
-            eta = self.get_eta()
-            steps = self.worker.run_episodes(epsilon, eta)
+                epsilon = self.get_epsilon()
+                eta = self.get_eta()
+                steps = self.worker.run_episodes(epsilon, eta)
 
-            with self._step_lock:
-                self.total_steps += steps
-                self.total_episodes += self.config.num_envs
-                self._self_play_rounds += 1
+                with self._step_lock:
+                    self.total_steps += steps
+                    self.total_episodes += self.config.num_envs
+                    self._self_play_rounds += 1
+        except Exception as e:
+            self._self_play_error = e
+            print(f"\nFATAL: Self-play thread crashed:\n{traceback.format_exc()}")
+            # Unblock any pending pause
+            self._paused_ack.set()
+
+    def _check_self_play_alive(self):
+        """Raise if self-play thread has crashed."""
+        if self._self_play_error is not None:
+            raise RuntimeError(
+                f"Self-play thread crashed: {self._self_play_error}"
+            ) from self._self_play_error
 
     def _do_logging_eval_checkpoint(
         self, episode_count, total_steps, start_time, episodes_at_start,
@@ -110,10 +165,11 @@ class AsyncNFSPTrainer(NFSPTrainer):
             epsilon = self.get_epsilon()
             eta = self.get_eta()
             cur_lr_f = self._get_lr_factor()
+            actual_lr = self.br_optimizer.param_groups[0]["lr"]
             print(
                 f"Episodes: {episode_count:,} | Steps: {total_steps:,} | "
                 f"BR buf: {len(self.br_buffer):,} | AS buf: {len(self.as_buffer):,} | "
-                f"eps: {epsilon:.4f} | eta: {eta:.4f} | lr: {cur_lr_f:.4f} | "
+                f"eps: {epsilon:.4f} | eta: {eta:.4f} | lr: {cur_lr_f:.4f} (actual: {actual_lr:.2e}) | "
                 f"{eps_per_sec:.0f} ep/s [async]"
             )
             cur_br_lr = self.br_optimizer.param_groups[0]["lr"]
@@ -129,10 +185,9 @@ class AsyncNFSPTrainer(NFSPTrainer):
 
         # Evaluation (pause self-play to avoid GPU contention)
         while episode_count >= next_eval:
-            self._pause_event.set()
-            time.sleep(0.05)
+            self._pause_self_play()
             self.evaluate(next_eval)
-            self._pause_event.clear()
+            self._resume_self_play()
             next_eval += self.config.eval_every
 
         # Checkpointing
@@ -164,7 +219,18 @@ class AsyncNFSPTrainer(NFSPTrainer):
         self._self_play_rounds = train_rounds
 
         # Initial sync so inference copies start with current weights
-        self._sync_inference_weights()
+        # (no need to pause — self-play thread hasn't started yet)
+        with torch.no_grad():
+            for p_inf, p_train in zip(
+                self._unwrap(self.br_inference).parameters(),
+                self._unwrap(self.br_net).parameters(),
+            ):
+                p_inf.data.copy_(p_train.data)
+            for p_inf, p_train in zip(
+                self._unwrap(self.as_inference).parameters(),
+                self._unwrap(self.as_net).parameters(),
+            ):
+                p_inf.data.copy_(p_train.data)
 
         # Start self-play thread
         self._self_play_thread = threading.Thread(
@@ -174,17 +240,18 @@ class AsyncNFSPTrainer(NFSPTrainer):
         print("Self-play thread started")
 
         # Minimum buffer fill before training begins.
-        # Must be large enough that each training round doesn't oversample the buffer.
-        # With br_train_steps=24, batch=16384: 393K BR samples per round.
-        # Require 3x that so each sample is drawn <0.33 times per round on average.
+        # Use at least 50% of buffer capacity to ensure diversity, and at least
+        # 3x per-round samples so each sample is drawn <0.33 times per round.
         br_per_round = self.config.br_train_steps * self.config.batch_size
         as_per_round = self.config.as_train_steps * self.config.batch_size
-        min_br_samples = max(self.config.batch_size, 3 * br_per_round)
-        min_as_samples = max(self.config.batch_size, 3 * as_per_round)
+        min_br_samples = max(self.config.br_buffer_size // 2, 3 * br_per_round)
+        min_as_samples = max(self.config.as_buffer_size // 4, 3 * as_per_round)
         warmup_done = False
 
         try:
             while True:
+                self._check_self_play_alive()
+
                 # Read episode count and self-play progress
                 with self._step_lock:
                     episode_count = self.total_episodes
@@ -211,6 +278,7 @@ class AsyncNFSPTrainer(NFSPTrainer):
                         with self._step_lock:
                             sp_rounds = self._self_play_rounds
                         train_rounds = sp_rounds
+
                         print(f"Buffer warmup complete (BR: {len(self.br_buffer):,}, "
                               f"AS: {len(self.as_buffer):,}), training started")
                     else:
@@ -234,12 +302,13 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 if br_loss > 0 and self.br_updates % 50 == 0:
                     self.writer.add_scalar("loss/br", br_loss, total_steps)
 
-                # Train AS (supervised)
+                # Train AS (supervised) — skip if frozen (resume without historical buffer)
                 as_loss = 0.0
-                for _ in range(self.config.as_train_steps):
-                    as_loss = self.train_as_step()
-                if as_loss > 0 and self.as_updates % 50 == 0:
-                    self.writer.add_scalar("loss/as", as_loss, total_steps)
+                if not self.config.freeze_as:
+                    for _ in range(self.config.as_train_steps):
+                        as_loss = self.train_as_step()
+                    if as_loss > 0 and self.as_updates % 50 == 0:
+                        self.writer.add_scalar("loss/as", as_loss, total_steps)
 
                 # Soft-update target network
                 train_rounds += 1
@@ -249,6 +318,7 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 # Periodic sync to inference copies
                 if train_rounds % self.config.sync_every == 0:
                     self._sync_inference_weights()
+
 
         finally:
             # Graceful shutdown

@@ -47,6 +47,8 @@ def main():
                         help="Sync inference weights every N training rounds (async mode)")
     parser.add_argument("--train-ahead", type=int, default=None,
                         help="Max training rounds ahead of self-play (async mode, default 50)")
+    parser.add_argument("--freeze-as", action="store_true",
+                        help="Freeze AS network (skip AS training). Use when resuming to preserve historical average strategy.")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -102,6 +104,8 @@ def main():
         config_kwargs["sync_every"] = args.sync_every
     if args.train_ahead is not None:
         config_kwargs["train_ahead"] = args.train_ahead
+    if args.freeze_as:
+        config_kwargs["freeze_as"] = True
 
     config = NFSPConfig(**config_kwargs)
 

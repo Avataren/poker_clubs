@@ -124,6 +124,8 @@ class NFSPTrainer:
             print(f"AMP enabled: dtype={self.amp_dtype}")
         print(f"Model: hidden={config.hidden_dim}, residual={config.residual_dim}, "
               f"history_hidden={config.history_hidden_dim}, batch={config.batch_size}")
+        if config.freeze_as:
+            print("AS network FROZEN — skipping AS gradient updates (preserving checkpoint average strategy)")
 
         # Networks
         self.br_net = BestResponseNet(config).to(self.device)
@@ -394,10 +396,11 @@ class NFSPTrainer:
 
             # Train AS (supervised) — multiple gradient steps
             as_loss = 0.0
-            for _ in range(self.config.as_train_steps):
-                as_loss = self.train_as_step()
-            if as_loss > 0 and self.as_updates % 50 == 0:
-                self.writer.add_scalar("loss/as", as_loss, self.total_steps)
+            if not self.config.freeze_as:
+                for _ in range(self.config.as_train_steps):
+                    as_loss = self.train_as_step()
+                if as_loss > 0 and self.as_updates % 50 == 0:
+                    self.writer.add_scalar("loss/as", as_loss, self.total_steps)
 
             # Soft-update target network
             train_rounds += 1

@@ -51,6 +51,7 @@ to all training stages:
 | `--train-ahead` | 100 | Max training rounds ahead of self-play before sleeping |
 | `--sync-every` | 25 | Sync training weights → inference copies every N rounds |
 | `--num-envs` | 2048 | Larger inference batches for better GPU utilization |
+| `--freeze-as` | flag | Freeze AS weights on resume — buffer lacks historical average |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -86,11 +87,18 @@ python scripts/train.py \
 
 ### Resuming Heads-Up Training
 
-Resume from a checkpoint with schedules pinned to their final values (no re-warmup):
+Resume from a checkpoint with schedules pinned to their final values (no re-warmup).
+
+**IMPORTANT:** Use `--freeze-as` when resuming. The AS reservoir buffer is not saved in
+checkpoints, so on resume it fills with only the current BR policy's actions instead of
+the historical average. Training AS on this data destroys the average strategy (the model
+learns to mimic the current exploitative BR policy instead of the balanced Nash equilibrium).
+With `--freeze-as`, the checkpoint's AS weights are preserved while BR continues improving.
 
 ```bash
 python scripts/train.py \
   --resume checkpoints/hu/checkpoint_107000000.pt \
+  --freeze-as \
   --device cuda --async --train-ahead 100 --sync-every 25 \
   --num-envs 2048 \
   --batch-size 16384 \
@@ -102,7 +110,6 @@ python scripts/train.py \
   --epsilon-decay-steps 1 \
   --lr-warmup-steps 0 \
   --br-lr 0.0001 --br-train-steps 24 \
-  --as-lr 0.0001 --as-train-steps 12 \
   --episodes 200000000 --eval-every 2500000 \
   --checkpoint-dir checkpoints/hu --checkpoint-every 5000000 \
   --log-dir logs/hu
@@ -306,10 +313,13 @@ so the model works across different blind levels and tournaments.
   does inference)
 - **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
   with the same arguments to continue where you left off. Pin schedules to final
-  values (epsilon, eta, warmup) to avoid re-ramping.
+  values (epsilon, eta, warmup) to avoid re-ramping. **Always use `--freeze-as`** to
+  prevent the AS network from being retrained on a non-representative buffer.
 - The reward signal is normalized to big blinds, so models transfer across blind levels
 - **RAM usage:** the 4M AS reservoir uses ~10GB, 2M BR circular uses ~12GB (~22GB total).
   With 31GB system RAM this leaves ~9GB for the OS and Rust engine.
 - **Async mode** runs self-play and training concurrently. Buffers are not saved in
   checkpoints, so they refill from scratch on resume — this is normal and training
-  waits for 5% buffer fill before starting gradient updates.
+  waits for buffer warmup before starting gradient updates. **Use `--freeze-as`** on
+  resume because the refilled AS reservoir only contains current-BR-policy actions,
+  not the historical average needed for NFSP convergence.
