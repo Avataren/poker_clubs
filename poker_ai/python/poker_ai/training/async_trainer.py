@@ -319,13 +319,29 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 as_loss = 0.0
                 if not self.is_as_frozen():
                     if not self._as_unfroze_logged and self._as_unfreeze_episode > 0:
+                        # Log AS weight norm before any training
+                        as_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.as_net).parameters())**0.5
+                        as_lr = self.as_optimizer.param_groups[0]["lr"]
                         print(f"AS network UNFROZEN at episode {episode_count:,} — "
                               f"buffer has {len(self.as_buffer):,} samples from diverse BR policies")
+                        print(f"  [AS debug] weight_norm={as_wnorm:.4f}, lr={as_lr:.2e}, "
+                              f"as_updates={self.as_updates}")
                         self._as_unfroze_logged = True
                     for _ in range(self.config.as_train_steps):
                         as_loss = self.train_as_step()
                     if as_loss > 0 and self.as_updates % 50 == 0:
                         self.writer.add_scalar("loss/as", as_loss, total_steps)
+                    # Debug: log AS LR, loss, and weight norm after unfreeze
+                    if self.as_updates > 0 and self.as_updates <= 20:
+                        as_lr = self.as_optimizer.param_groups[0]["lr"]
+                        as_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.as_net).parameters())**0.5
+                        print(f"  [AS debug] update #{self.as_updates}: loss={as_loss:.4f}, "
+                              f"lr={as_lr:.2e}, weight_norm={as_wnorm:.4f}")
+                    elif self.as_updates > 0 and self.as_updates % 500 == 0:
+                        as_lr = self.as_optimizer.param_groups[0]["lr"]
+                        as_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.as_net).parameters())**0.5
+                        print(f"  [AS debug] update #{self.as_updates}: loss={as_loss:.4f}, "
+                              f"lr={as_lr:.2e}, weight_norm={as_wnorm:.4f}")
 
                 # Soft-update target network
                 train_rounds += 1
