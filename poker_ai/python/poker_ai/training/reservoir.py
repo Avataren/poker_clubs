@@ -3,6 +3,8 @@
 Uses pre-allocated numpy arrays for zero-allocation batch operations.
 """
 
+import threading
+
 import numpy as np
 from dataclasses import dataclass
 
@@ -25,6 +27,7 @@ class ReservoirBuffer:
         self.size = 0
         self.total_seen = 0
         self.rng = np.random.default_rng()
+        self._lock = threading.Lock()
 
         # Pre-allocated arrays
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
@@ -62,68 +65,71 @@ class ReservoirBuffer:
         n = len(obs)
         if n == 0:
             return
-        if self.capacity <= 0:
+
+        with self._lock:
+            if self.capacity <= 0:
+                self.total_seen += n
+                return
+
+            # Fill any remaining capacity with contiguous writes.
+            fill = min(self.capacity - self.size, n)
+            if fill > 0:
+                dest = slice(self.size, self.size + fill)
+                self.obs[dest] = obs[:fill]
+                self.action_history[dest] = action_history[:fill]
+                self.history_length[dest] = history_length[:fill]
+                self.actions[dest] = actions[:fill]
+                self.legal_mask[dest] = legal_mask[:fill]
+                self.size += fill
+
+            # Once full, perform vectorized reservoir replacement for the remainder.
+            remaining = n - fill
+            if remaining <= 0:
+                self.total_seen += n
+                return
+
+            start_seen = self.total_seen + fill
+            highs = np.arange(start_seen + 1, start_seen + remaining + 1, dtype=np.int64)
+            replace_idx = self.rng.integers(0, highs, size=remaining)
+            keep = replace_idx < self.capacity
             self.total_seen += n
-            return
+            if not np.any(keep):
+                return
 
-        # Fill any remaining capacity with contiguous writes.
-        fill = min(self.capacity - self.size, n)
-        if fill > 0:
-            dest = slice(self.size, self.size + fill)
-            self.obs[dest] = obs[:fill]
-            self.action_history[dest] = action_history[:fill]
-            self.history_length[dest] = history_length[:fill]
-            self.actions[dest] = actions[:fill]
-            self.legal_mask[dest] = legal_mask[:fill]
-            self.size += fill
+            target = replace_idx[keep]
+            source = np.flatnonzero(keep) + fill
 
-        # Once full, perform vectorized reservoir replacement for the remainder.
-        remaining = n - fill
-        if remaining <= 0:
-            self.total_seen += n
-            return
+            # Preserve sequential semantics when multiple updates hit the same slot:
+            # the last seen sample for a slot should win.
+            if target.size > 1:
+                order = np.argsort(target, kind="stable")
+                target_sorted = target[order]
+                source_sorted = source[order]
+                last = np.ones(target_sorted.shape[0], dtype=bool)
+                last[:-1] = target_sorted[:-1] != target_sorted[1:]
+                target = target_sorted[last]
+                source = source_sorted[last]
 
-        start_seen = self.total_seen + fill
-        highs = np.arange(start_seen + 1, start_seen + remaining + 1, dtype=np.int64)
-        replace_idx = self.rng.integers(0, highs, size=remaining)
-        keep = replace_idx < self.capacity
-        self.total_seen += n
-        if not np.any(keep):
-            return
-
-        target = replace_idx[keep]
-        source = np.flatnonzero(keep) + fill
-
-        # Preserve sequential semantics when multiple updates hit the same slot:
-        # the last seen sample for a slot should win.
-        if target.size > 1:
-            order = np.argsort(target, kind="stable")
-            target_sorted = target[order]
-            source_sorted = source[order]
-            last = np.ones(target_sorted.shape[0], dtype=bool)
-            last[:-1] = target_sorted[:-1] != target_sorted[1:]
-            target = target_sorted[last]
-            source = source_sorted[last]
-
-        self.obs[target] = obs[source]
-        self.action_history[target] = action_history[source]
-        self.history_length[target] = history_length[source]
-        self.actions[target] = actions[source]
-        self.legal_mask[target] = legal_mask[source]
+            self.obs[target] = obs[source]
+            self.action_history[target] = action_history[source]
+            self.history_length[target] = history_length[source]
+            self.actions[target] = actions[source]
+            self.legal_mask[target] = legal_mask[source]
 
     def sample_arrays(self, batch_size: int) -> tuple:
         """Sample and return raw numpy arrays.
 
         Returns: (obs, ah, ah_len, actions, masks)
         """
-        indices = np.random.randint(0, self.size, size=batch_size)
-        return (
-            self.obs[indices],
-            self.action_history[indices],
-            self.history_length[indices],
-            self.actions[indices],
-            self.legal_mask[indices],
-        )
+        with self._lock:
+            indices = np.random.randint(0, self.size, size=batch_size)
+            return (
+                self.obs[indices].copy(),
+                self.action_history[indices].copy(),
+                self.history_length[indices].copy(),
+                self.actions[indices].copy(),
+                self.legal_mask[indices].copy(),
+            )
 
     def sample(self, batch_size: int) -> list[SLTransition]:
         """Sample transitions (legacy API)."""
@@ -140,4 +146,5 @@ class ReservoirBuffer:
         ]
 
     def __len__(self) -> int:
-        return self.size
+        with self._lock:
+            return self.size

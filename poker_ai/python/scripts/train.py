@@ -41,6 +41,12 @@ def main():
     parser.add_argument("--as-train-steps", type=int, default=None, help="AS gradient steps per rollout")
     parser.add_argument("--huber-delta", type=float, default=None, help="Huber loss beta (default 10.0)")
     parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision on CUDA")
+    parser.add_argument("--async", dest="async_mode", action="store_true",
+                        help="Use async self-play + training (concurrent threads)")
+    parser.add_argument("--sync-every", type=int, default=None,
+                        help="Sync inference weights every N training rounds (async mode)")
+    parser.add_argument("--train-ahead", type=int, default=None,
+                        help="Max training rounds ahead of self-play (async mode, default 50)")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -92,10 +98,18 @@ def main():
         config_kwargs["huber_delta"] = args.huber_delta
     if args.no_amp:
         config_kwargs["use_amp"] = False
+    if args.sync_every is not None:
+        config_kwargs["sync_every"] = args.sync_every
+    if args.train_ahead is not None:
+        config_kwargs["train_ahead"] = args.train_ahead
 
     config = NFSPConfig(**config_kwargs)
 
-    trainer = NFSPTrainer(config)
+    if args.async_mode:
+        from poker_ai.training.async_trainer import AsyncNFSPTrainer
+        trainer = AsyncNFSPTrainer(config)
+    else:
+        trainer = NFSPTrainer(config)
 
     if args.resume:
         trainer.load_checkpoint(args.resume)

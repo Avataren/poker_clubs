@@ -33,13 +33,24 @@ to all training stages:
 | `--br-buffer-size` | 2000000 | ~250k hands of recent experience; ~30x batch size for diverse sampling |
 | `--as-buffer-size` | 4000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
 | `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
-| `--batch-size` | 8192 | 2x base for slightly lower gradient noise without throughput hit |
+| `--batch-size` | 16384 | Large batch for GPU saturation with async training |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
 | `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
 | `--epsilon-start` | 0.10 | Enough exploration while Q-values are still random |
 | `--epsilon-end` | 0.003 | Near-deterministic late in training |
 | `--epsilon-decay-steps` | 400000000 | Explore first ~50M episodes, exploit second half |
+| `--br-train-steps` | 24 | BR gradient steps per self-play round (async) |
+| `--as-train-steps` | 12 | AS gradient steps per self-play round (async) |
+
+### Async Training Parameters
+
+| Parameter | Value | Why |
+|---|---|---|
+| `--async` | flag | Concurrent self-play + training threads for ~2x throughput |
+| `--train-ahead` | 100 | Max training rounds ahead of self-play before sleeping |
+| `--sync-every` | 25 | Sync training weights → inference copies every N rounds |
+| `--num-envs` | 2048 | Larger inference batches for better GPU utilization |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -48,18 +59,16 @@ Train from scratch. This builds the foundation: hand values, bet sizing, aggress
 ```bash
 python scripts/train.py \
   --num-players 2 \
-  --device cuda \
-  --num-envs 1024 \
-  --batch-size 8192 \
+  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --num-envs 2048 \
+  --batch-size 16384 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 200000000 \
-  --br-lr 0.0001 \
-  --as-lr 0.0001 \
+  --br-lr 0.0001 --br-train-steps 24 \
+  --as-lr 0.0001 --as-train-steps 12 \
   --br-buffer-size 2000000 \
   --as-buffer-size 4000000 \
-  --br-train-steps 8 \
-  --as-train-steps 4 \
   --epsilon-start 0.10 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 400000000 \
@@ -67,11 +76,35 @@ python scripts/train.py \
   --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
-  --eval-every 200000 \
+  --eval-every 2500000 \
   --eval-hands 5000 \
-  --checkpoint-every 200000 \
-  --episodes 100000000 \
+  --checkpoint-every 5000000 \
+  --episodes 200000000 \
   --checkpoint-dir checkpoints/hu \
+  --log-dir logs/hu
+```
+
+### Resuming Heads-Up Training
+
+Resume from a checkpoint with schedules pinned to their final values (no re-warmup):
+
+```bash
+python scripts/train.py \
+  --resume checkpoints/hu/checkpoint_107000000.pt \
+  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --num-envs 2048 \
+  --batch-size 16384 \
+  --eta-start 0.4 \
+  --eta-end 0.4 \
+  --eta-ramp-steps 1 \
+  --epsilon-start 0.003 \
+  --epsilon-end 0.003 \
+  --epsilon-decay-steps 1 \
+  --lr-warmup-steps 0 \
+  --br-lr 0.0001 --br-train-steps 24 \
+  --as-lr 0.0001 --as-train-steps 12 \
+  --episodes 200000000 --eval-every 2500000 \
+  --checkpoint-dir checkpoints/hu --checkpoint-every 5000000 \
   --log-dir logs/hu
 ```
 
@@ -98,27 +131,25 @@ importance, pot odds with multiple callers.
 ```bash
 python scripts/train.py \
   --num-players 6 \
-  --device cuda \
-  --num-envs 256 \
-  --batch-size 8192 \
+  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --num-envs 512 \
+  --batch-size 16384 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 100000000 \
-  --br-lr 0.0001 \
-  --as-lr 0.0001 \
+  --br-lr 0.0001 --br-train-steps 24 \
+  --as-lr 0.0001 --as-train-steps 12 \
   --br-buffer-size 2000000 \
   --as-buffer-size 4000000 \
-  --br-train-steps 8 \
-  --as-train-steps 4 \
   --epsilon-start 0.04 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 100000000 \
   --lr-warmup-steps 2000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
-  --eval-every 200000 \
+  --eval-every 2500000 \
   --eval-hands 3000 \
-  --checkpoint-every 200000 \
+  --checkpoint-every 5000000 \
   --episodes 50000000 \
   --checkpoint-dir checkpoints/6max \
   --log-dir logs/6max \
@@ -126,7 +157,7 @@ python scripts/train.py \
 ```
 
 **Key differences from heads-up:**
-- `--num-envs 256`: hands have more steps (more players acting), so fewer envs
+- `--num-envs 512`: hands have more steps (more players acting), so fewer envs
   needed to keep GPU busy
 - `--epsilon-start 0.04`: lower starting exploration since the model already
   understands basic poker
@@ -147,27 +178,25 @@ Fine-tune from the best 6-max checkpoint. Jump from 6 to 9 is smaller than
 ```bash
 python scripts/train.py \
   --num-players 9 \
-  --device cuda \
-  --num-envs 128 \
-  --batch-size 8192 \
+  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --num-envs 256 \
+  --batch-size 16384 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 60000000 \
-  --br-lr 0.0001 \
-  --as-lr 0.0001 \
+  --br-lr 0.0001 --br-train-steps 24 \
+  --as-lr 0.0001 --as-train-steps 12 \
   --br-buffer-size 2000000 \
   --as-buffer-size 4000000 \
-  --br-train-steps 8 \
-  --as-train-steps 4 \
   --epsilon-start 0.03 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 60000000 \
   --lr-warmup-steps 2000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
-  --eval-every 200000 \
+  --eval-every 2500000 \
   --eval-hands 2000 \
-  --checkpoint-every 200000 \
+  --checkpoint-every 5000000 \
   --episodes 30000000 \
   --checkpoint-dir checkpoints/9ring \
   --log-dir logs/9ring \
@@ -175,7 +204,7 @@ python scripts/train.py \
 ```
 
 **Key differences:**
-- `--num-envs 128`: 9-player hands are long, fewer envs needed
+- `--num-envs 256`: 9-player hands are long, fewer envs needed
 - `--epsilon-start 0.03`: minimal exploration for fine-tuning
 - `--episodes 30000000`: fine-tuning pass
 - `--eval-hands 2000`: 9-player eval hands are slow
@@ -218,8 +247,8 @@ Previous v2 changes (still in effect):
 | **LR schedule** | Constant 1e-4 | Cosine decay 1e-4 → 1e-6 with warmup | Prevents policy oscillation after convergence |
 | **Target updates** | Hard copy every 300 rounds | Polyak soft (tau=0.005) every round | Smoother Q-value targets, less instability |
 | **Grad clipping** | None | `clip_grad_norm_ 10.0` on both BR and AS | Prevents gradient spikes from large Q-value errors |
-| **br_train_steps** | 12 | 8 | Less overfitting to recent BR buffer data |
-| **as_train_steps** | 6 | 4 | Matches reduced BR steps proportionally |
+| **br_train_steps** | 12 | 24 | More gradient steps to saturate GPU in async mode |
+| **as_train_steps** | 6 | 12 | Matches BR steps proportionally |
 
 ## ONNX Export
 
@@ -276,7 +305,11 @@ so the model works across different blind levels and tournaments.
 - **Milestone eval** can run in parallel with training on the same GPU (it only
   does inference)
 - **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
-  with the same arguments to continue where you left off
+  with the same arguments to continue where you left off. Pin schedules to final
+  values (epsilon, eta, warmup) to avoid re-ramping.
 - The reward signal is normalized to big blinds, so models transfer across blind levels
 - **RAM usage:** the 4M AS reservoir uses ~10GB, 2M BR circular uses ~12GB (~22GB total).
   With 31GB system RAM this leaves ~9GB for the OS and Rust engine.
+- **Async mode** runs self-play and training concurrently. Buffers are not saved in
+  checkpoints, so they refill from scratch on resume — this is normal and training
+  waits for 5% buffer fill before starting gradient updates.

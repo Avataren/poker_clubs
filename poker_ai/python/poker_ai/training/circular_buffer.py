@@ -4,6 +4,8 @@ Uses pre-allocated numpy arrays (Structure of Arrays) for zero-allocation
 batch insert and fast random sampling.
 """
 
+import threading
+
 import numpy as np
 from dataclasses import dataclass
 
@@ -34,6 +36,7 @@ class CircularBuffer:
         self.num_actions = num_actions
         self.position = 0
         self.size = 0
+        self._lock = threading.Lock()
 
         # Pre-allocated arrays
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
@@ -83,49 +86,50 @@ class CircularBuffer:
         if n == 0:
             return
 
-        pos = self.position
-        # Check if we wrap around
-        if pos + n <= self.capacity:
-            s = slice(pos, pos + n)
-            self.obs[s] = obs
-            self.action_history[s] = action_history
-            self.history_length[s] = history_length
-            self.actions[s] = actions
-            self.rewards[s] = rewards
-            self.next_obs[s] = next_obs
-            self.next_action_history[s] = next_action_history
-            self.next_history_length[s] = next_history_length
-            self.next_legal_mask[s] = next_legal_mask
-            self.dones[s] = dones
-            self.legal_mask[s] = legal_mask
-        else:
-            # Split across wrap boundary
-            first = self.capacity - pos
-            self.obs[pos:] = obs[:first]
-            self.obs[:n - first] = obs[first:]
-            self.action_history[pos:] = action_history[:first]
-            self.action_history[:n - first] = action_history[first:]
-            self.history_length[pos:] = history_length[:first]
-            self.history_length[:n - first] = history_length[first:]
-            self.actions[pos:] = actions[:first]
-            self.actions[:n - first] = actions[first:]
-            self.rewards[pos:] = rewards[:first]
-            self.rewards[:n - first] = rewards[first:]
-            self.next_obs[pos:] = next_obs[:first]
-            self.next_obs[:n - first] = next_obs[first:]
-            self.next_action_history[pos:] = next_action_history[:first]
-            self.next_action_history[:n - first] = next_action_history[first:]
-            self.next_history_length[pos:] = next_history_length[:first]
-            self.next_history_length[:n - first] = next_history_length[first:]
-            self.next_legal_mask[pos:] = next_legal_mask[:first]
-            self.next_legal_mask[:n - first] = next_legal_mask[first:]
-            self.dones[pos:] = dones[:first]
-            self.dones[:n - first] = dones[first:]
-            self.legal_mask[pos:] = legal_mask[:first]
-            self.legal_mask[:n - first] = legal_mask[first:]
+        with self._lock:
+            pos = self.position
+            # Check if we wrap around
+            if pos + n <= self.capacity:
+                s = slice(pos, pos + n)
+                self.obs[s] = obs
+                self.action_history[s] = action_history
+                self.history_length[s] = history_length
+                self.actions[s] = actions
+                self.rewards[s] = rewards
+                self.next_obs[s] = next_obs
+                self.next_action_history[s] = next_action_history
+                self.next_history_length[s] = next_history_length
+                self.next_legal_mask[s] = next_legal_mask
+                self.dones[s] = dones
+                self.legal_mask[s] = legal_mask
+            else:
+                # Split across wrap boundary
+                first = self.capacity - pos
+                self.obs[pos:] = obs[:first]
+                self.obs[:n - first] = obs[first:]
+                self.action_history[pos:] = action_history[:first]
+                self.action_history[:n - first] = action_history[first:]
+                self.history_length[pos:] = history_length[:first]
+                self.history_length[:n - first] = history_length[first:]
+                self.actions[pos:] = actions[:first]
+                self.actions[:n - first] = actions[first:]
+                self.rewards[pos:] = rewards[:first]
+                self.rewards[:n - first] = rewards[first:]
+                self.next_obs[pos:] = next_obs[:first]
+                self.next_obs[:n - first] = next_obs[first:]
+                self.next_action_history[pos:] = next_action_history[:first]
+                self.next_action_history[:n - first] = next_action_history[first:]
+                self.next_history_length[pos:] = next_history_length[:first]
+                self.next_history_length[:n - first] = next_history_length[first:]
+                self.next_legal_mask[pos:] = next_legal_mask[:first]
+                self.next_legal_mask[:n - first] = next_legal_mask[first:]
+                self.dones[pos:] = dones[:first]
+                self.dones[:n - first] = dones[first:]
+                self.legal_mask[pos:] = legal_mask[:first]
+                self.legal_mask[:n - first] = legal_mask[first:]
 
-        self.position = (pos + n) % self.capacity
-        self.size = min(self.size + n, self.capacity)
+            self.position = (pos + n) % self.capacity
+            self.size = min(self.size + n, self.capacity)
 
     def sample_arrays(self, batch_size: int) -> tuple:
         """Sample a batch and return raw numpy arrays (no Transition objects).
@@ -133,20 +137,21 @@ class CircularBuffer:
         Returns: (obs, ah, ah_len, actions, rewards, next_obs, next_ah,
                   next_ah_len, next_mask, dones, masks)
         """
-        indices = np.random.randint(0, self.size, size=batch_size)
-        return (
-            self.obs[indices],
-            self.action_history[indices],
-            self.history_length[indices],
-            self.actions[indices],
-            self.rewards[indices],
-            self.next_obs[indices],
-            self.next_action_history[indices],
-            self.next_history_length[indices],
-            self.next_legal_mask[indices],
-            self.dones[indices],
-            self.legal_mask[indices],
-        )
+        with self._lock:
+            indices = np.random.randint(0, self.size, size=batch_size)
+            return (
+                self.obs[indices].copy(),
+                self.action_history[indices].copy(),
+                self.history_length[indices].copy(),
+                self.actions[indices].copy(),
+                self.rewards[indices].copy(),
+                self.next_obs[indices].copy(),
+                self.next_action_history[indices].copy(),
+                self.next_history_length[indices].copy(),
+                self.next_legal_mask[indices].copy(),
+                self.dones[indices].copy(),
+                self.legal_mask[indices].copy(),
+            )
 
     def sample(self, batch_size: int) -> list[Transition]:
         """Sample transitions (legacy API)."""
@@ -169,4 +174,5 @@ class CircularBuffer:
         ]
 
     def __len__(self) -> int:
-        return self.size
+        with self._lock:
+            return self.size

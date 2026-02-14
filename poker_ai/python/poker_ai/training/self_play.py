@@ -67,10 +67,14 @@ class SelfPlayWorker:
         br_buffer: CircularBuffer,
         as_buffer: ReservoirBuffer,
         device: torch.device,
+        br_inference: BestResponseNet | None = None,
+        as_inference: AverageStrategyNet | None = None,
     ):
         self.config = config
-        self.br_net = br_net
-        self.as_net = as_net
+        # Use separate inference copies if provided (async training),
+        # otherwise use the training networks directly (sync training).
+        self.br_net = br_inference if br_inference is not None else br_net
+        self.as_net = as_inference if as_inference is not None else as_net
         self.br_buffer = br_buffer
         self.as_buffer = as_buffer
         self.device = device

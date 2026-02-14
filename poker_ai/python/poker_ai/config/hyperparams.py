@@ -70,6 +70,10 @@ class NFSPConfig:
     eta_end: float = 0.4
     eta_ramp_steps: int = 200_000_000       # ~25M episodes — gradual shift to AS
 
+    # Async training
+    sync_every: int = 10  # sync inference weights every N training rounds
+    train_ahead: int = 50  # max training rounds ahead of self-play before sleeping
+
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda
     use_amp: Optional[bool] = None  # None=auto (on for CUDA), False disables AMP
