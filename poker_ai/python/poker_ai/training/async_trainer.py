@@ -176,6 +176,7 @@ class AsyncNFSPTrainer(NFSPTrainer):
         # Minimum buffer fill before training begins
         min_br_samples = max(self.config.batch_size, int(0.05 * self.config.br_buffer_size))
         min_as_samples = max(self.config.batch_size, int(0.05 * self.config.as_buffer_size))
+        warmup_done = False
 
         try:
             while True:
@@ -195,9 +196,21 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 )
 
                 # Wait for buffer warmup
-                if len(self.br_buffer) < min_br_samples or len(self.as_buffer) < min_as_samples:
-                    time.sleep(0.1)
-                    continue
+                if not warmup_done:
+                    if len(self.br_buffer) >= min_br_samples and len(self.as_buffer) >= min_as_samples:
+                        warmup_done = True
+                        # Snap train_rounds to current sp_rounds so training starts
+                        # in sync and only gradually builds its train_ahead budget.
+                        # Without this, the rounds accumulated during warmup would
+                        # let training burst through 100+ rounds on a tiny buffer.
+                        with self._step_lock:
+                            sp_rounds = self._self_play_rounds
+                        train_rounds = sp_rounds
+                        print(f"Buffer warmup complete (BR: {len(self.br_buffer):,}, "
+                              f"AS: {len(self.as_buffer):,}), training started")
+                    else:
+                        time.sleep(0.1)
+                        continue
 
                 # Pace training: allow training to run ahead by train_ahead rounds.
                 # This lets training keep the GPU busy while self-play generates data,
