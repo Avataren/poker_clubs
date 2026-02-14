@@ -230,18 +230,18 @@ impl ModelStrategy {
 
     /// Apply personality adjustments to raw model probabilities
     fn apply_personality(&self, probs: &mut [f32; NUM_ACTIONS]) {
-        // Action indices: 0=Fold, 1=Check, 2=Call, 3=MinBet, 4=HalfPot, 5=Pot, 6=2xPot, 7=3xPot, 8=AllIn
-        
+        // Action indices: 0=Fold, 1=Check/Call, 2=Raise25%, 3=Raise40%, 4=Raise60%, 5=Raise80%, 6=RaisePot, 7=Raise150%, 8=AllIn
+
         // Apply aggression bias
-        // Aggressive actions: MinBet(3), HalfPot(4), Pot(5), 2xPot(6), 3xPot(7), AllIn(8)
-        // Passive actions: Fold(0), Check(1), Call(2)
+        // Aggressive actions: Raise(2-7), AllIn(8)
+        // Passive actions: Fold(0), Check/Call(1)
         if self.personality.aggression_bias.abs() > 0.01 {
             let bias = self.personality.aggression_bias;
             for i in 0..NUM_ACTIONS {
                 let multiplier = match i {
                     0 => 1.0 - bias.max(0.0) * 0.5, // Fold less when aggressive
-                    1 | 2 => 1.0 - bias.abs() * 0.3, // Check/Call affected by aggression
-                    3..=8 => 1.0 + bias.max(0.0) * 0.5, // Raise more when aggressive
+                    1 => 1.0 - bias.abs() * 0.3, // Check/Call affected by aggression
+                    2..=8 => 1.0 + bias.max(0.0) * 0.5, // Raise more when aggressive
                     _ => 1.0,
                 };
                 probs[i] *= multiplier;
@@ -252,8 +252,8 @@ impl ModelStrategy {
         if self.personality.calling_bias.abs() > 0.01 {
             let bias = self.personality.calling_bias;
             probs[0] *= 1.0 - bias.max(0.0) * 0.8; // Fold less when calling bias is positive
-            probs[2] *= 1.0 + bias.max(0.0) * 0.6; // Call more when calling bias is positive
-            
+            probs[1] *= 1.0 + bias.max(0.0) * 0.6; // Call more when calling bias is positive
+
             if bias < 0.0 {
                 // Fold more when calling bias is negative
                 probs[0] *= 1.0 + (-bias) * 0.5;

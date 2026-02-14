@@ -240,7 +240,10 @@ class NFSPTrainer:
 
     def train_br_step(self) -> float:
         """One DQN training step on Best Response network."""
-        if len(self.br_buffer) < self.config.batch_size:
+        # Require 5% of buffer capacity before training to avoid noisy updates
+        # after resume when buffers are nearly empty
+        min_samples = max(self.config.batch_size, int(0.05 * self.config.br_buffer_size))
+        if len(self.br_buffer) < min_samples:
             return 0.0
 
         # Sample directly as numpy arrays, convert to tensors (no Python loop)
@@ -302,7 +305,10 @@ class NFSPTrainer:
 
     def train_as_step(self) -> float:
         """One supervised learning step on Average Strategy network."""
-        if len(self.as_buffer) < self.config.batch_size:
+        # Require 5% of buffer capacity before training to avoid noisy updates
+        # after resume when buffers are nearly empty
+        min_samples = max(self.config.batch_size, int(0.05 * self.config.as_buffer_size))
+        if len(self.as_buffer) < min_samples:
             return 0.0
 
         # Sample directly as numpy arrays
