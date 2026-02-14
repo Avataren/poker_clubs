@@ -192,21 +192,25 @@ class AsyncNFSPTrainer(NFSPTrainer):
             while episode_count >= next_log:
                 next_log += 10000
 
-        # Evaluation (pause self-play to avoid GPU contention)
-        while episode_count >= next_eval:
+        # Evaluation and checkpointing — keep self-play paused if both happen
+        need_eval = episode_count >= next_eval
+        need_checkpoint = episode_count >= next_checkpoint
+        paused_for_eval_or_ckpt = False
+
+        if need_eval or (need_checkpoint and self.config.save_buffers):
             self._pause_self_play()
+            paused_for_eval_or_ckpt = True
+
+        while episode_count >= next_eval:
             self.evaluate(next_eval)
-            self._resume_self_play()
             next_eval += self.config.eval_every
 
-        # Checkpointing (pause self-play if saving buffers to avoid lock contention)
         while episode_count >= next_checkpoint:
-            if self.config.save_buffers:
-                self._pause_self_play()
             self.save_checkpoint(next_checkpoint)
-            if self.config.save_buffers:
-                self._resume_self_play()
             next_checkpoint += self.config.checkpoint_every
+
+        if paused_for_eval_or_ckpt:
+            self._resume_self_play()
 
         return next_log, next_eval, next_checkpoint
 
