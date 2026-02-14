@@ -52,6 +52,10 @@ def main():
     parser.add_argument("--as-freeze-duration", type=int, default=None,
                         help="Episodes to freeze AS after resume before unfreezing (e.g. 10000000). "
                              "Lets buffer accumulate diverse BR data before AS trains on it.")
+    parser.add_argument("--as-warmup-episodes", type=int, default=None,
+                        help="AS LR warmup episodes after unfreeze (ramp from 1%% to 100%%, default 2M)")
+    parser.add_argument("--save-buffers", action="store_true",
+                        help="Save replay buffers alongside checkpoints (large files, enables perfect resume)")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -111,6 +115,10 @@ def main():
         config_kwargs["freeze_as"] = True
     if args.as_freeze_duration is not None:
         config_kwargs["as_freeze_duration"] = args.as_freeze_duration
+    if args.as_warmup_episodes is not None:
+        config_kwargs["as_warmup_episodes"] = args.as_warmup_episodes
+    if args.save_buffers:
+        config_kwargs["save_buffers"] = True
 
     config = NFSPConfig(**config_kwargs)
 

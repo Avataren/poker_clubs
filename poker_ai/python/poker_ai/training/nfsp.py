@@ -131,6 +131,9 @@ class NFSPTrainer:
 
         # AS freeze tracking (set actual unfreeze episode in load_checkpoint)
         self._as_unfreeze_episode = 0  # 0 = no freeze active
+        self._as_optimizer_reset_pending = False  # reset optimizer on unfreeze
+        self._as_warmup_start_episode = 0  # episode at which AS LR warmup begins
+        self._as_warmup_end_episode = 0    # episode at which AS LR warmup ends
 
         # Networks
         self.br_net = BestResponseNet(config).to(self.device)
@@ -206,6 +209,21 @@ class NFSPTrainer:
             return True
         if self._as_unfreeze_episode > 0 and self.total_episodes < self._as_unfreeze_episode:
             return True
+        # Reset AS optimizer on unfreeze transition so stale Adam momentum
+        # from the checkpoint doesn't cause catastrophic updates on the new
+        # buffer data that accumulated during the freeze.
+        if self._as_optimizer_reset_pending:
+            self._as_optimizer_reset_pending = False
+            self.as_optimizer = torch.optim.Adam(
+                self.as_net.parameters(), lr=self.config.as_lr
+            )
+            # Start AS LR warmup: ramp from 1% to 100% over warmup_episodes
+            if self.config.as_warmup_episodes > 0:
+                self._as_warmup_start_episode = self.total_episodes
+                self._as_warmup_end_episode = self.total_episodes + self.config.as_warmup_episodes
+                print(f"  AS optimizer reset + LR warmup over {self.config.as_warmup_episodes:,} episodes")
+            else:
+                print("  AS optimizer reset (stale Adam state discarded)")
         return False
 
     def get_epsilon(self) -> float:
@@ -243,8 +261,17 @@ class NFSPTrainer:
         factor = self._get_lr_factor()
         for pg in self.br_optimizer.param_groups:
             pg["lr"] = self.config.br_lr * factor
+        # AS LR warmup after unfreeze: ramp from 1% to 100% over warmup period
+        as_factor = factor
+        if self._as_warmup_end_episode > 0 and self.total_episodes < self._as_warmup_end_episode:
+            warmup_progress = max(
+                (self.total_episodes - self._as_warmup_start_episode)
+                / max(self._as_warmup_end_episode - self._as_warmup_start_episode, 1),
+                0.0,
+            )
+            as_factor = factor * (0.01 + 0.99 * warmup_progress)
         for pg in self.as_optimizer.param_groups:
-            pg["lr"] = self.config.as_lr * factor
+            pg["lr"] = self.config.as_lr * as_factor
 
     def _to_device(self, array: np.ndarray) -> torch.Tensor:
         """Move numpy array to training device with optional pinned-memory staging."""
@@ -711,6 +738,21 @@ class NFSPTrainer:
         torch.save(checkpoint, path / "checkpoint_latest.pt")
         print(f"  Saved checkpoint at episode {episode:,}")
 
+        if self.config.save_buffers:
+            import time as _time
+            t0 = _time.time()
+            br_path = path / f"br_buffer_{episode}.npz"
+            as_path = path / f"as_buffer_{episode}.npz"
+            self.br_buffer.save(str(br_path))
+            self.as_buffer.save(str(as_path))
+            # Also save as "latest" for easy resume
+            self.br_buffer.save(str(path / "br_buffer_latest.npz"))
+            self.as_buffer.save(str(path / "as_buffer_latest.npz"))
+            elapsed = _time.time() - t0
+            br_mb = br_path.stat().st_size / 1e6 if br_path.exists() else 0
+            as_mb = as_path.stat().st_size / 1e6 if as_path.exists() else 0
+            print(f"  Saved buffers: BR={br_mb:.0f}MB, AS={as_mb:.0f}MB ({elapsed:.1f}s)")
+
     def _migrate_dueling_state_dict(self, old_sd: dict) -> dict:
         """Migrate pre-dueling checkpoint (value_head) to dueling (value_stream + advantage_stream).
 
@@ -779,8 +821,21 @@ class NFSPTrainer:
         self.total_episodes = checkpoint["episode"]
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
 
+        # Try to load saved buffers from the same checkpoint directory
+        ckpt_dir = Path(path).parent
+        br_buf_path = ckpt_dir / "br_buffer_latest.npz"
+        as_buf_path = ckpt_dir / "as_buffer_latest.npz"
+        if br_buf_path.exists() and as_buf_path.exists():
+            import time as _time
+            t0 = _time.time()
+            self.br_buffer.load(str(br_buf_path))
+            self.as_buffer.load(str(as_buf_path))
+            elapsed = _time.time() - t0
+            print(f"  Loaded buffers: BR={len(self.br_buffer):,}, AS={len(self.as_buffer):,} ({elapsed:.1f}s)")
+
         # Set AS freeze duration if configured
         if self.config.as_freeze_duration > 0:
             self._as_unfreeze_episode = self.total_episodes + self.config.as_freeze_duration
+            self._as_optimizer_reset_pending = True
             print(f"  AS frozen until episode {self._as_unfreeze_episode:,} "
                   f"({self.config.as_freeze_duration:,} episodes from now)")

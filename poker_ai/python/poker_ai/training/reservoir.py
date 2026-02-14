@@ -148,3 +148,36 @@ class ReservoirBuffer:
     def __len__(self) -> int:
         with self._lock:
             return self.size
+
+    def save(self, path: str) -> None:
+        """Save buffer contents to a compressed .npz file (float16 for large arrays)."""
+        with self._lock:
+            n = self.size
+            if n == 0:
+                return
+            np.savez_compressed(
+                path,
+                obs=self.obs[:n].astype(np.float16),
+                action_history=self.action_history[:n].astype(np.float16),
+                history_length=self.history_length[:n],
+                actions=self.actions[:n],
+                legal_mask=self.legal_mask[:n],
+                size=np.array([n]),
+                total_seen=np.array([self.total_seen]),
+            )
+
+    def load(self, path: str) -> None:
+        """Load buffer contents from a .npz file."""
+        data = np.load(path)
+        n = int(data["size"][0])
+        if n == 0:
+            return
+        n = min(n, self.capacity)
+        with self._lock:
+            self.obs[:n] = data["obs"][:n].astype(np.float32)
+            self.action_history[:n] = data["action_history"][:n].astype(np.float32)
+            self.history_length[:n] = data["history_length"][:n]
+            self.actions[:n] = data["actions"][:n]
+            self.legal_mask[:n] = data["legal_mask"][:n]
+            self.size = n
+            self.total_seen = int(data["total_seen"][0])

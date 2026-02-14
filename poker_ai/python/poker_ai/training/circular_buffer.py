@@ -176,3 +176,48 @@ class CircularBuffer:
     def __len__(self) -> int:
         with self._lock:
             return self.size
+
+    def save(self, path: str) -> None:
+        """Save buffer contents to a compressed .npz file (float16 for large arrays)."""
+        with self._lock:
+            n = self.size
+            if n == 0:
+                return
+            np.savez_compressed(
+                path,
+                obs=self.obs[:n].astype(np.float16),
+                action_history=self.action_history[:n].astype(np.float16),
+                history_length=self.history_length[:n],
+                actions=self.actions[:n],
+                rewards=self.rewards[:n].astype(np.float16),
+                next_obs=self.next_obs[:n].astype(np.float16),
+                next_action_history=self.next_action_history[:n].astype(np.float16),
+                next_history_length=self.next_history_length[:n],
+                next_legal_mask=self.next_legal_mask[:n],
+                dones=self.dones[:n].astype(np.float16),
+                legal_mask=self.legal_mask[:n],
+                position=np.array([self.position]),
+                size=np.array([n]),
+            )
+
+    def load(self, path: str) -> None:
+        """Load buffer contents from a .npz file."""
+        data = np.load(path)
+        n = int(data["size"][0])
+        if n == 0:
+            return
+        n = min(n, self.capacity)
+        with self._lock:
+            self.obs[:n] = data["obs"][:n].astype(np.float32)
+            self.action_history[:n] = data["action_history"][:n].astype(np.float32)
+            self.history_length[:n] = data["history_length"][:n]
+            self.actions[:n] = data["actions"][:n]
+            self.rewards[:n] = data["rewards"][:n].astype(np.float32)
+            self.next_obs[:n] = data["next_obs"][:n].astype(np.float32)
+            self.next_action_history[:n] = data["next_action_history"][:n].astype(np.float32)
+            self.next_history_length[:n] = data["next_history_length"][:n]
+            self.next_legal_mask[:n] = data["next_legal_mask"][:n]
+            self.dones[:n] = data["dones"][:n].astype(np.float32)
+            self.legal_mask[:n] = data["legal_mask"][:n]
+            self.position = int(data["position"][0]) % self.capacity
+            self.size = n
