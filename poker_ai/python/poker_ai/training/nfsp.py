@@ -620,7 +620,7 @@ class NFSPTrainer:
                     mask_t = torch.tensor(mask, device=self.device).unsqueeze(0)
 
                     with torch.no_grad():
-                        action = self.as_net.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
+                        action = self._unwrap(self.as_net).select_action(obs_t, ah_t, ah_len_t, mask_t).item()
                 else:
                     action = self._select_baseline_action(opponent, obs, mask)
 
@@ -681,11 +681,11 @@ class NFSPTrainer:
 
                 with torch.no_grad():
                     if player == br_seat:
-                        action = self.br_net.select_action(
+                        action = self._unwrap(self.br_net).select_action(
                             obs_t, ah_t, ah_len_t, mask_t, epsilon=0.0
                         ).item()
                     else:
-                        action = self.as_net.select_action(
+                        action = self._unwrap(self.as_net).select_action(
                             obs_t, ah_t, ah_len_t, mask_t
                         ).item()
 
