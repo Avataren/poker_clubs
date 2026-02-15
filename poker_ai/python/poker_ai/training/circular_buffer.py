@@ -195,7 +195,7 @@ class CircularBuffer:
         def _write_array(zf, name, arr, dtype=None):
             """Stream a numpy array into a zip entry in chunks."""
             out_dtype = np.dtype(dtype) if dtype else arr.dtype
-            with zf.open(f"{name}.npy", "w") as f:
+            with zf.open(f"{name}.npy", "w", force_zip64=True) as f:
                 # Write .npy header
                 header_buf = io.BytesIO()
                 np.lib.format.write_array_header_2_0(
@@ -222,7 +222,7 @@ class CircularBuffer:
         fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".npz")
         os.close(fd)
         try:
-            with zipfile.ZipFile(tmp_path, "w") as zf:
+            with zipfile.ZipFile(tmp_path, "w", allowZip64=True) as zf:
                 _write_array(zf, "obs", self.obs[:n], np.float16)
                 _write_array(zf, "action_history", self.action_history[:n], np.float16)
                 _write_array(zf, "history_length", self.history_length[:n])
