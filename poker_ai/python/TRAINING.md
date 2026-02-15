@@ -25,36 +25,47 @@ to all training stages:
 
 | Parameter | Value | Why |
 |---|---|---|
-| `--eta-start` | 0.1 | Anticipatory param start — mostly BR early for stronger best response |
+| `--eta-start` | 0.01 | Anticipatory param start — almost all BR early for strongest best response |
 | `--eta-end` | 0.4 | Ramps up AS mixing as training matures |
 | `--eta-ramp-steps` | 200000000 | Linear ramp over ~25M episodes (200M env steps) |
 | `--as-lr` | 0.0001 | Low AS learning rate prevents oscillation in the average strategy |
 | `--br-lr` | 0.0001 | Best response learning rate |
 | `--br-buffer-size` | 2000000 | ~250k hands of recent experience; ~30x batch size for diverse sampling |
-| `--as-buffer-size` | 4000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
+| `--as-buffer-size` | 3000000 | Large reservoir preserves long-run average, prevents catastrophic forgetting |
 | `--huber-delta` | 10.0 | Huber loss beta — squared error for <10 BB, linear above |
-| `--batch-size` | 16384 | Large batch for GPU saturation with async training |
+| `--batch-size` | 8192 | GPU-saturating batch for async training |
 | `--lr-min-factor` | 0.01 | Cosine LR decays to 1% of initial (1e-4 → 1e-6) |
-| `--lr-warmup-steps` | 4000000 | Linear warmup over ~500k episodes (4M env steps) |
+| `--lr-warmup-steps` | 8000000 | Linear warmup over ~1M episodes (8M env steps) |
 | `--tau` | 0.005 | Polyak soft target update (every round, replacing hard copy) |
 | `--epsilon-start` | 0.10 | Enough exploration while Q-values are still random |
 | `--epsilon-end` | 0.003 | Near-deterministic late in training |
-| `--epsilon-decay-steps` | 400000000 | Explore first ~50M episodes, exploit second half |
-| `--br-train-steps` | 24 | BR gradient steps per self-play round (async) |
-| `--as-train-steps` | 12 | AS gradient steps per self-play round (async) |
+| `--epsilon-decay-steps` | 1200000000 | Explore across full training horizon |
+| `--br-train-steps` | 24 | BR gradient steps per self-play round — more BR updates = stronger exploits |
+| `--as-train-steps` | 12 | AS gradient steps per self-play round — maintains 2:1 ratio with BR |
+
+**Note on train steps:** BR quality directly drives AS quality in NFSP. Fewer BR
+updates mean weaker counter-strategies, which leads to a weaker average strategy.
+Use at least 8/4 (BR/AS); 24/12 is recommended if your GPU can keep up.
 
 ### Async Training Parameters
 
 | Parameter | Value | Why |
 |---|---|---|
-| `--async` | flag | Concurrent self-play + training threads for ~2x throughput |
-| `--train-ahead` | 100 | Max training rounds ahead of self-play before sleeping |
-| `--sync-every` | 25 | Sync training weights → inference copies every N rounds |
+| `--async` | flag | Concurrent self-play + training threads for ~2-5x throughput |
+| `--train-ahead` | 4 | Max training rounds ahead of self-play before sleeping |
+| `--sync-every` | 15 | Sync training weights → inference copies every N rounds |
 | `--num-envs` | 2048 | Larger inference batches for better GPU utilization |
+| `--save-buffers` | flag | Save replay buffers alongside checkpoints (~11GB) |
+
+### Resume & Warm Restart Parameters
+
+| Parameter | Value | Why |
+|---|---|---|
 | `--freeze-as` | flag | Freeze AS weights permanently on resume |
 | `--as-freeze-duration` | 5000000 | Episodes to freeze AS before unfreezing (buffer diversity) |
 | `--as-warmup-episodes` | 2000000 | AS LR warmup after unfreeze (ramp from 1% → 100%) |
-| `--save-buffers` | flag | Save replay buffers alongside checkpoints (~5GB compressed) |
+| `--restart-schedules` | flag | Warm restart: reset LR/epsilon/eta to start values on resume |
+| `--reset-optimizers` | flag | Clear Adam momentum on resume (use with `--restart-schedules`) |
 
 ## Stage 1: Heads-Up (2 players)
 
@@ -63,39 +74,56 @@ Train from scratch. This builds the foundation: hand values, bet sizing, aggress
 ```bash
 python scripts/train.py \
   --num-players 2 \
-  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --device cuda --async --train-ahead 4 --sync-every 15 \
   --num-envs 2048 \
-  --batch-size 16384 \
-  --eta-start 0.1 \
+  --batch-size 8192 \
+  --eta-start 0.01 \
   --eta-end 0.4 \
   --eta-ramp-steps 200000000 \
   --br-lr 0.0001 --br-train-steps 24 \
   --as-lr 0.0001 --as-train-steps 12 \
   --br-buffer-size 2000000 \
-  --as-buffer-size 4000000 \
+  --as-buffer-size 3000000 \
   --epsilon-start 0.10 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 400000000 \
+  --epsilon-decay-steps 1200000000 \
   --huber-delta 10.0 \
-  --lr-warmup-steps 4000000 \
+  --lr-warmup-steps 8000000 \
   --lr-min-factor 0.01 \
   --tau 0.005 \
-  --eval-every 2500000 \
+  --eval-every 1000000 \
   --eval-hands 5000 \
   --checkpoint-every 5000000 \
-  --episodes 200000000 \
+  --save-buffers \
+  --episodes 300000000 \
   --checkpoint-dir checkpoints/hu \
   --log-dir logs/hu
 ```
 
 ### Resuming Heads-Up Training
 
-Resume from a checkpoint with schedules pinned to their final values (no re-warmup).
+**With saved buffers** (`--save-buffers` was used): buffers are loaded automatically
+on resume. No freeze/warmup needed — training continues seamlessly.
 
-**IMPORTANT:** Use `--as-freeze-duration` and `--as-warmup-episodes` when resuming.
-The AS reservoir buffer is not saved in checkpoints (unless `--save-buffers` was used),
-so on resume it fills with only the current BR policy's actions instead of the
-historical average. Training AS immediately on this data destroys the average strategy.
+```bash
+python scripts/train.py \
+  --resume checkpoints/hu/checkpoint_latest.pt \
+  --save-buffers \
+  --device cuda --async --train-ahead 4 --sync-every 15 \
+  --num-envs 2048 \
+  --batch-size 8192 \
+  --br-lr 0.0001 --br-train-steps 24 \
+  --as-lr 0.0001 --as-train-steps 12 \
+  --episodes 300000000 --eval-every 1000000 \
+  --eval-hands 5000 \
+  --checkpoint-dir checkpoints/hu --checkpoint-every 5000000 \
+  --log-dir logs/hu
+```
+
+**Without saved buffers:** use `--as-freeze-duration` and `--as-warmup-episodes`.
+The AS reservoir buffer fills with only the current BR policy's actions instead of
+the historical average. Training AS immediately on this narrow data destroys the
+average strategy.
 
 - `--as-freeze-duration N` freezes AS for N episodes while the buffer accumulates
   diverse data from evolving BR policies.
@@ -104,35 +132,70 @@ historical average. Training AS immediately on this data destroys the average st
 - The AS optimizer is automatically reset when the freeze ends (discards stale Adam
   momentum that would cause wild updates on the new buffer data).
 
-If you used `--save-buffers` during the original training run, buffers are loaded
-automatically on resume and freeze/warmup are less critical (but still recommended).
-
-A good value is ~5M episodes for both freeze and warmup — the 4M-sample AS buffer
-turns over ~10 times in that period, accumulating data from many different BR policies
-as BR evolves during training.
+A good value is ~5M episodes for both freeze and warmup — the 3M-sample AS buffer
+turns over several times in that period, accumulating data from many different BR
+policies as BR evolves during training.
 
 ```bash
 python scripts/train.py \
-  --resume checkpoints/hu/checkpoint_107000000.pt \
+  --resume checkpoints/hu/checkpoint_latest.pt \
   --as-freeze-duration 5000000 \
   --as-warmup-episodes 5000000 \
   --save-buffers \
-  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --device cuda --async --train-ahead 4 --sync-every 15 \
   --num-envs 2048 \
-  --batch-size 16384 \
-  --eta-start 0.4 \
-  --eta-end 0.4 \
-  --eta-ramp-steps 1 \
-  --epsilon-start 0.003 \
-  --epsilon-end 0.003 \
-  --epsilon-decay-steps 1 \
-  --lr-warmup-steps 0 \
+  --batch-size 8192 \
   --br-lr 0.0001 --br-train-steps 24 \
   --as-lr 0.0001 --as-train-steps 12 \
-  --episodes 200000000 --eval-every 2500000 \
+  --episodes 300000000 --eval-every 1000000 \
+  --eval-hands 5000 \
   --checkpoint-dir checkpoints/hu --checkpoint-every 5000000 \
   --log-dir logs/hu
 ```
+
+### Warm Restart
+
+Use `--restart-schedules` to reset LR, epsilon, and eta schedules back to their
+start values while keeping trained model weights and buffers. This is useful when
+a run has converged (LR near minimum, epsilon near zero) but you want to continue
+training with renewed exploration and a fresh learning rate cycle.
+
+This implements **cosine annealing with warm restarts** — a well-established technique
+for escaping local minima and finding better solutions.
+
+- Schedules restart from step 0: epsilon ramps down again, LR does warmup + cosine
+  decay, eta ramps from start to end.
+- Model weights are fully preserved — only the schedule counters reset.
+- Use `--reset-optimizers` to also clear Adam momentum/variance state for a cleaner
+  restart (recommended).
+- You can override schedule parameters (e.g. shorter `--epsilon-decay-steps`) for
+  the restart cycle.
+- The schedule offset is saved in checkpoints, so subsequent resumes continue from
+  the correct position.
+
+```bash
+python scripts/train.py \
+  --resume checkpoints/hu/checkpoint_latest.pt \
+  --restart-schedules --reset-optimizers \
+  --save-buffers \
+  --device cuda --async --train-ahead 4 --sync-every 15 \
+  --num-envs 2048 \
+  --batch-size 8192 \
+  --eta-start 0.01 --eta-end 0.4 --eta-ramp-steps 200000000 \
+  --epsilon-start 0.05 --epsilon-end 0.003 --epsilon-decay-steps 600000000 \
+  --lr-warmup-steps 4000000 --lr-min-factor 0.01 \
+  --br-lr 0.0001 --br-train-steps 24 \
+  --as-lr 0.0001 --as-train-steps 12 \
+  --episodes 500000000 --eval-every 1000000 \
+  --eval-hands 5000 \
+  --checkpoint-dir checkpoints/hu_restart \
+  --checkpoint-every 5000000 \
+  --log-dir logs/hu_restart
+```
+
+**Tip:** Use a lower `--epsilon-start` (e.g. 0.05) on restarts since the network
+already has reasonable Q-values — it doesn't need as much random exploration as
+training from scratch.
 
 **What to watch:**
 - `vs Caller` should go positive within the first few million episodes
@@ -157,16 +220,16 @@ importance, pot odds with multiple callers.
 ```bash
 python scripts/train.py \
   --num-players 6 \
-  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --device cuda --async --train-ahead 4 --sync-every 15 \
   --num-envs 512 \
-  --batch-size 16384 \
+  --batch-size 8192 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 100000000 \
   --br-lr 0.0001 --br-train-steps 24 \
   --as-lr 0.0001 --as-train-steps 12 \
   --br-buffer-size 2000000 \
-  --as-buffer-size 4000000 \
+  --as-buffer-size 3000000 \
   --epsilon-start 0.04 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 100000000 \
@@ -176,6 +239,7 @@ python scripts/train.py \
   --eval-every 2500000 \
   --eval-hands 3000 \
   --checkpoint-every 5000000 \
+  --save-buffers \
   --episodes 50000000 \
   --checkpoint-dir checkpoints/6max \
   --log-dir logs/6max \
@@ -204,16 +268,16 @@ Fine-tune from the best 6-max checkpoint. Jump from 6 to 9 is smaller than
 ```bash
 python scripts/train.py \
   --num-players 9 \
-  --device cuda --async --train-ahead 100 --sync-every 25 \
+  --device cuda --async --train-ahead 4 --sync-every 15 \
   --num-envs 256 \
-  --batch-size 16384 \
+  --batch-size 8192 \
   --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 60000000 \
   --br-lr 0.0001 --br-train-steps 24 \
   --as-lr 0.0001 --as-train-steps 12 \
   --br-buffer-size 2000000 \
-  --as-buffer-size 4000000 \
+  --as-buffer-size 3000000 \
   --epsilon-start 0.03 \
   --epsilon-end 0.003 \
   --epsilon-decay-steps 60000000 \
@@ -223,6 +287,7 @@ python scripts/train.py \
   --eval-every 2500000 \
   --eval-hands 2000 \
   --checkpoint-every 5000000 \
+  --save-buffers \
   --episodes 30000000 \
   --checkpoint-dir checkpoints/9ring \
   --log-dir logs/9ring \
@@ -328,21 +393,21 @@ so the model works across different blind levels and tournaments.
 - **Don't delete earlier checkpoints** — you may want to restart fine-tuning with
   different hyperparameters
 - **Monitor with TensorBoard:** `tensorboard --logdir logs/`
-- **Milestone eval** can run in parallel with training on the same GPU (it only
-  does inference)
+- **Eval runs on CPU** in a background thread, so GPU training continues at full
+  speed during evaluation
 - **Resuming interrupted training:** use `--resume checkpoints/hu/checkpoint_latest.pt`
-  with the same arguments to continue where you left off. Pin schedules to final
-  values (epsilon, eta, warmup) to avoid re-ramping. **Always use `--as-freeze-duration`
-  and `--as-warmup-episodes`** to protect the AS network from collapsing on narrow
-  post-resume buffer data. Use `--save-buffers` to avoid this problem on future resumes.
+  with the same arguments to continue where you left off. With `--save-buffers`,
+  buffers load automatically and training resumes seamlessly.
+- **Without saved buffers on resume:** use `--as-freeze-duration` and
+  `--as-warmup-episodes` to protect AS from collapsing on narrow post-resume data.
+- **Warm restart** (`--restart-schedules`): resets LR/epsilon/eta schedules to start
+  values while keeping model weights. Use `--reset-optimizers` to also clear Adam
+  state. Great for continued training after a run has converged.
 - The reward signal is normalized to big blinds, so models transfer across blind levels
-- **RAM usage:** the 4M AS reservoir uses ~10GB, 2M BR circular uses ~12GB (~22GB total).
-  With 31GB system RAM this leaves ~9GB for the OS and Rust engine.
-- **Async mode** runs self-play and training concurrently. Unless `--save-buffers` was
-  used, buffers refill from scratch on resume — training waits for buffer warmup before
-  starting gradient updates. **Use `--as-freeze-duration` + `--as-warmup-episodes`**
-  on resume so AS training waits for diverse data and ramps in gently.
+- **RAM usage:** the 3M AS reservoir uses ~7GB, 2M BR circular uses ~12GB (~19GB total).
 - **Buffer persistence** (`--save-buffers`): saves BR and AS buffers as compressed
-  `.npz` files (~5GB total) alongside each checkpoint. On resume, buffers are loaded
-  automatically if found in the checkpoint directory. Buffer sizes are clamped to the
-  current capacity, so you can resize buffers across resumes.
+  `.npz` files (~11GB total) alongside the latest checkpoint. On resume, buffers are
+  loaded automatically if found in the checkpoint directory.
+- **Train steps matter:** BR quality drives AS quality in NFSP. Use at least 8/4
+  (BR/AS) train steps per round. With 24/12, training is heavier per round but
+  produces stronger counter-strategies and better convergence.
