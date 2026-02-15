@@ -62,6 +62,8 @@ def main():
                         help="Warm restart: reset LR/epsilon/eta schedules to start values on resume")
     parser.add_argument("--reset-optimizers", action="store_true",
                         help="Reset Adam optimizer state on resume (use with --restart-schedules)")
+    parser.add_argument("--no-load-buffers", action="store_true",
+                        help="Skip loading replay buffers on resume (start with fresh buffers)")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -135,7 +137,7 @@ def main():
         trainer = NFSPTrainer(config)
 
     if args.resume:
-        trainer.load_checkpoint(args.resume)
+        trainer.load_checkpoint(args.resume, load_buffers=not args.no_load_buffers)
         if args.restart_schedules:
             trainer.restart_schedules(reset_optimizers=args.reset_optimizers)
         if args.bootstrap_as:

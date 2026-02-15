@@ -1257,7 +1257,7 @@ class NFSPTrainer:
         elapsed = time.time() - t0
         print(f"  AS buffer bootstrapped: {len(self.as_buffer):,} samples ({elapsed:.1f}s)")
 
-    def load_checkpoint(self, path: str):
+    def load_checkpoint(self, path: str, load_buffers: bool = True):
         checkpoint = torch.load(path, map_location=self.device, weights_only=True)
 
         # Detect old checkpoint format (pre-dueling: has value_head, no value_stream)
@@ -1307,16 +1307,19 @@ class NFSPTrainer:
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
 
         # Try to load saved buffers from the same checkpoint directory
-        ckpt_dir = Path(path).parent
-        br_buf_path = ckpt_dir / "br_buffer_latest.npz"
-        as_buf_path = ckpt_dir / "as_buffer_latest.npz"
-        if br_buf_path.exists() and as_buf_path.exists():
-            import time as _time
-            t0 = _time.time()
-            self.br_buffer.load(str(br_buf_path))
-            self.as_buffer.load(str(as_buf_path))
-            elapsed = _time.time() - t0
-            print(f"  Loaded buffers: BR={len(self.br_buffer):,}, AS={len(self.as_buffer):,} ({elapsed:.1f}s)")
+        if load_buffers:
+            ckpt_dir = Path(path).parent
+            br_buf_path = ckpt_dir / "br_buffer_latest.npz"
+            as_buf_path = ckpt_dir / "as_buffer_latest.npz"
+            if br_buf_path.exists() and as_buf_path.exists():
+                import time as _time
+                t0 = _time.time()
+                self.br_buffer.load(str(br_buf_path))
+                self.as_buffer.load(str(as_buf_path))
+                elapsed = _time.time() - t0
+                print(f"  Loaded buffers: BR={len(self.br_buffer):,}, AS={len(self.as_buffer):,} ({elapsed:.1f}s)")
+        else:
+            print("  Skipping buffer load (--no-load-buffers)")
 
         # Set AS freeze duration if configured
         if self.config.as_freeze_duration > 0:
