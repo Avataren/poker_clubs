@@ -4,6 +4,7 @@ Uses pre-allocated numpy arrays (Structure of Arrays) for zero-allocation
 batch insert and fast random sampling.
 """
 
+import io
 import threading
 
 import numpy as np
@@ -178,28 +179,68 @@ class CircularBuffer:
             return self.size
 
     def save(self, path: str) -> None:
-        """Save buffer contents to a compressed .npz file (float16 for large arrays)."""
+        """Save buffer contents to an .npz file (float16 for large arrays).
+
+        Streams data in chunks to keep peak memory overhead under ~100MB.
+        """
+        import tempfile, os, zipfile
         with self._lock:
             n = self.size
             if n == 0:
                 return
-            # Snapshot under lock, compress/write outside
-            snapshot = dict(
-                obs=self.obs[:n].astype(np.float16),
-                action_history=self.action_history[:n].astype(np.float16),
-                history_length=self.history_length[:n].copy(),
-                actions=self.actions[:n].copy(),
-                rewards=self.rewards[:n].astype(np.float16),
-                next_obs=self.next_obs[:n].astype(np.float16),
-                next_action_history=self.next_action_history[:n].astype(np.float16),
-                next_history_length=self.next_history_length[:n].copy(),
-                next_legal_mask=self.next_legal_mask[:n].copy(),
-                dones=self.dones[:n].astype(np.float16),
-                legal_mask=self.legal_mask[:n].copy(),
-                position=np.array([self.position]),
-                size=np.array([n]),
-            )
-        np.savez_compressed(path, **snapshot)
+            pos = self.position
+
+        CHUNK = 50_000  # rows per chunk
+
+        def _write_array(zf, name, arr, dtype=None):
+            """Stream a numpy array into a zip entry in chunks."""
+            out_dtype = np.dtype(dtype) if dtype else arr.dtype
+            with zf.open(f"{name}.npy", "w") as f:
+                # Write .npy header
+                header_buf = io.BytesIO()
+                np.lib.format.write_array_header_2_0(
+                    header_buf,
+                    {"descr": np.lib.format.dtype_to_descr(out_dtype),
+                     "fortran_order": False,
+                     "shape": arr.shape}
+                )
+                f.write(header_buf.getvalue())
+                # Stream data in chunks
+                for start in range(0, len(arr), CHUNK):
+                    end = min(start + CHUNK, len(arr))
+                    chunk = arr[start:end]
+                    if dtype and np.dtype(dtype) != arr.dtype:
+                        chunk = chunk.astype(dtype)
+                    f.write(chunk.tobytes())
+
+        def _write_small(zf, name, val):
+            buf = io.BytesIO()
+            np.save(buf, np.array(val))
+            zf.writestr(f"{name}.npy", buf.getvalue())
+
+        dir_name = os.path.dirname(path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".npz")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(tmp_path, "w") as zf:
+                _write_array(zf, "obs", self.obs[:n], np.float16)
+                _write_array(zf, "action_history", self.action_history[:n], np.float16)
+                _write_array(zf, "history_length", self.history_length[:n])
+                _write_array(zf, "actions", self.actions[:n])
+                _write_array(zf, "rewards", self.rewards[:n], np.float16)
+                _write_array(zf, "next_obs", self.next_obs[:n], np.float16)
+                _write_array(zf, "next_action_history", self.next_action_history[:n], np.float16)
+                _write_array(zf, "next_history_length", self.next_history_length[:n])
+                _write_array(zf, "next_legal_mask", self.next_legal_mask[:n])
+                _write_array(zf, "dones", self.dones[:n], np.float16)
+                _write_array(zf, "legal_mask", self.legal_mask[:n])
+                _write_small(zf, "position", [pos])
+                _write_small(zf, "size", [n])
+            os.replace(tmp_path, path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     def load(self, path: str) -> None:
         """Load buffer contents from a .npz file."""

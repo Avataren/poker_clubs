@@ -91,15 +91,29 @@ class AsyncNFSPTrainer(NFSPTrainer):
             raise RuntimeError(
                 f"Self-play thread crashed: {self._self_play_error}"
             ) from self._self_play_error
+        # Flush pending GPU work so self-play's device syncs (e.g. .cpu())
+        # don't block waiting on our kernels, which would prevent it from
+        # reaching the pause check.
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
         self._pause_event.set()
-        if not self._paused_ack.wait(timeout=30.0):
-            # Check if thread crashed while we were waiting
-            if self._self_play_error is not None:
-                raise RuntimeError(
-                    f"Self-play thread crashed: {self._self_play_error}"
-                ) from self._self_play_error
-            print("WARNING: self-play pause timeout — waiting indefinitely")
-            self._paused_ack.wait()
+        # Poll with repeated cuda.synchronize — self-play may have submitted
+        # GPU work (e.g. select_action) just before seeing the pause flag,
+        # and its .cpu() call will block until we drain the GPU.
+        for _ in range(300):  # 300 × 0.1s = 30s total
+            if self._paused_ack.wait(timeout=0.1):
+                return
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+        # Check if thread crashed while we were waiting
+        if self._self_play_error is not None:
+            raise RuntimeError(
+                f"Self-play thread crashed: {self._self_play_error}"
+            ) from self._self_play_error
+        print("WARNING: self-play pause timeout — waiting indefinitely")
+        while not self._paused_ack.wait(timeout=1.0):
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
 
     def _resume_self_play(self):
         """Resume self-play after pause."""
@@ -109,9 +123,8 @@ class AsyncNFSPTrainer(NFSPTrainer):
     def _sync_inference_weights(self):
         """Copy training network weights to inference copies.
 
-        Pauses self-play to avoid CUDA data race between the weight copy
-        (main thread's stream) and forward passes (self-play thread's stream)
-        on the same parameter tensors.
+        Pauses self-play to avoid data race between the weight copy
+        and forward passes on the same parameter tensors.
         """
         self._pause_self_play()
         with torch.no_grad():
@@ -257,13 +270,18 @@ class AsyncNFSPTrainer(NFSPTrainer):
         print("Self-play thread started")
 
         # Minimum buffer fill before training begins.
+        # Skip warmup if buffers were loaded from checkpoint (already have data).
         # Use at least 50% of buffer capacity to ensure diversity, and at least
         # 3x per-round samples so each sample is drawn <0.33 times per round.
         br_per_round = self.config.br_train_steps * self.config.batch_size
         as_per_round = self.config.as_train_steps * self.config.batch_size
         min_br_samples = max(self.config.br_buffer_size // 2, 3 * br_per_round)
         min_as_samples = max(self.config.as_buffer_size // 4, 3 * as_per_round)
-        warmup_done = False
+        warmup_done = (len(self.br_buffer) >= min_br_samples
+                       and len(self.as_buffer) >= min_as_samples)
+        if warmup_done:
+            print(f"Buffers already populated (BR: {len(self.br_buffer):,}, "
+                  f"AS: {len(self.as_buffer):,}), skipping warmup")
 
         try:
             while True:

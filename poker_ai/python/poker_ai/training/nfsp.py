@@ -767,6 +767,8 @@ class NFSPTrainer:
             "as_net": self._unwrap(self.as_net).state_dict(),
             "br_optimizer": self.br_optimizer.state_dict(),
             "as_optimizer": self.as_optimizer.state_dict(),
+            "br_updates": self.br_updates,
+            "as_updates": self.as_updates,
         }
         if self.use_amp:
             checkpoint["br_scaler"] = self.br_scaler.state_dict()
@@ -777,15 +779,11 @@ class NFSPTrainer:
 
         if self.config.save_buffers:
             import time as _time
-            import shutil
             t0 = _time.time()
-            br_path = path / f"br_buffer_{episode}.npz"
-            as_path = path / f"as_buffer_{episode}.npz"
+            br_path = path / "br_buffer_latest.npz"
+            as_path = path / "as_buffer_latest.npz"
             self.br_buffer.save(str(br_path))
             self.as_buffer.save(str(as_path))
-            # Copy to "latest" (avoids re-compressing)
-            shutil.copy2(br_path, path / "br_buffer_latest.npz")
-            shutil.copy2(as_path, path / "as_buffer_latest.npz")
             elapsed = _time.time() - t0
             br_mb = br_path.stat().st_size / 1e6 if br_path.exists() else 0
             as_mb = as_path.stat().st_size / 1e6 if as_path.exists() else 0
@@ -842,9 +840,13 @@ class NFSPTrainer:
         max_hist = self.config.max_history_len
         hist_dim = self.config.history_input_dim
 
-        # Use unwrapped AS network for inference
-        as_model = self._unwrap(self.as_net)
-        as_model.eval()
+        # Use AS network for inference — prefer compiled version (avoids ROCm SDPA issues)
+        as_model = self.as_net
+        if hasattr(as_model, '_orig_mod'):
+            # torch.compile'd — use it directly (already handles ROCm quirks)
+            pass
+        else:
+            as_model.eval()
 
         # Init envs
         results = env.reset_all()
@@ -983,6 +985,8 @@ class NFSPTrainer:
                 self.as_scaler.load_state_dict(checkpoint["as_scaler"])
         self.total_steps = checkpoint["total_steps"]
         self.total_episodes = checkpoint["episode"]
+        self.br_updates = checkpoint.get("br_updates", 0)
+        self.as_updates = checkpoint.get("as_updates", 0)
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
 
         # Try to load saved buffers from the same checkpoint directory

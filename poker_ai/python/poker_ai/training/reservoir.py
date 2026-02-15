@@ -3,6 +3,7 @@
 Uses pre-allocated numpy arrays for zero-allocation batch operations.
 """
 
+import io
 import threading
 
 import numpy as np
@@ -150,22 +151,59 @@ class ReservoirBuffer:
             return self.size
 
     def save(self, path: str) -> None:
-        """Save buffer contents to a compressed .npz file (float16 for large arrays)."""
+        """Save buffer contents to an .npz file (float16 for large arrays).
+
+        Streams data in chunks to keep peak memory overhead under ~100MB.
+        """
+        import tempfile, os, zipfile
         with self._lock:
             n = self.size
             if n == 0:
                 return
-            # Snapshot under lock, compress/write outside
-            snapshot = dict(
-                obs=self.obs[:n].astype(np.float16),
-                action_history=self.action_history[:n].astype(np.float16),
-                history_length=self.history_length[:n].copy(),
-                actions=self.actions[:n].copy(),
-                legal_mask=self.legal_mask[:n].copy(),
-                size=np.array([n]),
-                total_seen=np.array([self.total_seen]),
-            )
-        np.savez_compressed(path, **snapshot)
+            total_seen = self.total_seen
+
+        CHUNK = 50_000
+
+        def _write_array(zf, name, arr, dtype=None):
+            out_dtype = np.dtype(dtype) if dtype else arr.dtype
+            with zf.open(f"{name}.npy", "w") as f:
+                header_buf = io.BytesIO()
+                np.lib.format.write_array_header_2_0(
+                    header_buf,
+                    {"descr": np.lib.format.dtype_to_descr(out_dtype),
+                     "fortran_order": False,
+                     "shape": arr.shape}
+                )
+                f.write(header_buf.getvalue())
+                for start in range(0, len(arr), CHUNK):
+                    end = min(start + CHUNK, len(arr))
+                    chunk = arr[start:end]
+                    if dtype and np.dtype(dtype) != arr.dtype:
+                        chunk = chunk.astype(dtype)
+                    f.write(chunk.tobytes())
+
+        def _write_small(zf, name, val):
+            buf = io.BytesIO()
+            np.save(buf, np.array(val))
+            zf.writestr(f"{name}.npy", buf.getvalue())
+
+        dir_name = os.path.dirname(path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".npz")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(tmp_path, "w") as zf:
+                _write_array(zf, "obs", self.obs[:n], np.float16)
+                _write_array(zf, "action_history", self.action_history[:n], np.float16)
+                _write_array(zf, "history_length", self.history_length[:n])
+                _write_array(zf, "actions", self.actions[:n])
+                _write_array(zf, "legal_mask", self.legal_mask[:n])
+                _write_small(zf, "size", [n])
+                _write_small(zf, "total_seen", [total_seen])
+            os.replace(tmp_path, path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     def load(self, path: str) -> None:
         """Load buffer contents from a .npz file."""
