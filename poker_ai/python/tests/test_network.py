@@ -39,10 +39,10 @@ def test_poker_net_masking():
 
     policy_logits, q_values = net(obs, history_hidden, legal_mask)
 
-    # Illegal actions should have very large negative values (effectively -inf)
-    assert policy_logits[0, 2] < -1e30
-    assert policy_logits[0, 3] < -1e30
-    assert q_values[0, 4] < -1e30
+    # Illegal actions should have large negative values (masked with -1e4)
+    assert policy_logits[0, 2] < -1e3
+    assert policy_logits[0, 3] < -1e3
+    assert q_values[0, 4] < -1e3
 
 
 def test_br_net_action_selection():
