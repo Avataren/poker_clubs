@@ -485,19 +485,24 @@ class NFSPTrainer:
         self.save_checkpoint(episode_count)
 
     def evaluate(self, episode: int):
-        """Evaluate AS network vs baselines."""
-        # Fingerprint: deterministic forward pass to detect silent model changes
-        eval_model = self._unwrap(self.as_net)
+        """Evaluate AS network vs baselines.
+
+        Uses a CPU copy of the model to avoid GPU contention with self-play.
+        """
+        # Create CPU copy for eval (avoids GPU contention in async mode)
+        eval_model = copy.deepcopy(self._unwrap(self.as_net)).to("cpu")
         eval_model.eval()
-        with torch.no_grad(), torch.autocast(device_type=self.device.type, enabled=False):
-            torch.manual_seed(42)
-            probe_obs = torch.randn(1, 462, device=self.device, dtype=torch.float32) * 0.01
-            probe_ah = torch.zeros(1, self.config.max_history_len, 11, device=self.device, dtype=torch.float32)
-            probe_len = torch.zeros(1, device=self.device, dtype=torch.long)
-            probe_mask = torch.ones(1, 9, device=self.device, dtype=torch.bool)
+
+        # Fingerprint: deterministic forward pass to detect silent model changes
+        with torch.no_grad():
+            rng = torch.Generator()
+            rng.manual_seed(42)
+            probe_obs = torch.randn(1, 462, dtype=torch.float32, generator=rng) * 0.01
+            probe_ah = torch.zeros(1, self.config.max_history_len, 11, dtype=torch.float32)
+            probe_len = torch.zeros(1, dtype=torch.long)
+            probe_mask = torch.ones(1, 9, dtype=torch.bool)
             probe_logits = eval_model.forward_logits(probe_obs, probe_ah, probe_len, probe_mask)
             if probe_logits.isnan().any():
-                # Check where NaN originates
                 h = eval_model.history_encoder(probe_ah, probe_len)
                 x = torch.cat([probe_obs, h], dim=-1)
                 trunk_out = eval_model.net.trunk(x)
@@ -508,9 +513,10 @@ class NFSPTrainer:
                 top3 = probe_logits[0].topk(3)
                 print(f"  [eval probe] logits top3: {list(zip(top3.indices.tolist(), [f'{v:.2f}' for v in top3.values.tolist()]))}")
 
-        vs_random = self._eval_vs_random(num_hands=self.config.eval_hands)
-        vs_caller = self._eval_vs_caller(num_hands=self.config.eval_hands)
-        vs_tag = self._eval_vs_tag(num_hands=self.config.eval_hands)
+        vs_random = self._eval_vs(eval_model, "random", num_hands=self.config.eval_hands)
+        vs_caller = self._eval_vs(eval_model, "caller", num_hands=self.config.eval_hands)
+        vs_tag = self._eval_vs(eval_model, "tag", num_hands=self.config.eval_hands)
+        del eval_model
 
         print(
             f"  Eval @ {episode:,}: "
@@ -545,6 +551,11 @@ class NFSPTrainer:
     def _eval_vs_tag(self, num_hands: int = 1000) -> EvalStats:
         """Evaluate AS network vs tight-aggressive scripted baseline."""
         return self._eval_heads_up(opponent="tag", num_hands=num_hands)
+
+    def _eval_vs(self, eval_model, opponent: str, num_hands: int) -> EvalStats:
+        """Evaluate a model vs baseline on CPU."""
+        return self._eval_heads_up(opponent=opponent, num_hands=num_hands,
+                                   eval_model=eval_model, eval_device=torch.device("cpu"))
 
     def eval_exploitability_proxy(self, num_hands: int = 10000) -> EvalStats:
         """Approximate exploitability via BR-vs-AS heads-up.
@@ -613,7 +624,8 @@ class NFSPTrainer:
 
         return int(legal[0])
 
-    def _eval_heads_up(self, opponent: str, num_hands: int) -> EvalStats:
+    def _eval_heads_up(self, opponent: str, num_hands: int,
+                       eval_model=None, eval_device=None) -> EvalStats:
         """Run heads-up evaluation."""
         env = PokerEnv(
             num_players=2,
@@ -622,15 +634,19 @@ class NFSPTrainer:
             big_blind=self.config.big_blind,
         )
 
+        if eval_model is None:
+            eval_model = self._unwrap(self.as_net)
+            eval_model.eval()
+        if eval_device is None:
+            eval_device = self.device
+
         max_hist = self.config.max_history_len
         hand_returns_bb100 = np.zeros(num_hands, dtype=np.float64)
         seat_returns_bb100: list[list[float]] = [[], []]
-        action_counts = np.zeros(9, dtype=np.int64)  # track hero action distribution
-        eval_model = self._unwrap(self.as_net)
-        eval_model.eval()
+        action_counts = np.zeros(9, dtype=np.int64)
 
         for hand_idx in range(num_hands):
-            hero_seat = hand_idx % 2  # balance positional bias across buttons/blinds
+            hero_seat = hand_idx % 2
             player, obs, mask = env.reset()
             action_history: list[list[np.ndarray]] = [[], []]
             done = False
@@ -639,10 +655,10 @@ class NFSPTrainer:
                 if player == hero_seat:
                     static_obs = extract_static_features_batch(obs.reshape(1, -1))[0]
                     ah_padded, ah_len = pad_action_history(action_history[player], max_hist)
-                    obs_t = torch.tensor(static_obs, device=self.device).unsqueeze(0)
-                    ah_t = torch.tensor(ah_padded, device=self.device).unsqueeze(0)
-                    ah_len_t = torch.tensor([ah_len], device=self.device)
-                    mask_t = torch.tensor(mask, device=self.device).unsqueeze(0)
+                    obs_t = torch.tensor(static_obs, device=eval_device).unsqueeze(0)
+                    ah_t = torch.tensor(ah_padded, device=eval_device).unsqueeze(0)
+                    ah_len_t = torch.tensor([ah_len], device=eval_device)
+                    mask_t = torch.tensor(mask, device=eval_device).unsqueeze(0)
 
                     with torch.no_grad():
                         action = eval_model.select_action(obs_t, ah_t, ah_len_t, mask_t).item()

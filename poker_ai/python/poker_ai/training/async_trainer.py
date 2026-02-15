@@ -66,12 +66,18 @@ class AsyncNFSPTrainer(NFSPTrainer):
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()  # main thread sets to request pause
         self._paused_ack = threading.Event()   # self-play sets to acknowledge pause
+        self._weights_dirty = threading.Event()  # signals self-play to copy new weights
         self._step_lock = threading.Lock()
         self._self_play_thread = None
         self._self_play_error = None  # store exception from self-play thread
+        self._eval_thread = None  # background eval thread
         # Track self-play rounds to pace training
         self._self_play_rounds = 0
         self._as_unfroze_logged = False
+
+        # CPU staging buffers for weight sync (training thread writes, self-play reads)
+        self._br_staged = [p.data.clone() for p in self._unwrap(self.br_net).parameters()]
+        self._as_staged = [p.data.clone() for p in self._unwrap(self.as_net).parameters()]
 
         inf_params = sum(p.numel() for p in self._unwrap(self.br_inference).parameters())
         inf_params += sum(p.numel() for p in self._unwrap(self.as_inference).parameters())
@@ -86,34 +92,21 @@ class AsyncNFSPTrainer(NFSPTrainer):
 
     def _pause_self_play(self):
         """Request self-play pause and wait for acknowledgment."""
-        # If self-play thread has crashed, don't wait
         if self._self_play_error is not None:
             raise RuntimeError(
                 f"Self-play thread crashed: {self._self_play_error}"
             ) from self._self_play_error
-        # Flush pending GPU work so self-play's device syncs (e.g. .cpu())
-        # don't block waiting on our kernels, which would prevent it from
-        # reaching the pause check.
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
         self._pause_event.set()
-        # Poll with repeated cuda.synchronize — self-play may have submitted
-        # GPU work (e.g. select_action) just before seeing the pause flag,
-        # and its .cpu() call will block until we drain the GPU.
-        for _ in range(300):  # 300 × 0.1s = 30s total
-            if self._paused_ack.wait(timeout=0.1):
-                return
-            if self.device.type == "cuda":
-                torch.cuda.synchronize()
-        # Check if thread crashed while we were waiting
-        if self._self_play_error is not None:
-            raise RuntimeError(
-                f"Self-play thread crashed: {self._self_play_error}"
-            ) from self._self_play_error
-        print("WARNING: self-play pause timeout — waiting indefinitely")
-        while not self._paused_ack.wait(timeout=1.0):
-            if self.device.type == "cuda":
-                torch.cuda.synchronize()
+        # Don't call cuda.synchronize() here — on ROCm it can deadlock with
+        # self-play's .cpu() calls. Just wait for self-play to finish its
+        # current run_episodes iteration and hit the pause check.
+        if not self._paused_ack.wait(timeout=120.0):
+            if self._self_play_error is not None:
+                raise RuntimeError(
+                    f"Self-play thread crashed: {self._self_play_error}"
+                ) from self._self_play_error
+            print("WARNING: self-play pause timeout (120s) — waiting indefinitely")
+            self._paused_ack.wait()
 
     def _resume_self_play(self):
         """Resume self-play after pause."""
@@ -121,38 +114,54 @@ class AsyncNFSPTrainer(NFSPTrainer):
         self._pause_event.clear()
 
     def _sync_inference_weights(self):
-        """Copy training network weights to inference copies.
+        """Stage training weights for self-play to pick up.
 
-        Pauses self-play to avoid data race between the weight copy
-        and forward passes on the same parameter tensors.
+        Copies weights to CPU staging buffers and signals the self-play thread.
+        Self-play applies the update between episodes — no pause needed.
         """
-        self._pause_self_play()
         with torch.no_grad():
-            for p_inf, p_train in zip(
-                self._unwrap(self.br_inference).parameters(),
+            for staged, p_train in zip(
+                self._br_staged,
                 self._unwrap(self.br_net).parameters(),
             ):
-                p_inf.data.copy_(p_train.data)
-            for p_inf, p_train in zip(
-                self._unwrap(self.as_inference).parameters(),
+                staged.copy_(p_train.data)
+            for staged, p_train in zip(
+                self._as_staged,
                 self._unwrap(self.as_net).parameters(),
             ):
-                p_inf.data.copy_(p_train.data)
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
-        self._resume_self_play()
+                staged.copy_(p_train.data)
+        self._weights_dirty.set()
+
+    def _apply_staged_weights(self):
+        """Copy staged weights to inference networks (called from self-play thread)."""
+        with torch.no_grad():
+            for p_inf, staged in zip(
+                self._unwrap(self.br_inference).parameters(),
+                self._br_staged,
+            ):
+                p_inf.data.copy_(staged)
+            for p_inf, staged in zip(
+                self._unwrap(self.as_inference).parameters(),
+                self._as_staged,
+            ):
+                p_inf.data.copy_(staged)
+        self._weights_dirty.clear()
 
     def _self_play_loop(self):
         """Background thread: run self-play episodes continuously."""
         try:
             torch.set_float32_matmul_precision("high")
             while not self._stop_event.is_set():
-                # Check if paused (e.g. during weight sync or evaluation)
+                # Check if paused (e.g. during evaluation or checkpointing)
                 if self._pause_event.is_set():
                     self._paused_ack.set()  # acknowledge we're paused
                     while self._pause_event.is_set() and not self._stop_event.is_set():
                         time.sleep(0.001)
                     continue
+
+                # Apply new weights if training thread staged an update
+                if self._weights_dirty.is_set():
+                    self._apply_staged_weights()
 
                 epsilon = self.get_epsilon()
                 eta = self.get_eta()
@@ -174,6 +183,14 @@ class AsyncNFSPTrainer(NFSPTrainer):
             raise RuntimeError(
                 f"Self-play thread crashed: {self._self_play_error}"
             ) from self._self_play_error
+
+    def _run_eval_background(self, episode: int):
+        """Run evaluation on CPU in a background thread."""
+        try:
+            self.evaluate(episode)
+        except Exception as e:
+            print(f"  [eval] ERROR: {e}")
+            traceback.print_exc()
 
     def _do_logging_eval_checkpoint(
         self, episode_count, total_steps, start_time, episodes_at_start,
@@ -205,24 +222,43 @@ class AsyncNFSPTrainer(NFSPTrainer):
             while episode_count >= next_log:
                 next_log += 10000
 
-        # Evaluation and checkpointing — keep self-play paused if both happen
+        # Evaluation and checkpointing
         need_eval = episode_count >= next_eval
         need_checkpoint = episode_count >= next_checkpoint
-        paused_for_eval_or_ckpt = False
+        paused_for_ckpt = False
 
-        if need_eval or (need_checkpoint and self.config.save_buffers):
-            self._pause_self_play()
-            paused_for_eval_or_ckpt = True
-
-        while episode_count >= next_eval:
-            self.evaluate(next_eval)
+        # Eval runs on CPU in a background thread — training continues uninterrupted.
+        # Skip if a previous eval is still running.
+        if episode_count >= next_eval:
+            if self._eval_thread is None or not self._eval_thread.is_alive():
+                eval_episode = next_eval
+                self._eval_thread = threading.Thread(
+                    target=self._run_eval_background, args=(eval_episode,),
+                    daemon=True, name="eval",
+                )
+                self._eval_thread.start()
             next_eval += self.config.eval_every
+            # Advance past any thresholds crossed while previous eval was slow
+            with self._step_lock:
+                current_ep = self.total_episodes
+            while current_ep >= next_eval:
+                next_eval += self.config.eval_every
+
+        # Only pause for checkpoint with save_buffers (needs consistent buffer snapshot)
+        if need_checkpoint and self.config.save_buffers:
+            # Wait for any in-flight eval to finish before pausing
+            if self._eval_thread is not None and self._eval_thread.is_alive():
+                self._eval_thread.join()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            self._pause_self_play()
+            paused_for_ckpt = True
 
         while episode_count >= next_checkpoint:
             self.save_checkpoint(next_checkpoint)
             next_checkpoint += self.config.checkpoint_every
 
-        if paused_for_eval_or_ckpt:
+        if paused_for_ckpt:
             self._resume_self_play()
 
         return next_log, next_eval, next_checkpoint
