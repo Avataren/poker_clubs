@@ -58,6 +58,10 @@ def main():
                         help="Save replay buffers alongside checkpoints (large files, enables perfect resume)")
     parser.add_argument("--bootstrap-as", action="store_true",
                         help="On resume without saved buffers, pre-fill AS buffer by running AS self-play")
+    parser.add_argument("--restart-schedules", action="store_true",
+                        help="Warm restart: reset LR/epsilon/eta schedules to start values on resume")
+    parser.add_argument("--reset-optimizers", action="store_true",
+                        help="Reset Adam optimizer state on resume (use with --restart-schedules)")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -132,6 +136,8 @@ def main():
 
     if args.resume:
         trainer.load_checkpoint(args.resume)
+        if args.restart_schedules:
+            trainer.restart_schedules(reset_optimizers=args.reset_optimizers)
         if args.bootstrap_as:
             trainer.bootstrap_as_buffer()
 

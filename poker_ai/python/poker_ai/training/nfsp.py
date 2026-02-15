@@ -202,6 +202,7 @@ class NFSPTrainer:
         self.total_episodes = 0
         self.br_updates = 0
         self.as_updates = 0
+        self._schedule_step_offset = 0  # for warm restarts: schedules use (total_steps - offset)
 
     def is_as_frozen(self) -> bool:
         """Check if AS training is currently frozen."""
@@ -229,9 +230,34 @@ class NFSPTrainer:
             self._update_lr()
         return False
 
+    def restart_schedules(self, reset_optimizers: bool = False):
+        """Warm restart: reset LR, epsilon, and eta schedules to their start values.
+
+        Sets the schedule offset to current total_steps so all schedules
+        recompute from step 0. The model weights and buffers are preserved.
+        Optionally resets Adam optimizer state (clears momentum).
+        """
+        self._schedule_step_offset = self.total_steps
+        print(f"  Schedule warm restart at step {self.total_steps:,} "
+              f"(eps={self.config.epsilon_start}, eta={self.config.eta_start}, "
+              f"lr factor=1.0)")
+        if reset_optimizers:
+            self.br_optimizer = torch.optim.Adam(
+                self.br_net.parameters(), lr=self.config.br_lr
+            )
+            self.as_optimizer = torch.optim.Adam(
+                self.as_net.parameters(), lr=self.config.as_lr
+            )
+            print("  Optimizers reset (Adam momentum cleared)")
+        self._update_lr()
+
+    def _schedule_steps(self) -> int:
+        """Steps for schedule computations, accounting for warm restart offset."""
+        return self.total_steps - self._schedule_step_offset
+
     def get_epsilon(self) -> float:
         """Get current epsilon for exploration."""
-        progress = min(self.total_steps / self.config.epsilon_decay_steps, 1.0)
+        progress = min(self._schedule_steps() / self.config.epsilon_decay_steps, 1.0)
         return self.config.epsilon_start + progress * (
             self.config.epsilon_end - self.config.epsilon_start
         )
@@ -243,14 +269,14 @@ class NFSPTrainer:
         probability eta, BR with probability (1-eta). BR transitions
         are collected only from BR-policy actions.
         """
-        progress = min(self.total_steps / max(self.config.eta_ramp_steps, 1), 1.0)
+        progress = min(self._schedule_steps() / max(self.config.eta_ramp_steps, 1), 1.0)
         return self.config.eta_start + progress * (
             self.config.eta_end - self.config.eta_start
         )
 
     def _get_lr_factor(self) -> float:
         """Cosine decay with linear warmup. Returns multiplier in [min_factor, 1.0]."""
-        steps = self.total_steps
+        steps = self._schedule_steps()
         warmup = self._lr_warmup_steps
         if warmup > 0 and steps < warmup:
             return max(steps / warmup, 0.01)  # linear warmup from 1% to 100%
@@ -785,6 +811,7 @@ class NFSPTrainer:
             "as_optimizer": self.as_optimizer.state_dict(),
             "br_updates": self.br_updates,
             "as_updates": self.as_updates,
+            "schedule_step_offset": self._schedule_step_offset,
         }
         if self.use_amp:
             checkpoint["br_scaler"] = self.br_scaler.state_dict()
@@ -1003,6 +1030,7 @@ class NFSPTrainer:
         self.total_episodes = checkpoint["episode"]
         self.br_updates = checkpoint.get("br_updates", 0)
         self.as_updates = checkpoint.get("as_updates", 0)
+        self._schedule_step_offset = checkpoint.get("schedule_step_offset", 0)
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
 
         # Try to load saved buffers from the same checkpoint directory
