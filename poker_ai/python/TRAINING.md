@@ -411,3 +411,347 @@ so the model works across different blind levels and tournaments.
 - **Train steps matter:** BR quality drives AS quality in NFSP. Use at least 8/4
   (BR/AS) train steps per round. With 24/12, training is heavier per round but
   produces stronger counter-strategies and better convergence.
+
+## Algorithm Deep Dive
+
+This section explains how the training algorithm works end-to-end, from self-play
+to convergence. No math background required — just poker intuition.
+
+### The Core Idea: NFSP (Neural Fictitious Self-Play)
+
+The goal is to find a **Nash equilibrium** — a strategy that can't be exploited.
+Against a Nash equilibrium strategy, no opponent can do better than break even in
+the long run. This is the theoretical foundation of "GTO" (game-theory optimal)
+poker.
+
+NFSP achieves this by training two neural networks that play different roles:
+
+1. **Best Response (BR) network** — the "exploiter." Given the opponent's current
+   strategy, BR tries to find the single best counter-strategy. It asks: "if I
+   know how my opponent plays, what's the most profitable way to play against them?"
+
+2. **Average Strategy (AS) network** — the "averager." AS learns to mimic the
+   average of all BR strategies seen throughout training. Over time, this average
+   converges toward a Nash equilibrium.
+
+The key insight: if you repeatedly find the best counter-strategy and average all
+those counter-strategies together, the average converges to an unexploitable
+strategy. This is the **fictitious play** algorithm, extended to work with neural
+networks ("neural" fictitious self-play).
+
+### Self-Play: Generating Training Data
+
+Training data comes from the agent playing against itself. In each hand (episode):
+
+1. Each player independently chooses a role for this hand:
+   - With probability **eta**, use the AS network (average strategy)
+   - With probability **(1 - eta)**, use the BR network (best response)
+
+2. The hand plays out normally — dealing cards, betting rounds, showdown.
+
+3. Actions are recorded into replay buffers for later training:
+   - **All** actions go into the **AS buffer** (for supervised learning)
+   - Actions from BR-policy players go into the **BR buffer** (for reinforcement learning)
+
+**Eta scheduling:** Early in training, eta is low (0.01–0.1), so most play uses BR.
+This gives BR maximum opportunity to explore and find strong counter-strategies.
+As training progresses, eta ramps up to 0.4, mixing in more AS play. This is
+important because AS is the actual output policy — it needs to generate training
+data that reflects realistic play patterns.
+
+**Epsilon exploration:** When a player uses BR, they take a random action with
+probability epsilon (instead of their best action). This ensures BR explores
+unusual situations and doesn't get stuck in local optima. Epsilon starts at 0.1
+and decays to 0.003 over training.
+
+**Batched environments:** For efficiency, 2048 hands are played simultaneously in
+parallel. Each hand is independent — different cards, different positions, different
+BR/AS choices. This fills the replay buffers quickly and keeps the GPU busy with
+large inference batches.
+
+### The Two Training Loops
+
+After each batch of self-play, two separate training procedures run:
+
+#### BR Training: Deep Q-Learning (DQN)
+
+The BR network learns a **value function**: for each game state and action, it
+estimates the expected profit in big blinds. This is reinforcement learning — the
+network learns from rewards (winning or losing chips).
+
+The training uses several standard DQN improvements:
+
+- **Double DQN:** Two copies of the BR network exist — the "online" network and the
+  "target" network. When computing the learning target, the online network picks
+  the best action, but the target network evaluates how good that action is. This
+  prevents a common problem where the network overestimates action values (it's
+  grading its own homework — Double DQN fixes this by using a slightly older version
+  of itself as the grader).
+
+- **Dueling architecture:** The Q-value is split into two parts:
+  - **V(s)** — how good is this game state overall? (value stream)
+  - **A(s,a)** — how much better/worse is this specific action compared to average?
+    (advantage stream)
+  - Q(s,a) = V(s) + A(s,a) - mean(A)
+  - This helps because in many poker states, the overall situation matters more than
+    the specific action (e.g. with a royal flush, all bet sizes win — the value
+    stream captures this without needing to learn it separately for each action).
+
+- **Polyak target updates:** The target network is updated slowly — each training
+  step blends 0.5% of the online network's weights into the target. This provides
+  a stable learning signal (vs hard-copying every N steps, which causes sudden jumps).
+
+- **Huber loss:** Instead of squared error (which can explode on large poker pots),
+  the loss transitions from squared to linear for errors above 10 big blinds. This
+  makes training robust to the occasional huge pot.
+
+- **Card augmentation:** Each training batch randomly permutes the card suits and
+  swaps hole card order (288 possible augmentations). This teaches the network that
+  A♠K♥ is equivalent to A♦K♣ — dramatically reducing the effective state space.
+  Crucially, the same permutation is applied to both the current and next state in
+  each transition, preserving temporal consistency.
+
+Each training round runs **br_train_steps** (e.g. 12) gradient updates, each on a
+random batch of 8192 transitions sampled from the BR buffer.
+
+#### AS Training: Supervised Learning
+
+The AS network learns by **imitation** — it tries to predict what action was taken
+in each game state. This is simple supervised learning with cross-entropy loss
+(the same loss used in language models).
+
+- Input: a game state (cards, betting history, stack sizes)
+- Target: the action that was actually played (by BR or AS)
+- Loss: cross-entropy between the network's predicted action probabilities and the
+  actual action
+
+The AS buffer uses **reservoir sampling** — a technique that maintains a uniform
+random sample across the entire training history. Unlike the BR buffer (which only
+keeps the most recent 2M transitions), the AS buffer keeps a representative sample
+from all of training. This is essential: the average strategy must reflect the
+entire history of play, not just recent play.
+
+Card augmentation is also applied to AS training batches.
+
+Each training round runs **as_train_steps** (e.g. 6) gradient updates on batches
+from the AS buffer.
+
+### Why BR Quality Drives Everything
+
+This is the most important thing to understand about NFSP: **the AS network can
+only be as good as the BR network forces it to be.**
+
+The feedback loop works like this:
+
+1. BR finds a weakness in the current AS strategy (e.g. "AS folds too much to
+   river bets")
+2. BR exploits this weakness, generating training data that shows profitable
+   aggression on the river
+3. AS learns from this data and adjusts — it starts calling river bets more often
+4. BR now needs to find a new weakness, so it adapts (e.g. "AS now calls too much
+   on the river — I should bluff less and value-bet more")
+5. The cycle repeats, with AS gradually becoming harder to exploit
+
+If BR is too weak (too few gradient updates), it can't find subtle exploits, and
+AS never learns to defend against them. This is why `br_train_steps` matters so
+much — more BR updates mean sharper exploits, which push AS toward a stronger
+equilibrium.
+
+### The Network Architecture
+
+Both BR and AS share the same architecture — a shared trunk with separate heads:
+
+```
+Input: 462 static features + 256 history encoding = 718 dimensions
+
+Static features (462):
+  ├── Hole cards: 2 × 52 one-hot encodings (104)
+  ├── Community cards: 5 × 52 one-hot, zero-padded pre-flop (260)
+  ├── Game state: 46 floats (pot odds, stack-to-pot ratio, position,
+  │   street counts, aggressor tracking, bet sizes, etc.)
+  └── Hand strength: 52 floats (Monte Carlo win probability estimates)
+
+History encoding (256): from transformer attention (see below)
+
+Shared trunk:
+  Linear(718 → 1024) → LayerNorm → ReLU → ResidualBlock(1024)
+  Linear(1024 → 512) → LayerNorm → ReLU → ResidualBlock(512)
+
+BR head (Dueling DQN):
+  Value stream:     Linear(512) → ReLU → Linear(1)      → V(s)
+  Advantage stream: Linear(512) → ReLU → Linear(9)      → A(s,a)
+  Q(s,a) = V(s) + A(s,a) - mean(A)
+
+AS head (Policy):
+  Linear(512) → ReLU → Linear(9) → action logits
+  Softmax over legal actions → action probabilities
+```
+
+Illegal actions are masked by adding -10,000 to their logits before softmax,
+effectively zeroing their probability. The masking uses -10,000 instead of
+negative infinity to avoid numerical overflow in float16 (mixed precision training).
+
+### Transformer Attention Over Action History
+
+A key component is the **action history transformer**, which reads the sequence of
+actions taken so far in the hand and produces a 256-dimensional summary. This lets
+the network recognize betting patterns — "opponent raised pre-flop, then checked
+the flop" suggests a different range than "opponent limped pre-flop, then bet the
+flop."
+
+Each action in the history is encoded as an 11-dimensional record:
+
+```
+[seat_normalized, action_0, action_1, ..., action_8, bet_size_ratio]
+  └── who acted     └── 9-dim one-hot of action type      └── bet/pot
+```
+
+The transformer processes up to 30 action records (enough for even complex
+multi-street hands):
+
+```
+Action records (batch, 30, 11)
+  → Linear projection (11 → 64)
+  → Add learned positional embeddings
+  → 2-layer Transformer Encoder (4 attention heads, 128-dim feedforward)
+  → Take mean of unmasked positions (average pooling)
+  → Linear(64 → 256) → LayerNorm → ReLU
+  → 256-dim history encoding
+```
+
+**Why attention works well here:** Multi-head attention lets the network weigh
+different actions in the history differently based on context. For example, when
+facing a river bet, the pre-flop raise is more informative than the flop check —
+attention learns which past actions matter most for the current decision.
+
+**Handling empty history:** At the very start of a hand (first action), there's no
+history. The transformer handles this by clamping sequence lengths to at least 1,
+then zeroing out the output for genuinely empty histories. This avoids NaN from
+softmax over all-masked positions.
+
+**Output scaling:** The transformer's output projection is initialized with very
+small weights (0.01×). This means when fine-tuning from a checkpoint, the history
+encoding starts near zero and gradually grows in influence, avoiding sudden
+disruption to the learned trunk.
+
+### The Nine Actions
+
+The action space uses pot-relative bet sizes:
+
+| Index | Action | Description |
+|-------|--------|-------------|
+| 0 | Fold | Give up the hand |
+| 1 | Check/Call | Match the current bet (or check if no bet) |
+| 2 | Raise 0.25× Pot | Small probe bet / min-raise territory |
+| 3 | Raise 0.4× Pot | Standard small bet |
+| 4 | Raise 0.6× Pot | Medium bet |
+| 5 | Raise 0.8× Pot | Larger bet |
+| 6 | Raise 1× Pot | Pot-sized bet |
+| 7 | Raise 1.5× Pot | Overbet |
+| 8 | All-In | Push all remaining chips |
+
+Not all actions are legal in every situation. The environment provides a boolean
+mask of legal actions, and the network only considers legal ones. For example, you
+can't raise more than your stack, and you can't check when facing a bet.
+
+### Replay Buffers
+
+The two networks use fundamentally different buffer strategies:
+
+**BR Buffer (Circular, 2M entries):**
+Stores complete RL transitions: `(state, action, reward, next_state, done)`.
+Works like a conveyor belt — new transitions push out old ones. This keeps BR
+focused on exploiting the *current* AS policy. Old transitions from when AS played
+differently would teach BR outdated counter-strategies.
+
+**AS Buffer (Reservoir, 3M entries):**
+Stores supervised examples: `(state, action)`. Uses reservoir sampling to maintain
+a uniform sample across the *entire* training history. As the buffer fills, each
+new sample has a decreasing probability of replacing an existing one. This
+preserves the long-run average — if the buffer only kept recent data, AS would
+chase the latest BR policy instead of averaging all past policies (which is required
+for Nash equilibrium convergence).
+
+### Learning Rate Schedule
+
+Both networks use cosine decay with linear warmup:
+
+```
+Phase 1 — Warmup (0 to 8M env steps):
+  LR ramps linearly from 1% to 100% of base rate (1e-4)
+  Prevents large, destructive updates before the network has seen enough data
+
+Phase 2 — Cosine decay (8M steps to end):
+  LR follows a cosine curve from 100% down to 1% (1e-6)
+  Gradually reduces step size as the network converges, preventing oscillation
+```
+
+The warm restart feature (`--restart-schedules`) resets this schedule to the
+beginning while keeping model weights. This is equivalent to "cosine annealing
+with warm restarts" — the LR jumps back up, giving the network a new opportunity
+to escape local minima and find better solutions.
+
+### Async Training Architecture
+
+For GPU efficiency, self-play and training run on separate threads:
+
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│   Self-Play Thread  │     │   Training Thread     │
+│                     │     │                       │
+│  BR/AS inference    │     │  BR gradient updates  │
+│  (GPU, batched)     │     │  AS gradient updates  │
+│  2048 envs parallel │     │  (GPU, batched)       │
+│         │           │     │         │             │
+│         ▼           │     │         │             │
+│  Fill BR + AS       │     │  Sample from buffers  │
+│  replay buffers     │     │         │             │
+│         │           │     │         ▼             │
+│         │           │◄────│  Stage new weights    │
+│  Apply staged       │     │  (CPU buffers)        │
+│  weights between    │     │                       │
+│  episodes           │     │                       │
+└─────────────────────┘     └──────────────────────┘
+                                      │
+                               ┌──────▼──────┐
+                               │  Eval Thread │
+                               │  (CPU only)  │
+                               │  No GPU      │
+                               │  contention  │
+                               └─────────────┘
+```
+
+**Weight synchronization** uses staged CPU buffers. The training thread copies
+updated weights to CPU buffers and sets a flag. The self-play thread checks this
+flag between episodes and copies the staged weights to its inference networks.
+This avoids pausing either thread and prevents GPU deadlocks (a real problem on
+AMD ROCm where two threads calling GPU sync operations can permanently block each
+other).
+
+**Evaluation** runs on CPU in a background thread using a deep copy of the AS
+network. This means GPU training continues at full speed during eval.
+
+**Pacing:** Training is allowed to run at most `train_ahead` rounds ahead of
+self-play. This prevents the network from training too many times on the same
+buffer data (overfitting to stale experience). If training gets too far ahead, it
+sleeps briefly until self-play catches up.
+
+### Convergence and Evaluation
+
+The model is evaluated against three scripted baselines:
+
+- **Random:** plays random legal actions — easy to beat, tests basic competence
+- **Caller:** always calls — tests whether the agent bets for value and folds weak hands
+- **TAG (Tight-Aggressive):** folds weak hands, calls medium hands, raises strong
+  hands based on hand strength — the toughest baseline
+
+Results are reported in **bb/100** (big blinds won per 100 hands). Positive means
+winning, negative means losing. Confidence intervals use the 95% level.
+
+A well-trained model should:
+- Beat Random by 1500+ bb/100
+- Beat Caller by 500+ bb/100
+- Approach break-even (0 bb/100) against TAG
+
+Getting close to break-even vs TAG indicates the model has learned a reasonable
+approximation of GTO play, since TAG plays a simplified but solid strategy.

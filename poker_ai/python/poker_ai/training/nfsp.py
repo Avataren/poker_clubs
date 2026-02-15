@@ -708,7 +708,7 @@ class NFSPTrainer:
         total_actions = action_counts.sum()
         if total_actions > 0:
             pcts = action_counts / total_actions * 100
-            action_names = ["fold", "call", "min", "0.5x", "0.75x", "1x", "1.5x", "2x", "allin"]
+            action_names = ["fold", "call", "0.25x", "0.4x", "0.6x", "0.8x", "1x", "1.5x", "allin"]
             dist_str = " ".join(f"{action_names[i]}:{pcts[i]:.1f}%" for i in range(9))
             print(f"    [{opponent}] actions: {dist_str}")
 
