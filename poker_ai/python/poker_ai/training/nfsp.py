@@ -104,6 +104,54 @@ class EvalStats:
     seat1_bb100: float
 
 
+@dataclass
+class MultiwayEvalStats:
+    """Summary statistics for multiway (6-max / 9-ring) evaluation."""
+    bb100: float
+    ci95: float
+    std_bb100: float
+    num_hands: int
+    position_bb100: dict[str, float]   # per-position winrate
+    vpip: float                        # voluntarily put $ in pot (%)
+    pfr: float                         # preflop raise (%)
+    three_bet: float                   # 3-bet preflop (%)
+    steal_attempt: float               # open-raise from CO/BTN (%)
+    fold_to_steal: float               # fold in blinds vs steal (%)
+    action_pcts: dict[str, float]      # action distribution (%)
+
+
+# Position labels by table size, indexed by relative position from dealer
+# rel=0 is dealer (BTN), rel=1 is SB, rel=2 is BB, rel=3+ are early/middle positions
+_POSITION_LABELS = {
+    2: {0: "BTN/SB", 1: "BB"},
+    6: {0: "BTN", 1: "SB", 2: "BB", 3: "UTG", 4: "MP", 5: "CO"},
+    9: {0: "BTN", 1: "SB", 2: "BB", 3: "UTG", 4: "UTG+1", 5: "UTG+2",
+        6: "LJ", 7: "HJ", 8: "CO"},
+}
+
+# Canonical display order (early → late → blinds)
+_POSITION_ORDER = {
+    6: ["UTG", "MP", "CO", "BTN", "SB", "BB"],
+    9: ["UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN", "SB", "BB"],
+}
+
+
+def _get_position_names(num_players: int) -> list[str]:
+    """Get position labels in display order (early → late → blinds)."""
+    if num_players in _POSITION_ORDER:
+        return _POSITION_ORDER[num_players]
+    return [f"Seat{i}" for i in range(num_players)]
+
+
+def _seat_to_position_name(seat: int, dealer: int, num_players: int) -> str:
+    """Convert absolute seat to position name given current dealer."""
+    rel = (seat - dealer) % num_players
+    labels = _POSITION_LABELS.get(num_players)
+    if labels and rel in labels:
+        return labels[rel]
+    return f"Seat{rel}"
+
+
 class NFSPTrainer:
     """NFSP training manager."""
 
@@ -514,6 +562,7 @@ class NFSPTrainer:
         """Evaluate AS network vs baselines.
 
         Uses a CPU copy of the model to avoid GPU contention with self-play.
+        Dispatches to heads-up eval for 2 players, multiway eval for 6+.
         """
         # Create CPU copy for eval (avoids GPU contention in async mode)
         eval_model = copy.deepcopy(self._unwrap(self.as_net)).to("cpu")
@@ -539,10 +588,17 @@ class NFSPTrainer:
                 top3 = probe_logits[0].topk(3)
                 print(f"  [eval probe] logits top3: {list(zip(top3.indices.tolist(), [f'{v:.2f}' for v in top3.values.tolist()]))}")
 
+        if self.config.num_players == 2:
+            self._evaluate_heads_up(eval_model, episode)
+        else:
+            self._evaluate_multiway(eval_model, episode)
+        del eval_model
+
+    def _evaluate_heads_up(self, eval_model, episode: int):
+        """Heads-up evaluation: vs Random, Caller, TAG."""
         vs_random = self._eval_vs(eval_model, "random", num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs(eval_model, "caller", num_hands=self.config.eval_hands)
         vs_tag = self._eval_vs(eval_model, "tag", num_hands=self.config.eval_hands)
-        del eval_model
 
         print(
             f"  Eval @ {episode:,}: "
@@ -565,6 +621,46 @@ class NFSPTrainer:
         self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
         self.writer.add_scalar("eval/vs_tag_seat0_bb100", vs_tag.seat0_bb100, episode)
         self.writer.add_scalar("eval/vs_tag_seat1_bb100", vs_tag.seat1_bb100, episode)
+
+    def _evaluate_multiway(self, eval_model, episode: int):
+        """Multiway evaluation: vs TAG table with positional and HUD stats."""
+        num_players = self.config.num_players
+        # Use more hands for multiway (higher variance)
+        num_hands = max(self.config.eval_hands, 3000)
+        pos_names = _get_position_names(num_players)
+
+        vs_tag = self._eval_multiway_vs(eval_model, "tag", num_hands=num_hands)
+        vs_random = self._eval_multiway_vs(eval_model, "random", num_hands=num_hands)
+
+        # Print summary
+        pos_str = " | ".join(f"{n}:{vs_tag.position_bb100[n]:+.0f}" for n in pos_names)
+        print(
+            f"  Eval @ {episode:,} ({num_players}-max, n={num_hands}):\n"
+            f"    vs TAG: {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100\n"
+            f"    vs Random: {vs_random.bb100:+.2f} +/- {vs_random.ci95:.2f} bb/100\n"
+            f"    Position bb/100: {pos_str}\n"
+            f"    HUD: VPIP={vs_tag.vpip:.1f}% PFR={vs_tag.pfr:.1f}% "
+            f"3Bet={vs_tag.three_bet:.1f}% Steal={vs_tag.steal_attempt:.1f}% "
+            f"FoldToSteal={vs_tag.fold_to_steal:.1f}%"
+        )
+
+        # TensorBoard: overall
+        self.writer.add_scalar("eval/vs_tag_bb100", vs_tag.bb100, episode)
+        self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
+        self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
+        self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
+
+        # TensorBoard: positional
+        for name in pos_names:
+            safe_name = name.replace("+", "p")  # UTG+1 → UTGp1
+            self.writer.add_scalar(f"eval/pos_{safe_name}_bb100", vs_tag.position_bb100[name], episode)
+
+        # TensorBoard: HUD stats
+        self.writer.add_scalar("eval/hud_vpip", vs_tag.vpip, episode)
+        self.writer.add_scalar("eval/hud_pfr", vs_tag.pfr, episode)
+        self.writer.add_scalar("eval/hud_3bet", vs_tag.three_bet, episode)
+        self.writer.add_scalar("eval/hud_steal_attempt", vs_tag.steal_attempt, episode)
+        self.writer.add_scalar("eval/hud_fold_to_steal", vs_tag.fold_to_steal, episode)
 
     def _eval_vs_random(self, num_hands: int = 1000) -> EvalStats:
         """Evaluate AS network vs random player (heads-up)."""
@@ -727,6 +823,183 @@ class NFSPTrainer:
             seat0_bb100=seat0,
             seat1_bb100=seat1,
         )
+
+    def _eval_multiway(self, opponent: str, num_hands: int,
+                       eval_model=None, eval_device=None) -> MultiwayEvalStats:
+        """Run multiway evaluation (6-max / 9-ring).
+
+        Hero rotates through all seats. All other seats play the baseline opponent.
+        Tracks positional winrate and HUD-style stats.
+        """
+        num_players = self.config.num_players
+        env = PokerEnv(
+            num_players=num_players,
+            starting_stack=self.config.starting_stack,
+            small_blind=self.config.small_blind,
+            big_blind=self.config.big_blind,
+        )
+
+        if eval_model is None:
+            eval_model = self._unwrap(self.as_net)
+            eval_model.eval()
+        if eval_device is None:
+            eval_device = self.device
+
+        max_hist = self.config.max_history_len
+        pos_names = _get_position_names(num_players)
+        hand_returns_bb100 = np.zeros(num_hands, dtype=np.float64)
+        pos_returns: dict[str, list[float]] = {name: [] for name in pos_names}
+        action_counts = np.zeros(9, dtype=np.int64)
+
+        # HUD stat counters
+        preflop_opportunities = 0   # hands where hero acts preflop
+        vpip_count = 0              # voluntarily put $ in pot
+        pfr_count = 0               # preflop raise
+        three_bet_opportunities = 0
+        three_bet_count = 0
+        steal_opportunities = 0     # hero in CO/BTN, folded to hero preflop
+        steal_count = 0
+        fold_to_steal_opportunities = 0  # hero in SB/BB facing steal
+        fold_to_steal_count = 0
+
+        # Steal positions: CO and BTN
+        steal_pos_names = {"CO", "BTN"}
+        blind_pos_names = {"SB", "BB"}
+
+        for hand_idx in range(num_hands):
+            hero_seat = hand_idx % num_players
+            # Dealer advances each reset; starts at 0, first advance → 1
+            dealer = (hand_idx + 1) % num_players
+            hero_pos_name = _seat_to_position_name(hero_seat, dealer, num_players)
+
+            player, obs, mask = env.reset()
+            action_history: list[list[np.ndarray]] = [[] for _ in range(num_players)]
+            done = False
+
+            # Track preflop state for HUD stats
+            hero_acted_preflop = False
+            hero_vpip_this_hand = False
+            hero_pfr_this_hand = False
+            preflop_raise_count = 0  # number of raises before hero acts
+            folded_to_hero_preflop = True  # track if it's folded to hero
+            is_preflop = True
+
+            while not done:
+                phase_oh = obs[364:370]
+                current_phase = int(np.argmax(phase_oh))
+                if current_phase > 0:
+                    is_preflop = False
+
+                if player == hero_seat:
+                    static_obs = extract_static_features_batch(obs.reshape(1, -1))[0]
+                    ah_padded, ah_len = pad_action_history(action_history[player], max_hist)
+                    obs_t = torch.tensor(static_obs, device=eval_device).unsqueeze(0)
+                    ah_t = torch.tensor(ah_padded, device=eval_device).unsqueeze(0)
+                    ah_len_t = torch.tensor([ah_len], device=eval_device)
+                    mask_t = torch.tensor(mask, device=eval_device).unsqueeze(0)
+
+                    with torch.no_grad():
+                        action = eval_model.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
+                    action_counts[action] += 1
+
+                    # HUD tracking for hero's preflop action
+                    if is_preflop and not hero_acted_preflop:
+                        hero_acted_preflop = True
+                        preflop_opportunities += 1
+                        # VPIP: any action other than fold or check (action 1 when no bet to call)
+                        if action >= 2:  # any raise
+                            hero_vpip_this_hand = True
+                            hero_pfr_this_hand = True
+                        elif action == 1 and obs[376] > 0.001:  # call with money to put in
+                            hero_vpip_this_hand = True
+
+                        # 3-bet: hero raises after a raise
+                        if preflop_raise_count >= 1:
+                            three_bet_opportunities += 1
+                            if action >= 2:
+                                three_bet_count += 1
+
+                        # Steal: hero in CO/BTN, folded to hero
+                        if hero_pos_name in steal_pos_names and folded_to_hero_preflop:
+                            steal_opportunities += 1
+                            if action >= 2:
+                                steal_count += 1
+
+                        # Fold to steal: hero in blinds, facing open from steal position
+                        if hero_pos_name in blind_pos_names and preflop_raise_count == 1:
+                            fold_to_steal_opportunities += 1
+                            if action == 0:
+                                fold_to_steal_count += 1
+                else:
+                    action = self._select_baseline_action(opponent, obs, mask)
+                    # Track opponent preflop raises for 3-bet/steal detection
+                    if is_preflop:
+                        if action >= 2:  # opponent raised
+                            preflop_raise_count += 1
+                        # If opponent enters pot before hero acts, not folded to hero
+                        if action >= 1 and not hero_acted_preflop:
+                            folded_to_hero_preflop = False
+
+                action_record = make_action_record(player, action, num_players)
+                for p in range(num_players):
+                    action_history[p].append(action_record.copy())
+
+                player, obs, mask, rewards, done = env.step(action)
+
+                if done:
+                    hand_bb100 = float(rewards[hero_seat]) * 100.0
+                    hand_returns_bb100[hand_idx] = hand_bb100
+                    pos_returns[hero_pos_name].append(hand_bb100)
+
+            if hero_vpip_this_hand:
+                vpip_count += 1
+            if hero_pfr_this_hand:
+                pfr_count += 1
+
+        # Compute stats
+        mean_bb100 = float(hand_returns_bb100.mean()) if num_hands > 0 else 0.0
+        std_bb100 = float(hand_returns_bb100.std(ddof=1)) if num_hands > 1 else 0.0
+        stderr = std_bb100 / math.sqrt(num_hands) if num_hands > 1 else 0.0
+        ci95 = 1.96 * stderr
+
+        position_bb100 = {}
+        for name in pos_names:
+            vals = pos_returns[name]
+            position_bb100[name] = float(np.mean(vals)) if vals else 0.0
+
+        vpip_pct = (vpip_count / preflop_opportunities * 100) if preflop_opportunities > 0 else 0.0
+        pfr_pct = (pfr_count / preflop_opportunities * 100) if preflop_opportunities > 0 else 0.0
+        three_bet_pct = (three_bet_count / three_bet_opportunities * 100) if three_bet_opportunities > 0 else 0.0
+        steal_pct = (steal_count / steal_opportunities * 100) if steal_opportunities > 0 else 0.0
+        fold_to_steal_pct = (fold_to_steal_count / fold_to_steal_opportunities * 100) if fold_to_steal_opportunities > 0 else 0.0
+
+        total_actions = action_counts.sum()
+        action_names = ["fold", "call", "0.25x", "0.4x", "0.6x", "0.8x", "1x", "1.5x", "allin"]
+        action_pcts = {}
+        if total_actions > 0:
+            for i, name in enumerate(action_names):
+                action_pcts[name] = float(action_counts[i] / total_actions * 100)
+            dist_str = " ".join(f"{action_names[i]}:{action_pcts[action_names[i]]:.1f}%" for i in range(9))
+            print(f"    [{opponent}] actions: {dist_str}")
+
+        return MultiwayEvalStats(
+            bb100=mean_bb100,
+            ci95=ci95,
+            std_bb100=std_bb100,
+            num_hands=num_hands,
+            position_bb100=position_bb100,
+            vpip=vpip_pct,
+            pfr=pfr_pct,
+            three_bet=three_bet_pct,
+            steal_attempt=steal_pct,
+            fold_to_steal=fold_to_steal_pct,
+            action_pcts=action_pcts,
+        )
+
+    def _eval_multiway_vs(self, eval_model, opponent: str, num_hands: int) -> MultiwayEvalStats:
+        """Evaluate a model vs baseline in multiway on CPU."""
+        return self._eval_multiway(opponent=opponent, num_hands=num_hands,
+                                   eval_model=eval_model, eval_device=torch.device("cpu"))
 
     def _eval_br_vs_as(self, num_hands: int) -> EvalStats:
         """Evaluate greedy BR policy against AS policy in heads-up."""
