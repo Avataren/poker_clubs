@@ -407,8 +407,17 @@ class NFSPTrainer:
                 # Terminal states have no bootstrap term; avoid (-inf * 0) -> NaN.
                 next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
                 target = rewards + self.config.gamma * next_q
+                # Clamp targets to prevent float16 overflow under AMP
+                target = target.clamp(-1000, 1000)
 
             loss = F.smooth_l1_loss(q_taken, target, beta=self.config.huber_delta)
+
+        # Skip optimizer step on NaN/inf loss to avoid poisoning weights
+        loss_val = loss.item()
+        if not math.isfinite(loss_val):
+            self.br_updates += 1
+            print(f"  [WARNING] BR loss is {loss_val} at update {self.br_updates}, skipping optimizer step")
+            return loss_val
 
         self.br_optimizer.zero_grad(set_to_none=True)
         if self.use_amp:
@@ -423,7 +432,7 @@ class NFSPTrainer:
             self.br_optimizer.step()
 
         self.br_updates += 1
-        return loss.item()
+        return loss_val
 
     def train_as_step(self) -> float:
         """One supervised learning step on Average Strategy network."""
@@ -451,6 +460,13 @@ class NFSPTrainer:
             logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
             loss = F.cross_entropy(logits, actions)
 
+        # Skip optimizer step on NaN/inf loss to avoid poisoning weights
+        loss_val = loss.item()
+        if not math.isfinite(loss_val):
+            self.as_updates += 1
+            print(f"  [WARNING] AS loss is {loss_val} at update {self.as_updates}, skipping optimizer step")
+            return loss_val
+
         self.as_optimizer.zero_grad(set_to_none=True)
         if self.use_amp:
             self.as_scaler.scale(loss).backward()
@@ -464,7 +480,7 @@ class NFSPTrainer:
             self.as_optimizer.step()
 
         self.as_updates += 1
-        return loss.item()
+        return loss_val
 
     def update_target_network(self):
         """Polyak soft update: target = tau * online + (1 - tau) * target."""
