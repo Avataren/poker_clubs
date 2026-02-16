@@ -22,7 +22,7 @@ impl PokerTable {
     }
 
     pub(crate) fn advance_phase(&mut self) {
-        // Return uncallable bets BEFORE advancing and resetting
+        // Return uncallable bets BEFORE advancing and resetting.
         // This handles cases where a player has chips that nobody can match because
         // others are all-in for less. Standard poker etiquette.
         let active_in_hand: Vec<usize> = self
@@ -41,6 +41,8 @@ impl PokerTable {
             
             for (player_idx, amount) in uncontested {
                 self.players[player_idx].add_chips(amount);
+                // Reduce total_bet_this_hand so showdown won't double-count
+                self.players[player_idx].total_bet_this_hand -= amount;
                 tracing::info!(
                     "Returned ${} uncallable bet to {} (pot was ${}, now ${})",
                     amount,
