@@ -102,6 +102,9 @@ class EvalStats:
     num_hands: int
     seat0_bb100: float
     seat1_bb100: float
+    bluff_pct: float = 0.0         # raises with hand_strength < 0.3
+    thin_value_pct: float = 0.0    # raises with 0.3 <= strength < 0.6
+    value_bet_pct: float = 0.0     # raises with strength >= 0.6
 
 
 @dataclass
@@ -622,6 +625,11 @@ class NFSPTrainer:
         self.writer.add_scalar("eval/vs_tag_seat0_bb100", vs_tag.seat0_bb100, episode)
         self.writer.add_scalar("eval/vs_tag_seat1_bb100", vs_tag.seat1_bb100, episode)
 
+        # Bluff stats (from vs TAG as most meaningful)
+        self.writer.add_scalar("eval/bluff_pct", vs_tag.bluff_pct, episode)
+        self.writer.add_scalar("eval/thin_value_pct", vs_tag.thin_value_pct, episode)
+        self.writer.add_scalar("eval/value_bet_pct", vs_tag.value_bet_pct, episode)
+
     def _evaluate_multiway(self, eval_model, episode: int):
         """Multiway evaluation: vs TAG table with positional and HUD stats."""
         num_players = self.config.num_players
@@ -767,6 +775,14 @@ class NFSPTrainer:
         seat_returns_bb100: list[list[float]] = [[], []]
         action_counts = np.zeros(9, dtype=np.int64)
 
+        # Bluff tracking: categorize raises by hand strength
+        bluff_count = 0          # raise with strength < 0.3
+        thin_value_count = 0     # raise with 0.3 <= strength < 0.6
+        value_bet_count = 0      # raise with strength >= 0.6
+        total_raises = 0
+        # Per-street bluff tracking (postflop only)
+        street_bluffs: dict[str, list[int]] = {"flop": [0, 0], "turn": [0, 0], "river": [0, 0]}  # [bluffs, total_raises]
+
         for hand_idx in range(num_hands):
             hero_seat = hand_idx % 2
             player, obs, mask = env.reset()
@@ -785,6 +801,24 @@ class NFSPTrainer:
                     with torch.no_grad():
                         action = eval_model.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
                     action_counts[action] += 1
+
+                    # Bluff tracking: classify raises by hand strength
+                    if action >= 2:  # any raise
+                        phase = int(np.argmax(obs[364:370]))
+                        strength = float(obs[HAND_STRENGTH_START]) if phase > 0 else float(obs[HAND_STRENGTH_START + 1])
+                        total_raises += 1
+                        if strength < 0.3:
+                            bluff_count += 1
+                        elif strength < 0.6:
+                            thin_value_count += 1
+                        else:
+                            value_bet_count += 1
+                        # Per-street postflop tracking
+                        street_name = {1: "flop", 2: "turn", 3: "river"}.get(phase)
+                        if street_name:
+                            street_bluffs[street_name][1] += 1
+                            if strength < 0.3:
+                                street_bluffs[street_name][0] += 1
                 else:
                     action = self._select_baseline_action(opponent, obs, mask)
 
@@ -808,6 +842,19 @@ class NFSPTrainer:
             dist_str = " ".join(f"{action_names[i]}:{pcts[i]:.1f}%" for i in range(9))
             print(f"    [{opponent}] actions: {dist_str}")
 
+        # Log bluff stats
+        if total_raises > 0:
+            bluff_pct = bluff_count / total_raises * 100
+            thin_pct = thin_value_count / total_raises * 100
+            value_pct = value_bet_count / total_raises * 100
+            bv_ratio = f"{bluff_count / value_bet_count:.2f}" if value_bet_count > 0 else "inf"
+            street_str = " | ".join(
+                f"{s}:{sb[0]}/{sb[1]}({sb[0]/sb[1]*100:.0f}%)" if sb[1] > 0 else f"{s}:0/0"
+                for s, sb in street_bluffs.items()
+            )
+            print(f"    [{opponent}] raises: bluff={bluff_pct:.1f}% thin={thin_pct:.1f}% "
+                  f"value={value_pct:.1f}% (B:V={bv_ratio}) | {street_str}")
+
         mean_bb100 = float(hand_returns_bb100.mean()) if num_hands > 0 else 0.0
         std_bb100 = float(hand_returns_bb100.std(ddof=1)) if num_hands > 1 else 0.0
         stderr = std_bb100 / math.sqrt(num_hands) if num_hands > 1 else 0.0
@@ -815,6 +862,11 @@ class NFSPTrainer:
 
         seat0 = float(np.mean(seat_returns_bb100[0])) if seat_returns_bb100[0] else 0.0
         seat1 = float(np.mean(seat_returns_bb100[1])) if seat_returns_bb100[1] else 0.0
+
+        b_pct = (bluff_count / total_raises * 100) if total_raises > 0 else 0.0
+        t_pct = (thin_value_count / total_raises * 100) if total_raises > 0 else 0.0
+        v_pct = (value_bet_count / total_raises * 100) if total_raises > 0 else 0.0
+
         return EvalStats(
             bb100=mean_bb100,
             ci95=ci95,
@@ -822,6 +874,9 @@ class NFSPTrainer:
             num_hands=num_hands,
             seat0_bb100=seat0,
             seat1_bb100=seat1,
+            bluff_pct=b_pct,
+            thin_value_pct=t_pct,
+            value_bet_pct=v_pct,
         )
 
     def _eval_multiway(self, opponent: str, num_hands: int,
