@@ -93,7 +93,7 @@ impl GameServer {
         strategy: Option<&str>,
     ) -> Result<(String, String), String> {
         // Register bot in manager
-        let (bot_user_id, bot_username) = {
+        let (bot_user_id, bot_username, bot_strategy) = {
             let mut bot_mgr = self.bot_manager.write().await;
             bot_mgr.add_bot(table_id, name, strategy)?
         };
@@ -110,6 +110,7 @@ impl GameServer {
                 .map_err(|e| e.to_string())?;
             if let Some(player) = table.players.iter_mut().find(|p| p.user_id == bot_user_id) {
                 player.avatar_index = avatar_index;
+                player.bot_strategy = bot_strategy;
             }
             Ok::<(), String>(())
         };
@@ -142,10 +143,20 @@ impl GameServer {
         username: String,
         strategy: Option<&str>,
     ) -> Result<(), String> {
-        let mut bot_mgr = self.bot_manager.write().await;
+        let bot_strategy = {
+            let mut bot_mgr = self.bot_manager.write().await;
+            bot_mgr.register_existing_bot(table_id, user_id.clone(), username.clone(), strategy)?
+        };
 
-        // Register this user as a bot for this table
-        bot_mgr.register_existing_bot(table_id, user_id.clone(), username.clone(), strategy)?;
+        // Set bot_strategy on the table player for client-side display
+        {
+            let mut tables = self.tables.write().await;
+            if let Some(table) = tables.get_mut(table_id) {
+                if let Some(player) = table.players.iter_mut().find(|p| p.user_id == user_id) {
+                    player.bot_strategy = bot_strategy;
+                }
+            }
+        }
 
         tracing::info!(
             "Registered existing user {} ({}) as bot on table {}",

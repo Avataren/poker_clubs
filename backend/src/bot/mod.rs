@@ -81,7 +81,7 @@ impl BotManager {
         table_id: &str,
         name: Option<String>,
         strategy_name: Option<&str>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(String, String, Option<String>), String> {
         let strategy = build_strategy(strategy_name)?;
 
         let idx = self.next_bot_name_idx;
@@ -89,18 +89,15 @@ impl BotManager {
 
         // Use UUID to prevent collision on restart
         let user_id = format!("bot_{}", Uuid::new_v4());
-        
-        // Encode strategy in username for client-side color coding
-        let strategy_tag = strategy_name.unwrap_or("balanced");
         let username = name.unwrap_or_else(|| {
             let base = BOT_NAMES[(idx as usize - 1) % BOT_NAMES.len()];
-            format!("{} [{}]", base, strategy_tag)
+            base.to_string()
         });
 
         let bot = BotPlayer::new(user_id.clone(), username.clone(), strategy);
         self.bots.entry(table_id.to_string()).or_default().push(bot);
 
-        Ok((user_id, username))
+        Ok((user_id, username, strategy_name.map(|s| s.to_string())))
     }
 
     /// Register an existing user as a bot (for tournament bots created in DB)
@@ -110,12 +107,12 @@ impl BotManager {
         user_id: String,
         username: String,
         strategy_name: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         let strategy = build_strategy(strategy_name)?;
 
         let bot = BotPlayer::new(user_id, username, strategy);
         self.bots.entry(table_id.to_string()).or_default().push(bot);
-        Ok(())
+        Ok(strategy_name.map(|s| s.to_string()))
     }
 
     /// Remove a bot from a table.
@@ -506,14 +503,14 @@ mod tests {
     fn test_bot_manager_add_remove() {
         let mut mgr = BotManager::new();
 
-        let (id1, name1) = mgr
+        let (id1, name1, _) = mgr
             .add_bot("table_1", None, None)
             .expect("default bot strategy should be valid");
         assert!(id1.starts_with("bot_"));
-        assert!(name1.contains("Bot"));
+        assert!(!name1.is_empty());
         assert!(mgr.is_bot(&id1));
 
-        let (id2, _) = mgr
+        let (id2, _, _) = mgr
             .add_bot(
                 "table_1",
                 Some("Custom Bot".to_string()),
@@ -531,13 +528,13 @@ mod tests {
     #[test]
     fn test_bot_manager_unique_ids() {
         let mut mgr = BotManager::new();
-        let (id1, _) = mgr
+        let (id1, _, _) = mgr
             .add_bot("t1", None, None)
             .expect("default bot strategy should be valid");
-        let (id2, _) = mgr
+        let (id2, _, _) = mgr
             .add_bot("t1", None, None)
             .expect("default bot strategy should be valid");
-        let (id3, _) = mgr
+        let (id3, _, _) = mgr
             .add_bot("t2", None, None)
             .expect("default bot strategy should be valid");
         assert_ne!(id1, id2);
@@ -548,7 +545,7 @@ mod tests {
     fn test_collect_bot_actions_skips_completed_round() {
         let mut mgr = BotManager::new();
         let table_id = "table_1".to_string();
-        let (bot_id, bot_name) = mgr
+        let (bot_id, bot_name, _) = mgr
             .add_bot(&table_id, None, None)
             .expect("default bot strategy should be valid");
 

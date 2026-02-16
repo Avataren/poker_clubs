@@ -877,8 +877,8 @@ impl TournamentContext {
 
                 // Register bots with the bot manager
                 if is_bot {
-                    tracing::info!("Registering bot {} for SNG table {}", username, table_id);
                     let strategy = random_bot_strategy();
+                    tracing::info!("Registering bot {} ({}) for SNG table {}", username, strategy.unwrap_or("balanced"), table_id);
                     if let Err(e) = self
                         .game_server
                         .register_bot(&table_id, registration.user_id.clone(), username, strategy)
@@ -1093,8 +1093,8 @@ impl TournamentContext {
 
                 // Register bots with the bot manager
                 if is_bot {
-                    tracing::info!("Registering bot {} for MTT table {}", username, table_id);
                     let strategy = random_bot_strategy();
+                    tracing::info!("Registering bot {} ({}) for MTT table {}", username, strategy.unwrap_or("balanced"), table_id);
                     if let Err(e) = self
                         .game_server
                         .register_bot(&table_id, registration.user_id.clone(), username, strategy)

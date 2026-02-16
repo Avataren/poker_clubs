@@ -15,6 +15,7 @@ class Player {
   final String? winningHand;
   final List<bool>? shownCards;
   final String? avatarUrl;
+  final String? botStrategy;
 
   Player({
     required this.userId,
@@ -31,6 +32,7 @@ class Player {
     this.winningHand,
     this.shownCards,
     this.avatarUrl,
+    this.botStrategy,
   });
 
   factory Player.fromJson(Map<String, dynamic> json) {
@@ -61,6 +63,7 @@ class Player {
       winningHand: json['winning_hand'] as String?,
       shownCards: shownCards,
       avatarUrl: json['avatar_url'] as String?,
+      botStrategy: json['bot_strategy'] as String?,
     );
   }
 
@@ -72,11 +75,4 @@ class Player {
   bool get isSittingOut => state == 'SittingOut';
   bool get isWaitingForHand => state == 'WaitingForHand';
   bool get isBot => userId.startsWith('bot_');
-  
-  /// Extract bot strategy from username (format: "Name [strategy]")
-  String? get botStrategy {
-    if (!isBot) return null;
-    final match = RegExp(r'\[([^\]]+)\]').firstMatch(username);
-    return match?.group(1);
-  }
 }

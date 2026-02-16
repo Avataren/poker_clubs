@@ -62,6 +62,8 @@ pub struct PublicPlayerState {
     pub pot_won: i64,                   // Amount won from pot (for animation)
     pub winning_hand: Option<String>,   // Per-player winning hand description
     pub shown_cards: Option<Vec<bool>>, // Which cards the winner chose to show (fold-win only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_strategy: Option<String>,   // Bot strategy name for client-side color coding
 }
 
 /// Tournament info to include in table state
@@ -282,6 +284,7 @@ impl PokerTable {
                         pot_won: p.pot_won,
                         winning_hand: p.winning_hand.clone(),
                         shown_cards: shown_cards_field,
+                        bot_strategy: p.bot_strategy.clone(),
                     }
                 })
                 .collect(),

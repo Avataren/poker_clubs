@@ -31,6 +31,8 @@ pub struct Player {
     pub shown_cards: Vec<bool>,   // Which cards the winner chose to show after fold-win
     #[serde(default)]
     pub pending_stand_up: bool, // Cash-game stand-up requested mid-hand; remove at hand end
+    #[serde(default)]
+    pub bot_strategy: Option<String>, // Bot strategy name for client-side display
 }
 
 impl Player {
@@ -52,6 +54,7 @@ impl Player {
             winning_hand: None,
             shown_cards: vec![],
             pending_stand_up: false,
+            bot_strategy: None,
         }
     }
 
