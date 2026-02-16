@@ -42,6 +42,9 @@ _CSV_COLUMNS = [
     "tag_lb95",
     "tag_seat0_bb100",
     "tag_seat1_bb100",
+    "tag_bluff_pct",
+    "tag_thin_value_pct",
+    "tag_value_bet_pct",
     "exploitability_hands",
     "exploitability_bb100",
     "exploitability_ci95",
@@ -132,7 +135,7 @@ def _evaluate_and_record(
     best_path: Path | None,
     min_tag_lb95_for_promotion: float,
 ) -> bool:
-    trainer.load_checkpoint(str(checkpoint_path))
+    trainer.load_checkpoint(str(checkpoint_path), load_buffers=False)
     vs_random = trainer._eval_vs_random(num_hands=num_hands)
     vs_caller = trainer._eval_vs_caller(num_hands=num_hands)
     vs_tag = trainer._eval_vs_tag(num_hands=num_hands)
@@ -162,6 +165,8 @@ def _evaluate_and_record(
         f"Caller {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f}, "
         f"TAG {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100 "
         f"(TAG LB95={tag_lb95:+.2f}) | "
+        f"Bluff={vs_tag.bluff_pct:.1f}% Thin={vs_tag.thin_value_pct:.1f}% "
+        f"Value={vs_tag.value_bet_pct:.1f}% | "
         f"ExploitProxy {vs_exploit.bb100:+.2f} +/- {vs_exploit.ci95:.2f} "
         f"(UB95={exploit_ub95:+.2f}, n={exploitability_hands})"
     )
@@ -186,6 +191,9 @@ def _evaluate_and_record(
             f"{tag_lb95:.6f}",
             f"{vs_tag.seat0_bb100:.6f}",
             f"{vs_tag.seat1_bb100:.6f}",
+            f"{vs_tag.bluff_pct:.6f}",
+            f"{vs_tag.thin_value_pct:.6f}",
+            f"{vs_tag.value_bet_pct:.6f}",
             exploitability_hands,
             f"{vs_exploit.bb100:.6f}",
             f"{vs_exploit.ci95:.6f}",
