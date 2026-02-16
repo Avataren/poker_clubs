@@ -443,15 +443,16 @@ networks ("neural" fictitious self-play).
 
 Training data comes from the agent playing against itself. In each hand (episode):
 
-1. Each player independently chooses a role for this hand:
+1. Each player **independently** flips a coin to choose a role for this hand:
    - With probability **eta**, use the AS network (average strategy)
    - With probability **(1 - eta)**, use the BR network (best response)
+   - This means any combination is possible: BR-vs-BR, AS-vs-AS, or BR-vs-AS
 
 2. The hand plays out normally — dealing cards, betting rounds, showdown.
 
 3. Actions are recorded into replay buffers for later training:
-   - **All** actions go into the **AS buffer** (for supervised learning)
-   - Actions from BR-policy players go into the **BR buffer** (for reinforcement learning)
+   - Actions from **BR-policy** players go into **both** the **BR buffer** (for reinforcement learning) and the **AS buffer** (for supervised imitation)
+   - Actions from **AS-policy** players are not stored in any buffer — they only serve to keep the average strategy "in the game"
 
 **Eta scheduling:** Early in training, eta is low (0.01–0.1), so most play uses BR.
 This gives BR maximum opportunity to explore and find strong counter-strategies.
@@ -521,7 +522,7 @@ in each game state. This is simple supervised learning with cross-entropy loss
 (the same loss used in language models).
 
 - Input: a game state (cards, betting history, stack sizes)
-- Target: the action that was actually played (by BR or AS)
+- Target: the action that BR actually played in that state
 - Loss: cross-entropy between the network's predicted action probabilities and the
   actual action
 
