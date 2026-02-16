@@ -238,6 +238,13 @@ class BestResponseNet(nn.Module):
         super().__init__()
         self.net = PokerNet(config)
         self.history_encoder = ActionHistoryTransformer(config)
+        self.zero_history = False  # set True to ablate history encoder
+
+    def _encode_history(self, action_history, history_lengths):
+        if self.zero_history:
+            return torch.zeros(action_history.size(0), self.history_encoder.hidden_dim,
+                               device=action_history.device, dtype=action_history.dtype)
+        return self.history_encoder(action_history, history_lengths)
 
     def forward(
         self,
@@ -246,7 +253,7 @@ class BestResponseNet(nn.Module):
         history_lengths: torch.Tensor | None,
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
-        history_hidden = self.history_encoder(action_history, history_lengths)
+        history_hidden = self._encode_history(action_history, history_lengths)
         return self.net.q_values(obs, history_hidden, legal_mask)
 
     def select_action(
@@ -304,6 +311,13 @@ class AverageStrategyNet(nn.Module):
         super().__init__()
         self.net = PokerNet(config)
         self.history_encoder = ActionHistoryTransformer(config)
+        self.zero_history = False  # set True to ablate history encoder
+
+    def _encode_history(self, action_history, history_lengths):
+        if self.zero_history:
+            return torch.zeros(action_history.size(0), self.history_encoder.hidden_dim,
+                               device=action_history.device, dtype=action_history.dtype)
+        return self.history_encoder(action_history, history_lengths)
 
     def forward(
         self,
@@ -313,7 +327,7 @@ class AverageStrategyNet(nn.Module):
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Returns action probabilities."""
-        history_hidden = self.history_encoder(action_history, history_lengths)
+        history_hidden = self._encode_history(action_history, history_lengths)
         return self.net.policy(obs, history_hidden, legal_mask)
 
     def forward_logits(
@@ -324,7 +338,7 @@ class AverageStrategyNet(nn.Module):
         legal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Returns raw masked logits (for numerically stable cross-entropy)."""
-        history_hidden = self.history_encoder(action_history, history_lengths)
+        history_hidden = self._encode_history(action_history, history_lengths)
         logits, _ = self.net.forward(obs, history_hidden, legal_mask)
         return logits
 

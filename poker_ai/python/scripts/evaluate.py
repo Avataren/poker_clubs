@@ -12,11 +12,18 @@ def main():
     parser.add_argument("checkpoint", help="Path to checkpoint file")
     parser.add_argument("--num-hands", type=int, default=10000, help="Hands to play")
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--zero-history", action="store_true",
+                        help="Ablation: zero out history encoder output to measure its contribution")
     args = parser.parse_args()
 
     config = NFSPConfig(num_players=2, device=args.device)
     trainer = NFSPTrainer(config)
     trainer.load_checkpoint(args.checkpoint)
+
+    if args.zero_history:
+        trainer.as_net.zero_history = True
+        trainer.br_net.zero_history = True
+        print("** History ablation: transformer output zeroed **")
 
     print(f"Evaluating over {args.num_hands} hands...")
     print()
