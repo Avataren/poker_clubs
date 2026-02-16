@@ -408,7 +408,7 @@ class NFSPTrainer:
                 next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
                 target = rewards + self.config.gamma * next_q
                 # Clamp targets to prevent float16 overflow under AMP
-                target = target.clamp(-1000, 1000)
+                target = target.clamp(-10000, 10000)
 
             loss = F.smooth_l1_loss(q_taken, target, beta=self.config.huber_delta)
 
