@@ -511,7 +511,7 @@ class NFSPTrainer:
             br_loss = 0.0
             for _ in range(self.config.br_train_steps):
                 br_loss = self.train_br_step()
-            if br_loss > 0 and self.br_updates % 50 == 0:
+            if self.br_updates % 50 == 0:
                 self.writer.add_scalar("loss/br", br_loss, self.total_steps)
 
             # Train AS (supervised) — multiple gradient steps
@@ -519,7 +519,7 @@ class NFSPTrainer:
             if not self.is_as_frozen():
                 for _ in range(self.config.as_train_steps):
                     as_loss = self.train_as_step()
-                if as_loss > 0 and self.as_updates % 50 == 0:
+                if self.as_updates % 50 == 0:
                     self.writer.add_scalar("loss/as", as_loss, self.total_steps)
 
             # Soft-update target network
