@@ -598,10 +598,19 @@ class NFSPTrainer:
         del eval_model
 
     def _evaluate_heads_up(self, eval_model, episode: int):
-        """Heads-up evaluation: vs Random, Caller, TAG."""
+        """Heads-up evaluation: vs Random, Caller, TAG, and exploitability."""
         vs_random = self._eval_vs(eval_model, "random", num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs(eval_model, "caller", num_hands=self.config.eval_hands)
         vs_tag = self._eval_vs(eval_model, "tag", num_hands=self.config.eval_hands)
+
+        # Exploitability probe: BR vs AS on CPU
+        br_cpu = copy.deepcopy(self._unwrap(self.br_net)).to("cpu")
+        br_cpu.eval()
+        exploit = self._eval_br_vs_as(
+            num_hands=self.config.eval_hands,
+            br_model=br_cpu, as_model=eval_model, eval_device=torch.device("cpu")
+        )
+        del br_cpu
 
         print(
             f"  Eval @ {episode:,}: "
@@ -610,7 +619,8 @@ class NFSPTrainer:
             f"vs Caller: {vs_caller.bb100:+.2f} +/- {vs_caller.ci95:.2f} bb/100 "
             f"(95% CI, n={vs_caller.num_hands}) | "
             f"vs TAG: {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100 "
-            f"(95% CI, n={vs_tag.num_hands})"
+            f"(95% CI, n={vs_tag.num_hands}) | "
+            f"BR exploit: {exploit.bb100:+.2f} +/- {exploit.ci95:.2f} bb/100"
         )
         self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
         self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
@@ -629,6 +639,10 @@ class NFSPTrainer:
         self.writer.add_scalar("eval/bluff_pct", vs_tag.bluff_pct, episode)
         self.writer.add_scalar("eval/thin_value_pct", vs_tag.thin_value_pct, episode)
         self.writer.add_scalar("eval/value_bet_pct", vs_tag.value_bet_pct, episode)
+
+        # Exploitability proxy (BR advantage over AS — lower is better)
+        self.writer.add_scalar("eval/br_exploit_bb100", exploit.bb100, episode)
+        self.writer.add_scalar("eval/br_exploit_ci95", exploit.ci95, episode)
 
     def _evaluate_multiway(self, eval_model, episode: int):
         """Multiway evaluation: vs TAG table with positional and HUD stats."""
@@ -1056,7 +1070,8 @@ class NFSPTrainer:
         return self._eval_multiway(opponent=opponent, num_hands=num_hands,
                                    eval_model=eval_model, eval_device=torch.device("cpu"))
 
-    def _eval_br_vs_as(self, num_hands: int) -> EvalStats:
+    def _eval_br_vs_as(self, num_hands: int,
+                      br_model=None, as_model=None, eval_device=None) -> EvalStats:
         """Evaluate greedy BR policy against AS policy in heads-up."""
         env = PokerEnv(
             num_players=2,
@@ -1064,6 +1079,13 @@ class NFSPTrainer:
             small_blind=self.config.small_blind,
             big_blind=self.config.big_blind,
         )
+
+        if br_model is None:
+            br_model = self._unwrap(self.br_net)
+        if as_model is None:
+            as_model = self._unwrap(self.as_net)
+        if eval_device is None:
+            eval_device = self.device
 
         max_hist = self.config.max_history_len
         hand_returns_bb100 = np.zeros(num_hands, dtype=np.float64)
@@ -1078,18 +1100,18 @@ class NFSPTrainer:
             while not done:
                 static_obs = extract_static_features_batch(obs.reshape(1, -1))[0]
                 ah_padded, ah_len = pad_action_history(action_history[player], max_hist)
-                obs_t = torch.tensor(static_obs, device=self.device).unsqueeze(0)
-                ah_t = torch.tensor(ah_padded, device=self.device).unsqueeze(0)
-                ah_len_t = torch.tensor([ah_len], device=self.device)
-                mask_t = torch.tensor(mask, device=self.device).unsqueeze(0)
+                obs_t = torch.tensor(static_obs, device=eval_device).unsqueeze(0)
+                ah_t = torch.tensor(ah_padded, device=eval_device).unsqueeze(0)
+                ah_len_t = torch.tensor([ah_len], device=eval_device)
+                mask_t = torch.tensor(mask, device=eval_device).unsqueeze(0)
 
                 with torch.no_grad():
                     if player == br_seat:
-                        action = self._unwrap(self.br_net).select_action(
+                        action = br_model.select_action(
                             obs_t, ah_t, ah_len_t, mask_t, epsilon=0.0
                         ).item()
                     else:
-                        action = self._unwrap(self.as_net).select_action(
+                        action = as_model.select_action(
                             obs_t, ah_t, ah_len_t, mask_t
                         ).item()
 
