@@ -9,9 +9,27 @@ use crate::{
     ws::GameServer,
 };
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use rand::seq::SliceRandom;
 use sqlx::{Sqlite, Transaction};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+
+/// Available ONNX bot strategies for tournament bots.
+/// Each bot gets a random personality for variety.
+const TOURNAMENT_BOT_STRATEGIES: &[&str] = &[
+    "onnx_shark",
+    "onnx_gto",
+    "onnx_pro",
+    "onnx_nit",
+    "onnx_calling_station",
+    "onnx_maniac",
+];
+
+fn random_bot_strategy() -> Option<&'static str> {
+    TOURNAMENT_BOT_STRATEGIES
+        .choose(&mut rand::thread_rng())
+        .copied()
+}
 
 /// In-memory state for a running tournament
 pub(crate) struct TournamentState {
@@ -860,9 +878,10 @@ impl TournamentContext {
                 // Register bots with the bot manager
                 if is_bot {
                     tracing::info!("Registering bot {} for SNG table {}", username, table_id);
+                    let strategy = random_bot_strategy();
                     if let Err(e) = self
                         .game_server
-                        .register_bot(&table_id, registration.user_id.clone(), username, None)
+                        .register_bot(&table_id, registration.user_id.clone(), username, strategy)
                         .await
                     {
                         tracing::error!(
@@ -1075,9 +1094,10 @@ impl TournamentContext {
                 // Register bots with the bot manager
                 if is_bot {
                     tracing::info!("Registering bot {} for MTT table {}", username, table_id);
+                    let strategy = random_bot_strategy();
                     if let Err(e) = self
                         .game_server
-                        .register_bot(&table_id, registration.user_id.clone(), username, None)
+                        .register_bot(&table_id, registration.user_id.clone(), username, strategy)
                         .await
                     {
                         tracing::error!(
