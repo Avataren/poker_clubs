@@ -1,14 +1,20 @@
-"""Export trained Average Strategy network to ONNX format."""
+"""Export trained poker AI networks to ONNX format.
+
+Supports both Average Strategy (AS) and Best Response (BR) networks.
+AS outputs action probabilities (GTO-style balanced play).
+BR outputs action probabilities derived from Q-values (exploitative shark play).
+"""
 
 import copy
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 
 from poker_ai.config.hyperparams import NFSPConfig
-from poker_ai.model.network import AverageStrategyNet
+from poker_ai.model.network import AverageStrategyNet, BestResponseNet
 
 
 class AverageStrategyONNXWrapper(nn.Module):
@@ -70,21 +76,76 @@ class AverageStrategyONNXWrapper(nn.Module):
         return enc.output_proj(x)
 
 
+class BestResponseONNXWrapper(nn.Module):
+    """Wrapper that exports the BR network as action probabilities.
+
+    Converts Q-values to probabilities via low-temperature softmax so the
+    Rust backend can use the same inference code as the AS model.
+    The low temperature (0.1) makes it near-greedy but still valid probs.
+    """
+
+    def __init__(self, br_net: BestResponseNet, max_seq_len: int = 30,
+                 temperature: float = 0.1):
+        super().__init__()
+        self.br_net = br_net
+        self.temperature = temperature
+        self.register_buffer("pos_ids", torch.arange(max_seq_len, dtype=torch.long))
+        self.register_buffer(
+            "positions", torch.arange(max_seq_len, dtype=torch.long).unsqueeze(0)
+        )
+
+    def forward(
+        self,
+        obs: torch.Tensor,
+        action_history: torch.Tensor,
+        history_lengths: torch.Tensor,
+        legal_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        history_hidden = self._encode_history(action_history, history_lengths)
+        q_values = self.br_net.net.q_values(obs, history_hidden, legal_mask)
+        return F.softmax(q_values / self.temperature, dim=-1)
+
+    def _encode_history(
+        self, action_seq: torch.Tensor, lengths: torch.Tensor
+    ) -> torch.Tensor:
+        """Re-implementation using pre-computed position buffers (same as AS wrapper)."""
+        enc = self.br_net.history_encoder
+        dtype = action_seq.dtype
+
+        valid_mask_f = (self.positions < lengths.unsqueeze(1)).to(dtype)
+        pad_mask = (1.0 - valid_mask_f) * torch.finfo(dtype).min
+
+        x = enc.input_proj(action_seq)
+        x = x + enc.pos_embed(self.pos_ids).unsqueeze(0)
+
+        x = enc.transformer(x, src_key_padding_mask=pad_mask)
+
+        valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)
+        x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts
+        has_history = (valid_counts > 0.5).to(dtype)
+        x = x * has_history
+
+        return enc.output_proj(x)
+
+
 def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> NFSPConfig:
     """Infer architecture fields from checkpoint weights, preserving other config values."""
     config = copy.deepcopy(base_config)
-    as_state = checkpoint.get("as_net")
-    if not isinstance(as_state, dict):
+    # Both AS and BR use the same PokerNet architecture; prefer AS, fall back to BR
+    state = checkpoint.get("as_net")
+    if not isinstance(state, dict):
+        state = checkpoint.get("br_net")
+    if not isinstance(state, dict):
         return config
 
-    hist_w = as_state.get("history_encoder.net.0.weight")
+    hist_w = state.get("history_encoder.net.0.weight")
     if isinstance(hist_w, torch.Tensor) and hist_w.ndim == 2:
         config.history_hidden_dim = int(hist_w.shape[0])
         flat_input = int(hist_w.shape[1])
         if config.history_input_dim > 0 and flat_input % config.history_input_dim == 0:
             config.max_history_len = flat_input // config.history_input_dim
 
-    trunk0_w = as_state.get("net.trunk.0.weight")
+    trunk0_w = state.get("net.trunk.0.weight")
     if isinstance(trunk0_w, torch.Tensor) and trunk0_w.ndim == 2:
         config.hidden_dim = int(trunk0_w.shape[0])
         total_in = int(trunk0_w.shape[1])
@@ -93,11 +154,11 @@ def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> N
         if inferred_hist_hidden > 0:
             config.history_hidden_dim = inferred_hist_hidden
 
-    trunk4_w = as_state.get("net.trunk.4.weight")
+    trunk4_w = state.get("net.trunk.4.weight")
     if isinstance(trunk4_w, torch.Tensor) and trunk4_w.ndim == 2:
         config.residual_dim = int(trunk4_w.shape[0])
 
-    policy_out_w = as_state.get("net.policy_head.2.weight")
+    policy_out_w = state.get("net.policy_head.2.weight")
     if isinstance(policy_out_w, torch.Tensor) and policy_out_w.ndim == 2:
         config.num_actions = int(policy_out_w.shape[0])
 
@@ -216,7 +277,85 @@ def export_to_onnx(
             ) from exc
         raise
 
-    print(f"Exported ONNX model to {output_file}")
+    print(f"Exported AS (GTO) model to {output_file}")
+
+
+def export_br_to_onnx(
+    checkpoint_path: str,
+    output_path: str = "poker_br_net.onnx",
+    config: NFSPConfig | None = None,
+    opset_version: int = 17,
+    temperature: float = 0.1,
+    use_dynamo: bool = False,
+) -> None:
+    """Export the Best Response (exploiter/shark) network to ONNX.
+
+    Outputs action probabilities (softmax of Q-values / temperature) so the
+    Rust backend can use the same inference code as the AS model.
+
+    Args:
+        checkpoint_path: Path to training checkpoint (.pt file)
+        output_path: Path for the output ONNX model
+        config: NFSPConfig (uses default if None)
+        opset_version: ONNX opset version
+        temperature: Softmax temperature (lower = more greedy, default 0.1)
+        use_dynamo: Use the torch.export-based ONNX exporter (requires onnxscript)
+    """
+    if config is None:
+        config = NFSPConfig()
+
+    checkpoint_file = _resolve_checkpoint_path(checkpoint_path)
+    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
+    config = infer_config_from_checkpoint(checkpoint, config)
+
+    br_net = BestResponseNet(config)
+    br_net.load_state_dict(checkpoint["br_net"])
+    br_net.eval()
+
+    wrapper = BestResponseONNXWrapper(
+        br_net, max_seq_len=config.max_history_len, temperature=temperature
+    )
+    wrapper.eval()
+
+    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
+    batch_size = 1
+    max_seq_len = config.max_history_len
+    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    action_history = torch.randn(batch_size, max_seq_len, config.history_input_dim)
+    history_lengths = torch.tensor([max_seq_len], dtype=torch.long)
+    legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
+
+    output_file = Path(output_path).expanduser()
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        dynamic = {
+            "obs": {0: "batch_size"},
+            "action_history": {0: "batch_size"},
+            "history_lengths": {0: "batch_size"},
+            "legal_mask": {0: "batch_size"},
+            "action_probs": {0: "batch_size"},
+        }
+        torch.onnx.export(
+            wrapper,
+            (obs, action_history, history_lengths, legal_mask),
+            str(output_file),
+            input_names=["obs", "action_history", "history_lengths", "legal_mask"],
+            output_names=["action_probs"],
+            dynamic_axes=dynamic,
+            opset_version=opset_version,
+            do_constant_folding=True,
+            dynamo=use_dynamo,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "onnxscript" and use_dynamo:
+            raise ModuleNotFoundError(
+                "Dynamo ONNX export requires 'onnxscript'. Install it with "
+                "`pip install onnxscript`, or rerun without `--dynamo`."
+            ) from exc
+        raise
+
+    print(f"Exported BR (shark) model to {output_file}")
 
 
 def verify_onnx(
