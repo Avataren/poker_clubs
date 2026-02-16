@@ -30,9 +30,9 @@ class ReservoirBuffer:
         self.rng = np.random.default_rng()
         self._lock = threading.Lock()
 
-        # Pre-allocated arrays
-        self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float32)
+        # Pre-allocated arrays (float16 to halve memory; upcast at sample time)
+        self.obs = np.zeros((capacity, obs_dim), dtype=np.float16)
+        self.action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float16)
         self.history_length = np.zeros(capacity, dtype=np.int64)
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.legal_mask = np.zeros((capacity, num_actions), dtype=bool)
@@ -120,13 +120,14 @@ class ReservoirBuffer:
     def sample_arrays(self, batch_size: int) -> tuple:
         """Sample and return raw numpy arrays.
 
+        Returns float32 arrays for GPU training (stored as float16 internally).
         Returns: (obs, ah, ah_len, actions, masks)
         """
         with self._lock:
             indices = np.random.randint(0, self.size, size=batch_size)
             return (
-                self.obs[indices].copy(),
-                self.action_history[indices].copy(),
+                self.obs[indices].astype(np.float32),
+                self.action_history[indices].astype(np.float32),
                 self.history_length[indices].copy(),
                 self.actions[indices].copy(),
                 self.legal_mask[indices].copy(),
@@ -206,15 +207,15 @@ class ReservoirBuffer:
             raise
 
     def load(self, path: str) -> None:
-        """Load buffer contents from a .npz file."""
+        """Load buffer contents from a .npz file (auto-converts any dtype to float16)."""
         data = np.load(path)
         n = int(data["size"][0])
         if n == 0:
             return
         n = min(n, self.capacity)
         with self._lock:
-            self.obs[:n] = data["obs"][:n].astype(np.float32)
-            self.action_history[:n] = data["action_history"][:n].astype(np.float32)
+            self.obs[:n] = data["obs"][:n].astype(np.float16)
+            self.action_history[:n] = data["action_history"][:n].astype(np.float16)
             self.history_length[:n] = data["history_length"][:n]
             self.actions[:n] = data["actions"][:n]
             self.legal_mask[:n] = data["legal_mask"][:n]

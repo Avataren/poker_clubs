@@ -39,17 +39,17 @@ class CircularBuffer:
         self.size = 0
         self._lock = threading.Lock()
 
-        # Pre-allocated arrays
-        self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float32)
+        # Pre-allocated arrays (float16 to halve memory; upcast at sample time)
+        self.obs = np.zeros((capacity, obs_dim), dtype=np.float16)
+        self.action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float16)
         self.history_length = np.zeros(capacity, dtype=np.int64)
         self.actions = np.zeros(capacity, dtype=np.int64)
-        self.rewards = np.zeros(capacity, dtype=np.float32)
-        self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float32)
-        self.next_action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float32)
+        self.rewards = np.zeros(capacity, dtype=np.float16)
+        self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float16)
+        self.next_action_history = np.zeros((capacity, max_seq_len, history_dim), dtype=np.float16)
         self.next_history_length = np.zeros(capacity, dtype=np.int64)
         self.next_legal_mask = np.zeros((capacity, num_actions), dtype=bool)
-        self.dones = np.zeros(capacity, dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=np.float16)
         self.legal_mask = np.zeros((capacity, num_actions), dtype=bool)
 
     def push(self, transition: Transition):
@@ -135,22 +135,23 @@ class CircularBuffer:
     def sample_arrays(self, batch_size: int) -> tuple:
         """Sample a batch and return raw numpy arrays (no Transition objects).
 
+        Returns float32 arrays for GPU training (stored as float16 internally).
         Returns: (obs, ah, ah_len, actions, rewards, next_obs, next_ah,
                   next_ah_len, next_mask, dones, masks)
         """
         with self._lock:
             indices = np.random.randint(0, self.size, size=batch_size)
             return (
-                self.obs[indices].copy(),
-                self.action_history[indices].copy(),
+                self.obs[indices].astype(np.float32),
+                self.action_history[indices].astype(np.float32),
                 self.history_length[indices].copy(),
                 self.actions[indices].copy(),
-                self.rewards[indices].copy(),
-                self.next_obs[indices].copy(),
-                self.next_action_history[indices].copy(),
+                self.rewards[indices].astype(np.float32),
+                self.next_obs[indices].astype(np.float32),
+                self.next_action_history[indices].astype(np.float32),
                 self.next_history_length[indices].copy(),
                 self.next_legal_mask[indices].copy(),
-                self.dones[indices].copy(),
+                self.dones[indices].astype(np.float32),
                 self.legal_mask[indices].copy(),
             )
 
@@ -243,23 +244,23 @@ class CircularBuffer:
             raise
 
     def load(self, path: str) -> None:
-        """Load buffer contents from a .npz file."""
+        """Load buffer contents from a .npz file (auto-converts any dtype to float16)."""
         data = np.load(path)
         n = int(data["size"][0])
         if n == 0:
             return
         n = min(n, self.capacity)
         with self._lock:
-            self.obs[:n] = data["obs"][:n].astype(np.float32)
-            self.action_history[:n] = data["action_history"][:n].astype(np.float32)
+            self.obs[:n] = data["obs"][:n].astype(np.float16)
+            self.action_history[:n] = data["action_history"][:n].astype(np.float16)
             self.history_length[:n] = data["history_length"][:n]
             self.actions[:n] = data["actions"][:n]
-            self.rewards[:n] = data["rewards"][:n].astype(np.float32)
-            self.next_obs[:n] = data["next_obs"][:n].astype(np.float32)
-            self.next_action_history[:n] = data["next_action_history"][:n].astype(np.float32)
+            self.rewards[:n] = data["rewards"][:n].astype(np.float16)
+            self.next_obs[:n] = data["next_obs"][:n].astype(np.float16)
+            self.next_action_history[:n] = data["next_action_history"][:n].astype(np.float16)
             self.next_history_length[:n] = data["next_history_length"][:n]
             self.next_legal_mask[:n] = data["next_legal_mask"][:n]
-            self.dones[:n] = data["dones"][:n].astype(np.float32)
+            self.dones[:n] = data["dones"][:n].astype(np.float16)
             self.legal_mask[:n] = data["legal_mask"][:n]
             self.position = int(data["position"][0]) % self.capacity
             self.size = n
