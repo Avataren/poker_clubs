@@ -322,6 +322,7 @@ class _GameScreenState extends State<GameScreen> {
                   items: const [
                     DropdownMenuItem(value: 'onnx_gto', child: Text('GTO')),
                     DropdownMenuItem(value: 'onnx_pro', child: Text('Pro')),
+                    DropdownMenuItem(value: 'onnx_shark', child: Text('Shark')),
                     DropdownMenuItem(value: 'onnx_nit', child: Text('Nit')),
                     DropdownMenuItem(value: 'onnx_calling_station', child: Text('Calling Station')),
                     DropdownMenuItem(value: 'onnx_maniac', child: Text('Maniac')),

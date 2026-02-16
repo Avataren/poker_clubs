@@ -191,6 +191,8 @@ class TableSeatWidget extends StatelessWidget {
       return const Color(0xFFFF5722); // Deep orange - hard (solid play)
     } else if (strategy == 'onnx_gto') {
       return const Color(0xFFF44336); // Red - hardest (game theory optimal)
+    } else if (strategy == 'onnx_shark') {
+      return const Color(0xFF9C27B0); // Purple - exploitative shark
     }
     
     // Scripted strategies - grey
