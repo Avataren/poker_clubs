@@ -273,6 +273,7 @@ fn build_strategy(strategy_name: Option<&str>) -> Result<Box<dyn BotStrategy>, S
         Some("onnx_nit") => load_model_with_personality(model::Personality::nit()),
         Some("onnx_calling_station") => load_model_with_personality(model::Personality::calling_station()),
         Some("onnx_maniac") => load_model_with_personality(model::Personality::maniac()),
+        Some("onnx_shark") => load_br_model(),
         Some(name) if name.starts_with("model:") => {
             let path = name.trim_start_matches("model:").trim();
             if path.is_empty() {
@@ -282,7 +283,7 @@ fn build_strategy(strategy_name: Option<&str>) -> Result<Box<dyn BotStrategy>, S
             }
         }
         Some(other) => Err(format!(
-            "Unknown bot strategy `{other}`. Supported strategies: balanced, tight, aggressive, calling_station, model, onnx_gto, onnx_pro, onnx_nit, onnx_calling_station, onnx_maniac, model:/path/to/model.onnx"
+            "Unknown bot strategy `{other}`. Supported strategies: balanced, tight, aggressive, calling_station, model, onnx_gto, onnx_pro, onnx_nit, onnx_calling_station, onnx_maniac, onnx_shark, model:/path/to/model.onnx"
         )),
     }
 }
@@ -328,6 +329,39 @@ fn load_model_with_personality(personality: model::Personality) -> Result<Box<dy
             "ONNX personality requested but POKER_BOT_MODEL_ONNX is not set".to_string(),
         ),
     }
+}
+
+/// Load the BR (shark/exploiter) model by auto-discovering it next to the AS model.
+/// Looks for the BR variant by replacing `_as_` with `_br_` in the AS model path.
+fn load_br_model() -> Result<Box<dyn BotStrategy>, String> {
+    ensure_dotenv_loaded();
+
+    let as_path = env::var("POKER_BOT_MODEL_ONNX")
+        .map_err(|_| "onnx_shark requested but POKER_BOT_MODEL_ONNX is not set".to_string())?;
+    let as_trimmed = as_path.trim();
+    if as_trimmed.is_empty() {
+        return Err("onnx_shark requested but POKER_BOT_MODEL_ONNX is empty".to_string());
+    }
+
+    // Derive BR path from AS path: poker_as_net.onnx -> poker_br_net.onnx
+    let br_path = as_trimmed.replace("_as_", "_br_");
+    if br_path == as_trimmed {
+        return Err(format!(
+            "Cannot derive BR model path from AS model '{}' (expected '_as_' in filename)",
+            as_trimmed
+        ));
+    }
+
+    let resolved = resolve_model_path(&br_path);
+    if !resolved.exists() {
+        return Err(format!(
+            "BR model not found at '{}' (derived from AS model '{}').\n\
+             Export it with: python scripts/export_onnx.py <checkpoint> --br -o {}",
+            resolved.display(), as_trimmed, br_path
+        ));
+    }
+
+    load_model_strategy(&br_path, None)
 }
 
 fn resolve_model_path(path: &str) -> PathBuf {
