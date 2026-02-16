@@ -272,6 +272,30 @@ class BestResponseNet(nn.Module):
 
         return greedy
 
+    def select_action_with_greedy(
+        self,
+        obs: torch.Tensor,
+        action_history: torch.Tensor,
+        history_lengths: torch.Tensor | None,
+        legal_mask: torch.Tensor,
+        epsilon: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Epsilon-greedy action selection that also returns the greedy action.
+
+        Returns (eps_greedy_action, greedy_action) in a single forward pass.
+        """
+        q = self.forward(obs, action_history, history_lengths, legal_mask)
+        greedy = q.argmax(dim=-1)
+
+        batch_size = obs.size(0)
+        explore_mask = torch.rand(batch_size, device=obs.device) < epsilon
+        probs = legal_mask.float()
+        probs = probs / probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+        random_actions = torch.multinomial(probs, 1).squeeze(-1)
+        eps_greedy = torch.where(explore_mask, random_actions, greedy)
+
+        return eps_greedy, greedy
+
 
 class AverageStrategyNet(nn.Module):
     """Average Strategy network (supervised learning)."""

@@ -280,9 +280,13 @@ class SelfPlayWorker:
                         obs_t[as_idx], ah_t[as_idx], ah_len_t[as_idx], mask_t[as_idx]
                     )
                 if len(br_idx) > 0:
-                    actions_gpu[br_idx] = self.br_net.select_action(
+                    # Single forward pass: get both epsilon-greedy (for play/BR buffer)
+                    # and greedy (for AS buffer — no exploration noise)
+                    eps_greedy_br, greedy_br = self.br_net.select_action_with_greedy(
                         obs_t[br_idx], ah_t[br_idx], ah_len_t[br_idx], mask_t[br_idx], epsilon
                     )
+                    actions_gpu[br_idx] = eps_greedy_br
+                    greedy_br_np = greedy_br.cpu().numpy()
                 actions_np[:] = actions_gpu.cpu().numpy()
 
             pre_players = self.pre_players  # safe copy from above
@@ -321,13 +325,13 @@ class SelfPlayWorker:
             self.pending_valid[env_idx, pre_players] = True
             self.pending_is_br[env_idx, pre_players] = ~is_as
 
-            # --- Push to AS buffer for BR-policy actions (supervised, no next_obs needed) ---
+            # --- Push to AS buffer for BR-policy actions (greedy, no exploration noise) ---
             if br_idx.size > 0:
                 self.as_buffer.push_batch(
                     obs=self.static_obs[br_idx],
                     action_history=self.ah_batch[br_idx],
                     history_length=self.ah_lens_batch[br_idx],
-                    actions=actions_np[br_idx],
+                    actions=greedy_br_np,
                     legal_mask=self.pre_mask[br_idx],
                 )
 
