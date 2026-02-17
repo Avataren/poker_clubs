@@ -708,22 +708,22 @@ class NFSPTrainer:
             f"(95% CI, n={vs_potbet.num_hands}) | "
             f"BR exploit: {exploit.bb100:+.2f} +/- {exploit.ci95:.2f} bb/100"
         )
-        self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
-        self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
-        self.writer.add_scalar("eval/vs_random_seat0_bb100", vs_random.seat0_bb100, episode)
-        self.writer.add_scalar("eval/vs_random_seat1_bb100", vs_random.seat1_bb100, episode)
-        self.writer.add_scalar("eval/vs_caller_bb100", vs_caller.bb100, episode)
-        self.writer.add_scalar("eval/vs_caller_ci95", vs_caller.ci95, episode)
-        self.writer.add_scalar("eval/vs_caller_seat0_bb100", vs_caller.seat0_bb100, episode)
-        self.writer.add_scalar("eval/vs_caller_seat1_bb100", vs_caller.seat1_bb100, episode)
-        self.writer.add_scalar("eval/vs_tag_bb100", vs_tag.bb100, episode)
-        self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
-        self.writer.add_scalar("eval/vs_tag_seat0_bb100", vs_tag.seat0_bb100, episode)
-        self.writer.add_scalar("eval/vs_tag_seat1_bb100", vs_tag.seat1_bb100, episode)
-        self.writer.add_scalar("eval/vs_potbet_bb100", vs_potbet.bb100, episode)
-        self.writer.add_scalar("eval/vs_potbet_ci95", vs_potbet.ci95, episode)
-        self.writer.add_scalar("eval/vs_potbet_seat0_bb100", vs_potbet.seat0_bb100, episode)
-        self.writer.add_scalar("eval/vs_potbet_seat1_bb100", vs_potbet.seat1_bb100, episode)
+        self.writer.add_scalar("winrate/vs_random_bb100", vs_random.bb100, episode)
+        self.writer.add_scalar("winrate/vs_random_ci95", vs_random.ci95, episode)
+        self.writer.add_scalar("winrate/vs_random_seat0_bb100", vs_random.seat0_bb100, episode)
+        self.writer.add_scalar("winrate/vs_random_seat1_bb100", vs_random.seat1_bb100, episode)
+        self.writer.add_scalar("winrate/vs_caller_bb100", vs_caller.bb100, episode)
+        self.writer.add_scalar("winrate/vs_caller_ci95", vs_caller.ci95, episode)
+        self.writer.add_scalar("winrate/vs_caller_seat0_bb100", vs_caller.seat0_bb100, episode)
+        self.writer.add_scalar("winrate/vs_caller_seat1_bb100", vs_caller.seat1_bb100, episode)
+        self.writer.add_scalar("winrate/vs_tag_bb100", vs_tag.bb100, episode)
+        self.writer.add_scalar("winrate/vs_tag_ci95", vs_tag.ci95, episode)
+        self.writer.add_scalar("winrate/vs_tag_seat0_bb100", vs_tag.seat0_bb100, episode)
+        self.writer.add_scalar("winrate/vs_tag_seat1_bb100", vs_tag.seat1_bb100, episode)
+        self.writer.add_scalar("winrate/vs_potbet_bb100", vs_potbet.bb100, episode)
+        self.writer.add_scalar("winrate/vs_potbet_ci95", vs_potbet.ci95, episode)
+        self.writer.add_scalar("winrate/vs_potbet_seat0_bb100", vs_potbet.seat0_bb100, episode)
+        self.writer.add_scalar("winrate/vs_potbet_seat1_bb100", vs_potbet.seat1_bb100, episode)
 
         # Bluff stats (from vs TAG as most meaningful)
         self.writer.add_scalar("eval/bluff_pct", vs_tag.bluff_pct, episode)
@@ -789,24 +789,24 @@ class NFSPTrainer:
         )
 
         # TensorBoard: overall
-        self.writer.add_scalar("eval/vs_tag_bb100", vs_tag.bb100, episode)
-        self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
-        self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
-        self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
-        self.writer.add_scalar("eval/vs_potbet_bb100", vs_potbet.bb100, episode)
-        self.writer.add_scalar("eval/vs_potbet_ci95", vs_potbet.ci95, episode)
+        self.writer.add_scalar("winrate/vs_tag_bb100", vs_tag.bb100, episode)
+        self.writer.add_scalar("winrate/vs_tag_ci95", vs_tag.ci95, episode)
+        self.writer.add_scalar("winrate/vs_random_bb100", vs_random.bb100, episode)
+        self.writer.add_scalar("winrate/vs_random_ci95", vs_random.ci95, episode)
+        self.writer.add_scalar("winrate/vs_potbet_bb100", vs_potbet.bb100, episode)
+        self.writer.add_scalar("winrate/vs_potbet_ci95", vs_potbet.ci95, episode)
 
         # TensorBoard: positional
         for name in pos_names:
             safe_name = name.replace("+", "p")  # UTG+1 → UTGp1
-            self.writer.add_scalar(f"eval/pos_{safe_name}_bb100", vs_tag.position_bb100[name], episode)
+            self.writer.add_scalar(f"winrate/pos_{safe_name}_bb100", vs_tag.position_bb100[name], episode)
 
         # TensorBoard: HUD stats
-        self.writer.add_scalar("eval/hud_vpip", vs_tag.vpip, episode)
-        self.writer.add_scalar("eval/hud_pfr", vs_tag.pfr, episode)
-        self.writer.add_scalar("eval/hud_3bet", vs_tag.three_bet, episode)
-        self.writer.add_scalar("eval/hud_steal_attempt", vs_tag.steal_attempt, episode)
-        self.writer.add_scalar("eval/hud_fold_to_steal", vs_tag.fold_to_steal, episode)
+        self.writer.add_scalar("hud/vpip", vs_tag.vpip, episode)
+        self.writer.add_scalar("hud/pfr", vs_tag.pfr, episode)
+        self.writer.add_scalar("hud/3bet", vs_tag.three_bet, episode)
+        self.writer.add_scalar("hud/steal_attempt", vs_tag.steal_attempt, episode)
+        self.writer.add_scalar("hud/fold_to_steal", vs_tag.fold_to_steal, episode)
 
     def _eval_vs_random(self, num_hands: int = 1000) -> EvalStats:
         """Evaluate AS network vs random player (heads-up)."""
