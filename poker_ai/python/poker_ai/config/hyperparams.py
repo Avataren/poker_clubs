@@ -84,6 +84,12 @@ class NFSPConfig:
     device: str = "cuda"  # ROCm via HIP exposes as cuda
     use_amp: Optional[bool] = None  # None=auto (on for CUDA), False disables AMP
 
+    # Diverse training opponents: probability that an opponent seat uses a fixed
+    # strategy instead of the learning network. Exposes the model to extreme
+    # playstyles (always-raise, calling-station, tight-fold) so it can learn
+    # adaptive counter-strategies from the opponent stats features.
+    exploit_opponent_prob: float = 0.05  # 5% of opponent seats use fixed strategy
+
     # Paths
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"

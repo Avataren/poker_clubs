@@ -64,6 +64,8 @@ def main():
                         help="Reset Adam optimizer state on resume (use with --restart-schedules)")
     parser.add_argument("--no-load-buffers", action="store_true",
                         help="Skip loading replay buffers on resume (start with fresh buffers)")
+    parser.add_argument("--exploit-opponent-prob", type=float, default=None,
+                        help="Probability that opponent seats use fixed exploit strategies (default 0.05)")
     args = parser.parse_args()
 
     config_kwargs = dict(
@@ -127,6 +129,8 @@ def main():
         config_kwargs["as_warmup_episodes"] = args.as_warmup_episodes
     if args.save_buffers:
         config_kwargs["save_buffers"] = True
+    if args.exploit_opponent_prob is not None:
+        config_kwargs["exploit_opponent_prob"] = args.exploit_opponent_prob
 
     config = NFSPConfig(**config_kwargs)
 

@@ -143,6 +143,11 @@ class SelfPlayWorker:
         )
         self._term_zero_ah_len = np.zeros(config.num_envs, dtype=np.int64)
         self._term_zero_mask = np.zeros((config.num_envs, config.num_actions), dtype=bool)
+
+        # Diverse opponent tracking: which seats use fixed exploit strategies
+        self.exploit_prob = config.exploit_opponent_prob
+        # Per-env per-seat: 0=learning, 1=always-raise, 2=calling-station, 3=tight-fold
+        self.exploit_type = np.zeros((config.num_envs, config.num_players), dtype=np.int8)
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
@@ -221,12 +226,46 @@ class SelfPlayWorker:
         self.ah_lens[:] = 0
         self.ah_pos[:] = 0
         self.pending_valid[:] = False
+        self._assign_exploit_types(np.arange(self.num_envs))
         for i in range(self.num_envs):
             player, obs, mask = results[i]
             self.prev_obs[i] = obs
             self.prev_mask[i] = mask
             self.prev_player[i] = player
         self._initialized = True
+
+    def _assign_exploit_types(self, env_indices: np.ndarray):
+        """Randomly assign fixed exploit strategies to some opponent seats."""
+        n = len(env_indices)
+        if self.exploit_prob <= 0.0 or self.num_players < 2:
+            self.exploit_type[env_indices] = 0
+            return
+        # Each seat independently gets a chance to be an exploit bot
+        rolls = np.random.random((n, self.num_players))
+        is_exploit = rolls < self.exploit_prob
+        # Ensure at least one seat is a learning agent (seat 0 is always learning)
+        is_exploit[:, 0] = False
+        # Assign random exploit type: 1=always-raise, 2=calling-station, 3=tight-fold
+        types = np.random.randint(1, 4, size=(n, self.num_players))
+        self.exploit_type[env_indices] = np.where(is_exploit, types, 0).astype(np.int8)
+
+    @staticmethod
+    def _exploit_action(exploit_type: int, mask: np.ndarray) -> int:
+        """Pick action for a fixed exploit strategy.
+        Actions: 0=fold, 1=call/check, 2=min, 3=0.5x, 4=0.75x, 5=1x, 6=1.5x, 7=2x, 8=allin
+        """
+        if exploit_type == 1:  # always-raise: biggest raise available
+            for a in (7, 6, 5, 4, 3, 2, 8):  # 2x, 1.5x, 1x, ..., allin
+                if mask[a]:
+                    return a
+            return 1 if mask[1] else 0  # fall back to call/fold
+        elif exploit_type == 2:  # calling-station: always call
+            return 1 if mask[1] else 0
+        elif exploit_type == 3:  # tight-fold: fold if facing bet, else check
+            if mask[0]:  # fold available means facing a bet
+                return 0
+            return 1  # check
+        return 1  # default: call
 
     def run_episodes(self, epsilon: float, eta: float | None = None) -> int:
         """Run continuous self-play until at least num_envs episodes complete.
@@ -268,8 +307,12 @@ class SelfPlayWorker:
 
             # Classify AS vs BR for the current player in each env
             is_as = self.use_as[env_idx, players]
-            as_idx = np.where(is_as)[0]
-            br_idx = np.where(~is_as)[0]
+            # Check which current actors are exploit bots (fixed strategy)
+            is_exploit = self.exploit_type[env_idx, players] > 0
+            is_learning = ~is_exploit
+            as_idx = np.where(is_as & is_learning)[0]
+            br_idx = np.where(~is_as & is_learning)[0]
+            exploit_idx = np.where(is_exploit)[0]
 
             # Batched GPU inference — single CPU sync
             actions_np = self.actions_np
@@ -287,16 +330,26 @@ class SelfPlayWorker:
                     )
                     actions_gpu[br_idx] = eps_greedy_br
                     greedy_br_np = greedy_br.cpu().numpy()
+                # Exploit bots get dummy GPU values (overwritten below)
+                if len(exploit_idx) > 0:
+                    actions_gpu[exploit_idx] = 1  # placeholder
                 actions_np[:] = actions_gpu.cpu().numpy()
+
+            # Override actions for exploit bot seats with fixed policies
+            for ei in exploit_idx:
+                etype = int(self.exploit_type[ei, players[ei]])
+                actions_np[ei] = self._exploit_action(etype, self.pre_mask[ei])
 
             pre_players = self.pre_players  # safe copy from above
 
             # --- Flush pending non-terminal BR transitions ---
             # When the same player acts again, their pending transition gets
             # the correct next_state (this player's current obs).
+            # Skip exploit seats — their transitions don't go to buffers.
             has_pending_br = (
                 self.pending_valid[env_idx, pre_players]
                 & self.pending_is_br[env_idx, pre_players]
+                & is_learning
             )
             if has_pending_br.any():
                 sel = np.where(has_pending_br)[0]
@@ -317,22 +370,25 @@ class SelfPlayWorker:
                 )
 
             # --- Store current state as pending for the acting player ---
+            # Exploit seats still get tracked for pending_valid (for env stepping)
+            # but marked so their transitions are skipped at flush time.
             self.pending_obs[env_idx, pre_players] = self.static_obs
             self.pending_ah[env_idx, pre_players] = self.ah_batch
             self.pending_ah_len[env_idx, pre_players] = self.ah_lens_batch
             self.pending_mask[env_idx, pre_players] = self.pre_mask
             self.pending_action[env_idx, pre_players] = actions_np
             self.pending_valid[env_idx, pre_players] = True
-            self.pending_is_br[env_idx, pre_players] = ~is_as
+            self.pending_is_br[env_idx, pre_players] = ~is_as & is_learning
 
-            # --- Push to AS buffer for BR-policy actions (greedy, no exploration noise) ---
-            if br_idx.size > 0:
+            # --- Push to AS buffer for learning BR-policy actions ---
+            learning_br_idx = br_idx
+            if learning_br_idx.size > 0:
                 self.as_buffer.push_batch(
-                    obs=self.static_obs[br_idx],
-                    action_history=self.ah_batch[br_idx],
-                    history_length=self.ah_lens_batch[br_idx],
+                    obs=self.static_obs[learning_br_idx],
+                    action_history=self.ah_batch[learning_br_idx],
+                    history_length=self.ah_lens_batch[learning_br_idx],
                     actions=greedy_br_np,
-                    legal_mask=self.pre_mask[br_idx],
+                    legal_mask=self.pre_mask[learning_br_idx],
                 )
 
             # --- Step all envs ---
@@ -353,9 +409,12 @@ class SelfPlayWorker:
             if len(done_indices) > 0:
                 completed_episodes += len(done_indices)
                 for p in range(num_players):
+                    # Skip exploit bot seats for buffer pushes
+                    is_exploit_p = self.exploit_type[done_indices, p] > 0
                     has_p = (
                         self.pending_valid[done_indices, p]
                         & self.pending_is_br[done_indices, p]
+                        & ~is_exploit_p
                     )
                     if has_p.any():
                         sel = done_indices[has_p]
@@ -387,6 +446,7 @@ class SelfPlayWorker:
                 self.use_as[done_indices] = (
                     np.random.random((len(done_indices), num_players)) < eta
                 )
+                self._assign_exploit_types(done_indices)
 
             # Update state for alive envs
             alive = ~dones_arr
