@@ -46,6 +46,8 @@ pub trait BotStrategy: Send + Sync {
     ) -> PlayerAction {
         self.decide(view)
     }
+    /// Passively observe table state (e.g. track opponent stats between turns).
+    fn observe_table(&self, _table: &crate::game::table::PokerTable) {}
     fn name(&self) -> &str;
 }
 

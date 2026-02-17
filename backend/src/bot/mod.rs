@@ -43,6 +43,11 @@ impl BotPlayer {
     ) -> PlayerAction {
         self.strategy.decide_with_table(view, table, player_idx)
     }
+
+    /// Passively observe the table (track opponent stats even when not acting).
+    pub fn observe(&self, table: &PokerTable) {
+        self.strategy.observe_table(table);
+    }
 }
 
 /// Manages bot players across tables.
@@ -174,6 +179,13 @@ impl BotManager {
         let now = current_timestamp_ms();
 
         for (table_id, table) in tables {
+            // Let all bots at this table passively observe actions (even when not their turn)
+            if let Some(table_bots) = self.bots.get(table_id) {
+                for bot in table_bots {
+                    bot.observe(table);
+                }
+            }
+
             // Skip tables not in an active betting phase
             if !matches!(
                 table.phase,

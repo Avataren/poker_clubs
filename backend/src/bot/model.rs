@@ -455,6 +455,12 @@ impl BotStrategy for ModelStrategy {
         "model"
     }
 
+    fn observe_table(&self, table: &PokerTable) {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.observe(table);
+        }
+    }
+
     fn decide(&self, view: &BotGameView) -> PlayerAction {
         // Fallback path if table context is not available.
         self.fallback.decide(view)
