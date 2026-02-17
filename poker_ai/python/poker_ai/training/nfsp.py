@@ -618,6 +618,7 @@ class NFSPTrainer:
         vs_random = self._eval_vs(eval_model, "random", num_hands=self.config.eval_hands)
         vs_caller = self._eval_vs(eval_model, "caller", num_hands=self.config.eval_hands)
         vs_tag = self._eval_vs(eval_model, "tag", num_hands=self.config.eval_hands)
+        vs_potbet = self._eval_vs(eval_model, "potbet", num_hands=self.config.eval_hands)
 
         # Exploitability probe: BR vs AS on CPU
         br_cpu = copy.deepcopy(self._unwrap(self.br_net)).to("cpu")
@@ -636,6 +637,8 @@ class NFSPTrainer:
             f"(95% CI, n={vs_caller.num_hands}) | "
             f"vs TAG: {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100 "
             f"(95% CI, n={vs_tag.num_hands}) | "
+            f"vs PotBet: {vs_potbet.bb100:+.2f} +/- {vs_potbet.ci95:.2f} bb/100 "
+            f"(95% CI, n={vs_potbet.num_hands}) | "
             f"BR exploit: {exploit.bb100:+.2f} +/- {exploit.ci95:.2f} bb/100"
         )
         self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
@@ -650,6 +653,10 @@ class NFSPTrainer:
         self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
         self.writer.add_scalar("eval/vs_tag_seat0_bb100", vs_tag.seat0_bb100, episode)
         self.writer.add_scalar("eval/vs_tag_seat1_bb100", vs_tag.seat1_bb100, episode)
+        self.writer.add_scalar("eval/vs_potbet_bb100", vs_potbet.bb100, episode)
+        self.writer.add_scalar("eval/vs_potbet_ci95", vs_potbet.ci95, episode)
+        self.writer.add_scalar("eval/vs_potbet_seat0_bb100", vs_potbet.seat0_bb100, episode)
+        self.writer.add_scalar("eval/vs_potbet_seat1_bb100", vs_potbet.seat1_bb100, episode)
 
         # Bluff stats (from vs TAG as most meaningful)
         self.writer.add_scalar("eval/bluff_pct", vs_tag.bluff_pct, episode)
@@ -669,6 +676,7 @@ class NFSPTrainer:
 
         vs_tag = self._eval_multiway_vs(eval_model, "tag", num_hands=num_hands)
         vs_random = self._eval_multiway_vs(eval_model, "random", num_hands=num_hands)
+        vs_potbet = self._eval_multiway_vs(eval_model, "potbet", num_hands=num_hands)
 
         # Print summary
         pos_str = " | ".join(f"{n}:{vs_tag.position_bb100[n]:+.0f}" for n in pos_names)
@@ -676,6 +684,7 @@ class NFSPTrainer:
             f"  Eval @ {episode:,} ({num_players}-max, n={num_hands}):\n"
             f"    vs TAG: {vs_tag.bb100:+.2f} +/- {vs_tag.ci95:.2f} bb/100\n"
             f"    vs Random: {vs_random.bb100:+.2f} +/- {vs_random.ci95:.2f} bb/100\n"
+            f"    vs PotBet: {vs_potbet.bb100:+.2f} +/- {vs_potbet.ci95:.2f} bb/100\n"
             f"    Position bb/100: {pos_str}\n"
             f"    HUD: VPIP={vs_tag.vpip:.1f}% PFR={vs_tag.pfr:.1f}% "
             f"3Bet={vs_tag.three_bet:.1f}% Steal={vs_tag.steal_attempt:.1f}% "
@@ -687,6 +696,8 @@ class NFSPTrainer:
         self.writer.add_scalar("eval/vs_tag_ci95", vs_tag.ci95, episode)
         self.writer.add_scalar("eval/vs_random_bb100", vs_random.bb100, episode)
         self.writer.add_scalar("eval/vs_random_ci95", vs_random.ci95, episode)
+        self.writer.add_scalar("eval/vs_potbet_bb100", vs_potbet.bb100, episode)
+        self.writer.add_scalar("eval/vs_potbet_ci95", vs_potbet.ci95, episode)
 
         # TensorBoard: positional
         for name in pos_names:
@@ -735,6 +746,12 @@ class NFSPTrainer:
             return int(np.random.choice(legal))
         if opponent == "caller":
             return 1 if mask[1] else int(legal[0])
+        if opponent == "potbet":
+            # Always pot-size raise (action 6), fallback to biggest available raise, then all-in, then call
+            for action in (6, 7, 5, 4, 3, 2, 8, 1):
+                if mask[action]:
+                    return action
+            return int(legal[0])
         if opponent != "tag":
             raise ValueError(f"Unknown opponent policy: {opponent}")
 
