@@ -76,8 +76,9 @@ class ReservoirBuffer:
             fill = min(self.capacity - self.size, n)
             if fill > 0:
                 dest = slice(self.size, self.size + fill)
-                self.obs[dest] = obs[:fill]
-                self.action_history[dest] = action_history[:fill]
+                with np.errstate(over="ignore"):
+                    self.obs[dest] = obs[:fill]
+                    self.action_history[dest] = action_history[:fill]
                 self.history_length[dest] = history_length[:fill]
                 self.actions[dest] = actions[:fill]
                 self.legal_mask[dest] = legal_mask[:fill]
@@ -111,8 +112,9 @@ class ReservoirBuffer:
                 target = target_sorted[last]
                 source = source_sorted[last]
 
-            self.obs[target] = obs[source]
-            self.action_history[target] = action_history[source]
+            with np.errstate(over="ignore"):
+                self.obs[target] = obs[source]
+                self.action_history[target] = action_history[source]
             self.history_length[target] = history_length[source]
             self.actions[target] = actions[source]
             self.legal_mask[target] = legal_mask[source]

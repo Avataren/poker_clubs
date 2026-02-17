@@ -266,9 +266,13 @@ class NFSPTrainer:
         # Optimizers
         self.br_optimizer = torch.optim.Adam(self.br_net.parameters(), lr=config.br_lr)
         self.as_optimizer = torch.optim.Adam(self.as_net.parameters(), lr=config.as_lr)
-        scaler_device = "cuda" if self.use_amp else "cpu"
-        self.br_scaler = torch.amp.GradScaler(scaler_device, enabled=self.use_amp)
-        self.as_scaler = torch.amp.GradScaler(scaler_device, enabled=self.use_amp)
+        # GradScaler is only needed for float16 (narrow exponent range).
+        # bfloat16 has the same exponent range as float32, so scaling is unnecessary
+        # and can actually cause NaN by producing inf scaled gradients.
+        use_scaler = self.use_amp and self.amp_dtype == torch.float16
+        scaler_device = "cuda" if use_scaler else "cpu"
+        self.br_scaler = torch.amp.GradScaler(scaler_device, enabled=use_scaler)
+        self.as_scaler = torch.amp.GradScaler(scaler_device, enabled=use_scaler)
 
         # LR schedulers (cosine decay with linear warmup)
         self._lr_warmup_steps = config.lr_warmup_steps
@@ -476,7 +480,24 @@ class NFSPTrainer:
         loss_val = loss.item()
         if not math.isfinite(loss_val):
             self.br_updates += 1
-            print(f"  [WARNING] BR loss is {loss_val} at update {self.br_updates}, skipping optimizer step")
+            # Diagnose source of NaN
+            nan_sources = []
+            if torch.isnan(q_taken).any():
+                nan_sources.append(f"q_taken({torch.isnan(q_taken).sum().item()})")
+            if torch.isnan(target).any():
+                nan_sources.append(f"target({torch.isnan(target).sum().item()})")
+            if torch.isnan(rewards).any():
+                nan_sources.append(f"rewards({torch.isnan(rewards).sum().item()})")
+            if torch.isnan(obs).any():
+                nan_sources.append(f"obs({torch.isnan(obs).sum().item()})")
+            if torch.isnan(next_obs).any():
+                nan_sources.append(f"next_obs({torch.isnan(next_obs).sum().item()})")
+            if torch.isinf(q_taken).any():
+                nan_sources.append(f"q_taken_inf({torch.isinf(q_taken).sum().item()})")
+            src = ", ".join(nan_sources) if nan_sources else "loss computation only"
+            if self.br_updates % 50 == 0 or self.br_updates <= 10:
+                print(f"  [WARNING] BR loss is {loss_val} at update {self.br_updates}, "
+                      f"skipping optimizer step | NaN in: {src}")
             return loss_val
 
         self.br_optimizer.zero_grad(set_to_none=True)
