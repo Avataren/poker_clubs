@@ -148,6 +148,9 @@ class SelfPlayWorker:
         self.exploit_prob = config.exploit_opponent_prob
         # Per-env per-seat: 0=learning, 1=always-raise, 2=calling-station, 3=tight-fold
         self.exploit_type = np.zeros((config.num_envs, config.num_players), dtype=np.int8)
+        # Remaining hands before exploit bot reverts to learning agent.
+        # Exploit bots persist for 50-200 hands so EMA stats can reflect their behavior.
+        self.exploit_remaining = np.zeros((config.num_envs, config.num_players), dtype=np.int32)
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
@@ -235,19 +238,49 @@ class SelfPlayWorker:
         self._initialized = True
 
     def _assign_exploit_types(self, env_indices: np.ndarray):
-        """Randomly assign fixed exploit strategies to some opponent seats."""
+        """Manage exploit bot lifecycle: decrement counters and assign new ones.
+
+        Exploit bots persist for 50-200 hands so EMA stats (α=0.02, ~50 hand
+        window) have time to reflect their extreme behavior. The per-hand roll
+        probability is adjusted so that the effective fraction of hands with an
+        exploit opponent matches exploit_opponent_prob.
+        """
         n = len(env_indices)
         if self.exploit_prob <= 0.0 or self.num_players < 2:
-            self.exploit_type[env_indices] = 0
             return
-        # Each seat independently gets a chance to be an exploit bot
+
+        remaining = self.exploit_remaining[env_indices]  # (n, num_players)
+        types = self.exploit_type[env_indices]            # (n, num_players)
+
+        # Decrement counters for active exploit bots
+        active = remaining > 0
+        remaining[active] -= 1
+
+        # Seats that just expired revert to learning
+        just_expired = (remaining == 0) & (types > 0)
+        types[just_expired] = 0
+
+        # For inactive seats (type==0), roll for new exploit assignment
+        # Seat 0 is always learning
+        inactive = types == 0
+        inactive[:, 0] = False
+
+        # Per-hand probability adjusted for duration so effective_fraction ≈ exploit_prob
+        # effective_frac ≈ p_roll * avg_duration, so p_roll = target / avg_duration
+        avg_duration = 125.0  # midpoint of [50, 200]
+        p_roll = self.exploit_prob / avg_duration
         rolls = np.random.random((n, self.num_players))
-        is_exploit = rolls < self.exploit_prob
-        # Ensure at least one seat is a learning agent (seat 0 is always learning)
-        is_exploit[:, 0] = False
-        # Assign random exploit type: 1=always-raise, 2=calling-station, 3=tight-fold
-        types = np.random.randint(1, 4, size=(n, self.num_players))
-        self.exploit_type[env_indices] = np.where(is_exploit, types, 0).astype(np.int8)
+        new_exploit = inactive & (rolls < p_roll)
+
+        if new_exploit.any():
+            new_types = np.random.randint(1, 4, size=(n, self.num_players))
+            # Duration: 50-200 hands (uniform), matching EMA effective window
+            new_duration = np.random.randint(50, 201, size=(n, self.num_players))
+            types[new_exploit] = new_types[new_exploit]
+            remaining[new_exploit] = new_duration[new_exploit]
+
+        self.exploit_type[env_indices] = types
+        self.exploit_remaining[env_indices] = remaining
 
     @staticmethod
     def _exploit_action(exploit_type: int, mask: np.ndarray) -> int:
