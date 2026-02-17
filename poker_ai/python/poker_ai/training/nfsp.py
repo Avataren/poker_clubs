@@ -158,6 +158,7 @@ class EvalStats:
     river_bluff_pct: float = 0.0
     # Showdown & fold-to-bet
     showdown_pct: float = 0.0      # hands reaching showdown (%)
+    fold_to_preflop_bet: float = 0.0  # fold when facing preflop raise (%)
     fold_to_flop_bet: float = 0.0  # fold when facing flop bet (%)
     fold_to_turn_bet: float = 0.0
     fold_to_river_bet: float = 0.0
@@ -781,9 +782,16 @@ class NFSPTrainer:
         self.writer.add_scalar("bluff/river", vs_tag.river_bluff_pct, episode)
 
         # Fold-to-bet per street (vs TAG)
+        self.writer.add_scalar("fold_to_bet/preflop", vs_tag.fold_to_preflop_bet, episode)
         self.writer.add_scalar("fold_to_bet/flop", vs_tag.fold_to_flop_bet, episode)
         self.writer.add_scalar("fold_to_bet/turn", vs_tag.fold_to_turn_bet, episode)
         self.writer.add_scalar("fold_to_bet/river", vs_tag.fold_to_river_bet, episode)
+
+        # Fold-to-bet per street (vs PotBet — most meaningful for postflop)
+        self.writer.add_scalar("fold_to_bet_potbet/preflop", vs_potbet.fold_to_preflop_bet, episode)
+        self.writer.add_scalar("fold_to_bet_potbet/flop", vs_potbet.fold_to_flop_bet, episode)
+        self.writer.add_scalar("fold_to_bet_potbet/turn", vs_potbet.fold_to_turn_bet, episode)
+        self.writer.add_scalar("fold_to_bet_potbet/river", vs_potbet.fold_to_river_bet, episode)
 
     def _evaluate_multiway(self, eval_model, episode: int):
         """Multiway evaluation: vs TAG table with positional and HUD stats."""
@@ -968,7 +976,7 @@ class NFSPTrainer:
         showdown_count = 0
         # Fold-to-bet per street
         fold_to_bet: dict[str, list[int]] = {
-            "flop": [0, 0], "turn": [0, 0], "river": [0, 0]  # [folds, opportunities]
+            "preflop": [0, 0], "flop": [0, 0], "turn": [0, 0], "river": [0, 0]  # [folds, opportunities]
         }
         # C-bet tracking
         cbet_opportunities = 0
@@ -1034,6 +1042,7 @@ class NFSPTrainer:
 
                     # Per-street action tracking
                     street_name = {1: "flop", 2: "turn", 3: "river"}.get(phase)
+                    ftb_street = {0: "preflop", 1: "flop", 2: "turn", 3: "river"}.get(phase)
                     if street_name:
                         street_actions[street_name][cat] += 1
 
@@ -1056,10 +1065,10 @@ class NFSPTrainer:
                             bet_size_count += 1
 
                     # Fold-to-bet: did hero fold when facing a bet?
-                    if last_action_was_bet and street_name:
-                        fold_to_bet[street_name][1] += 1  # opportunity
+                    if last_action_was_bet and ftb_street:
+                        fold_to_bet[ftb_street][1] += 1  # opportunity
                         if action == 0:
-                            fold_to_bet[street_name][0] += 1  # folded
+                            fold_to_bet[ftb_street][0] += 1  # folded
 
                     # C-bet: hero raised preflop and now acts on flop
                     if phase == 1 and hero_raised_preflop and not hero_acted_on_flop:
@@ -1171,6 +1180,7 @@ class NFSPTrainer:
             turn_bluff_pct=(street_bluffs["turn"][0] / max(street_bluffs["turn"][1], 1) * 100),
             river_bluff_pct=(street_bluffs["river"][0] / max(street_bluffs["river"][1], 1) * 100),
             showdown_pct=showdown_count / max(total_hero_hands, 1) * 100,
+            fold_to_preflop_bet=_ftb_pct(fold_to_bet["preflop"]),
             fold_to_flop_bet=_ftb_pct(fold_to_bet["flop"]),
             fold_to_turn_bet=_ftb_pct(fold_to_bet["turn"]),
             fold_to_river_bet=_ftb_pct(fold_to_bet["river"]),
