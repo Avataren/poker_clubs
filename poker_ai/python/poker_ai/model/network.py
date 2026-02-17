@@ -91,15 +91,15 @@ class ActionHistoryTransformer(nn.Module):
         # Transformer encoder
         x = self.transformer(x, src_key_padding_mask=pad_mask)  # (batch, seq_len, embed_dim)
 
-        # Mean pool over valid positions
+        # Mean pool over valid positions (float32 to prevent accumulation overflow)
         if valid_mask_f is not None:
             valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
-            x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
+            x = (x.float() * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts  # (batch, embed_dim)
             # Zero out output for fully empty histories (lengths==0)
             has_history = (lengths > 0).unsqueeze(1).to(dtype)  # (batch, 1) float
-            x = x * has_history
+            x = (x * has_history).to(dtype)
         else:
-            x = x.mean(dim=1)
+            x = x.float().mean(dim=1).to(dtype)
 
         return self.output_proj(x)  # (batch, hidden_dim)
 
@@ -193,20 +193,25 @@ class PokerNet(nn.Module):
         x = torch.cat([obs, history_hidden], dim=-1)
         trunk_out = self.trunk(x)
 
-        policy_logits = self.policy_head(trunk_out)
+        # Run output heads in float32 to prevent float16 overflow.
+        # The trunk output is bounded by LayerNorm+ReLU, but the heads
+        # produce unbounded logits/Q-values that can exceed float16 range.
+        # Disable autocast so Linear layers stay in float32.
+        trunk_f32 = trunk_out.float()
+        with torch.amp.autocast(trunk_out.device.type, enabled=False):
+            policy_logits = self.policy_head(trunk_f32)
 
-        # Dueling DQN: Q(s,a) = V(s) + A(s,a) - mean(A)
-        v = self.value_stream(trunk_out)       # (batch, 1)
-        a = self.advantage_stream(trunk_out)   # (batch, num_actions)
-        q_values = v + a - a.mean(dim=-1, keepdim=True)
+            # Dueling DQN: Q(s,a) = V(s) + A(s,a) - mean(A)
+            v = self.value_stream(trunk_f32)       # (batch, 1)
+            a = self.advantage_stream(trunk_f32)   # (batch, num_actions)
+            q_values = v + a - a.mean(dim=-1, keepdim=True)
 
-        # Mask illegal actions (float math only — no bools for ROCm Triton compat)
-        # Use -1e4 instead of dtype.min to avoid float16 overflow in log_softmax
-        if legal_mask is not None:
-            neg_inf = -1e4
-            illegal_f = 1.0 - legal_mask.to(policy_logits.dtype)  # 1.0=illegal, 0.0=legal
-            policy_logits = policy_logits + illegal_f * neg_inf
-            q_values = q_values + illegal_f * neg_inf
+            # Mask illegal actions (float math only — no bools for ROCm Triton compat)
+            if legal_mask is not None:
+                neg_inf = torch.tensor(-1e9, dtype=policy_logits.dtype, device=policy_logits.device)
+                illegal_f = 1.0 - legal_mask.to(policy_logits.dtype)  # 1.0=illegal, 0.0=legal
+                policy_logits = policy_logits + illegal_f * neg_inf
+                q_values = q_values + illegal_f * neg_inf
 
         return policy_logits, q_values
 

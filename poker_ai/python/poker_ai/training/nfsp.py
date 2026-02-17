@@ -471,11 +471,12 @@ class NFSPTrainer:
                 next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
                 # Terminal states have no bootstrap term; avoid (-inf * 0) -> NaN.
                 next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
-                target = rewards + self.config.gamma * next_q
-                # Clamp targets to prevent float16 overflow under AMP
+                # Compute target in float32 to prevent overflow before clamp
+                target = rewards.float() + self.config.gamma * next_q.float()
                 target = target.clamp(-10000, 10000)
 
-            loss = F.smooth_l1_loss(q_taken, target, beta=self.config.huber_delta)
+            # Upcast to float32 for loss to prevent float16 overflow in q_taken
+            loss = F.smooth_l1_loss(q_taken.float(), target.float(), beta=self.config.huber_delta)
 
         # Skip optimizer step on NaN/inf loss to avoid poisoning weights
         loss_val = loss.item()
@@ -540,7 +541,8 @@ class NFSPTrainer:
             device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
         ):
             logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
-            loss = F.cross_entropy(logits, actions)
+            # Upcast to float32 for loss to prevent float16 overflow
+            loss = F.cross_entropy(logits.float(), actions)
 
         # Skip optimizer step on NaN/inf loss to avoid poisoning weights
         loss_val = loss.item()
