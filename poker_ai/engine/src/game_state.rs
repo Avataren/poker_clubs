@@ -315,8 +315,8 @@ impl PlayerStats {
             self.wtsd as f32,
             self.wsd as f32,
             self.cbet as f32,
-            self.avg_bet_size as f32,
-            self.preflop_raise_size as f32,
+            (self.avg_bet_size as f32).min(5.0) / 5.0,
+            (self.preflop_raise_size as f32).min(10.0) / 10.0,
             self.ep_vpip as f32,
             self.lp_vpip as f32,
         ]
@@ -560,14 +560,15 @@ impl SimTable {
         let action = da.to_action(self.pot, self.current_bet, self.player_bets[seat], self.stacks[seat]);
 
         let bet_ratio = if self.pot > 0 {
-            match &action {
+            let raw = match &action {
                 Action::Raise(to) => (*to - self.player_bets[seat]) as f32 / self.pot as f32,
                 Action::AllIn => self.stacks[seat] as f32 / self.pot as f32,
                 Action::CheckCall => {
                     (self.current_bet - self.player_bets[seat]) as f32 / self.pot.max(1) as f32
                 }
                 Action::Fold => 0.0,
-            }
+            };
+            raw.min(10.0) // clamp to avoid EMA explosion from huge all-ins
         } else {
             0.0
         };
