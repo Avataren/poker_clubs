@@ -8,7 +8,7 @@ use std::slice;
 use crate::game_state::SimTable;
 
 /// Observation vector size: 364 (cards) + 86 (game state) + 128 (history placeholder) + 52 (hand strength)
-const OBS_SIZE: usize = 630;
+const OBS_SIZE: usize = 710;
 
 fn f32_as_pybytes<'py>(py: Python<'py>, data: &[f32]) -> Bound<'py, PyBytes> {
     let bytes = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, size_of_val(data)) };

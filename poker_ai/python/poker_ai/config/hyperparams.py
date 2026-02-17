@@ -14,7 +14,7 @@ class NFSPConfig:
     num_envs: int = 1024
 
     # Network architecture
-    input_dim: int = 630
+    input_dim: int = 710
     num_actions: int = 9
     hidden_dim: int = 1024
     residual_dim: int = 512

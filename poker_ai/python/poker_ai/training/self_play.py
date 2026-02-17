@@ -28,7 +28,7 @@ _STATIC_COLS = np.concatenate([
 
 
 def extract_static_features_batch(obs_batch: np.ndarray) -> np.ndarray:
-    """Vectorized: extract static features from (n, 630) -> (n, 502)."""
+    """Vectorized: extract static features from (n, 710) -> (n, 582)."""
     return obs_batch[:, _STATIC_COLS]
 
 

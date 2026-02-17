@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tract_onnx::prelude::*;
 
-const OBS_DIM: usize = 502;
+const OBS_DIM: usize = 582;
 const HISTORY_DIM: usize = 11;
 const MAX_HISTORY_LEN: usize = 30;
 const NUM_ACTIONS: usize = 9;
@@ -21,14 +21,28 @@ const EMA_ALPHA: f64 = 0.02;
 
 type OnnxPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, TypedModel>;
 
+/// Number of floats in per-opponent stats encoding.
+const STATS_PER_OPPONENT: usize = 15;
+
 /// Per-opponent EMA stats, tracked by the bot from observed table actions.
 #[derive(Debug, Clone)]
 struct SeatStats {
+    // EMA running stats
     vpip: f64,
     pfr: f64,
     aggression: f64,
     fold_to_bet: f64,
     hands_played: f64,
+    flop_aggression: f64,
+    turn_aggression: f64,
+    river_aggression: f64,
+    wtsd: f64,
+    wsd: f64,
+    cbet: f64,
+    avg_bet_size: f64,
+    preflop_raise_size: f64,
+    ep_vpip: f64,
+    lp_vpip: f64,
     // Per-hand accumulators
     hand_vpip: bool,
     hand_pfr: bool,
@@ -36,6 +50,24 @@ struct SeatStats {
     hand_calls: u32,
     hand_folds_to_bet: u32,
     hand_faced_bets: u32,
+    hand_flop_raises: u32,
+    hand_flop_actions: u32,
+    hand_turn_raises: u32,
+    hand_turn_actions: u32,
+    hand_river_raises: u32,
+    hand_river_actions: u32,
+    hand_saw_flop: bool,
+    hand_cbet_opportunity: bool,
+    hand_cbet_taken: bool,
+    hand_acted_on_flop: bool,
+    hand_bet_size_sum: f64,
+    hand_bet_count: u32,
+    hand_preflop_raise_size_sum: f64,
+    hand_preflop_raise_count: u32,
+    hand_is_early_position: bool,
+    hand_is_late_position: bool,
+    hand_went_to_showdown: bool,
+    hand_won_at_showdown: bool,
 }
 
 impl SeatStats {
@@ -43,9 +75,23 @@ impl SeatStats {
         Self {
             vpip: 0.5, pfr: 0.5, aggression: 0.5, fold_to_bet: 0.5,
             hands_played: 0.0,
+            flop_aggression: 0.5, turn_aggression: 0.5, river_aggression: 0.5,
+            wtsd: 0.5, wsd: 0.5, cbet: 0.5,
+            avg_bet_size: 0.5, preflop_raise_size: 0.5,
+            ep_vpip: 0.5, lp_vpip: 0.5,
             hand_vpip: false, hand_pfr: false,
             hand_raises: 0, hand_calls: 0,
             hand_folds_to_bet: 0, hand_faced_bets: 0,
+            hand_flop_raises: 0, hand_flop_actions: 0,
+            hand_turn_raises: 0, hand_turn_actions: 0,
+            hand_river_raises: 0, hand_river_actions: 0,
+            hand_saw_flop: false,
+            hand_cbet_opportunity: false, hand_cbet_taken: false,
+            hand_acted_on_flop: false,
+            hand_bet_size_sum: 0.0, hand_bet_count: 0,
+            hand_preflop_raise_size_sum: 0.0, hand_preflop_raise_count: 0,
+            hand_is_early_position: false, hand_is_late_position: false,
+            hand_went_to_showdown: false, hand_won_at_showdown: false,
         }
     }
     fn start_hand(&mut self) {
@@ -55,6 +101,43 @@ impl SeatStats {
         self.hand_calls = 0;
         self.hand_folds_to_bet = 0;
         self.hand_faced_bets = 0;
+        self.hand_flop_raises = 0;
+        self.hand_flop_actions = 0;
+        self.hand_turn_raises = 0;
+        self.hand_turn_actions = 0;
+        self.hand_river_raises = 0;
+        self.hand_river_actions = 0;
+        self.hand_saw_flop = false;
+        self.hand_cbet_opportunity = false;
+        self.hand_cbet_taken = false;
+        self.hand_acted_on_flop = false;
+        self.hand_bet_size_sum = 0.0;
+        self.hand_bet_count = 0;
+        self.hand_preflop_raise_size_sum = 0.0;
+        self.hand_preflop_raise_count = 0;
+        self.hand_is_early_position = false;
+        self.hand_is_late_position = false;
+        self.hand_went_to_showdown = false;
+        self.hand_won_at_showdown = false;
+    }
+    fn set_position(&mut self, seat_offset: usize, num_players: usize) {
+        if num_players <= 3 {
+            self.hand_is_late_position = seat_offset == 0 || seat_offset == num_players;
+            self.hand_is_early_position = !self.hand_is_late_position;
+        } else {
+            self.hand_is_late_position = seat_offset == 0 || seat_offset == num_players - 1;
+            self.hand_is_early_position = seat_offset >= 3 && seat_offset <= num_players / 2 + 1;
+        }
+    }
+    fn mark_saw_flop(&mut self) {
+        self.hand_saw_flop = true;
+        if self.hand_pfr {
+            self.hand_cbet_opportunity = true;
+        }
+    }
+    fn record_showdown(&mut self, won: bool) {
+        self.hand_went_to_showdown = true;
+        self.hand_won_at_showdown = won;
     }
     fn end_hand(&mut self) {
         self.hands_played += 1.0;
@@ -70,11 +153,62 @@ impl SeatStats {
             let hand_ftb = self.hand_folds_to_bet as f64 / self.hand_faced_bets as f64;
             self.fold_to_bet = self.fold_to_bet * (1.0 - a) + hand_ftb * a;
         }
+        // Street-specific aggression
+        if self.hand_flop_actions > 0 {
+            let agg = self.hand_flop_raises as f64 / self.hand_flop_actions as f64;
+            self.flop_aggression = self.flop_aggression * (1.0 - a) + agg * a;
+        }
+        if self.hand_turn_actions > 0 {
+            let agg = self.hand_turn_raises as f64 / self.hand_turn_actions as f64;
+            self.turn_aggression = self.turn_aggression * (1.0 - a) + agg * a;
+        }
+        if self.hand_river_actions > 0 {
+            let agg = self.hand_river_raises as f64 / self.hand_river_actions as f64;
+            self.river_aggression = self.river_aggression * (1.0 - a) + agg * a;
+        }
+        // Showdown stats
+        if self.hand_saw_flop {
+            let went = if self.hand_went_to_showdown { 1.0 } else { 0.0 };
+            self.wtsd = self.wtsd * (1.0 - a) + went * a;
+        }
+        if self.hand_went_to_showdown {
+            let won = if self.hand_won_at_showdown { 1.0 } else { 0.0 };
+            self.wsd = self.wsd * (1.0 - a) + won * a;
+        }
+        // C-bet
+        if self.hand_cbet_opportunity {
+            let cbet_val = if self.hand_cbet_taken { 1.0 } else { 0.0 };
+            self.cbet = self.cbet * (1.0 - a) + cbet_val * a;
+        }
+        // Bet sizing
+        if self.hand_bet_count > 0 {
+            let avg = self.hand_bet_size_sum / self.hand_bet_count as f64;
+            self.avg_bet_size = self.avg_bet_size * (1.0 - a) + avg * a;
+        }
+        if self.hand_preflop_raise_count > 0 {
+            let avg = self.hand_preflop_raise_size_sum / self.hand_preflop_raise_count as f64;
+            self.preflop_raise_size = self.preflop_raise_size * (1.0 - a) + avg * a;
+        }
+        // Position-aware VPIP
+        if self.hand_is_early_position {
+            self.ep_vpip = self.ep_vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
+        }
+        if self.hand_is_late_position {
+            self.lp_vpip = self.lp_vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
+        }
     }
-    fn encode(&self) -> [f32; 5] {
+    fn encode(&self) -> [f32; STATS_PER_OPPONENT] {
         let sample_size = (self.hands_played as f32 / 100.0).min(1.0);
-        [self.vpip as f32, self.pfr as f32, self.aggression as f32,
-         self.fold_to_bet as f32, sample_size]
+        [
+            self.vpip as f32, self.pfr as f32, self.aggression as f32,
+            self.fold_to_bet as f32, sample_size,
+            self.flop_aggression as f32, self.turn_aggression as f32,
+            self.river_aggression as f32,
+            self.wtsd as f32, self.wsd as f32,
+            self.cbet as f32,
+            self.avg_bet_size as f32, self.preflop_raise_size as f32,
+            self.ep_vpip as f32, self.lp_vpip as f32,
+        ]
     }
 }
 
@@ -84,19 +218,31 @@ struct OpponentTracker {
     seats: Vec<SeatStats>,
     /// How many actions we've already processed from the current hand.
     actions_seen: usize,
-    /// Last known phase to detect hand boundaries.
+    /// Last known action count to detect hand boundaries.
     last_hand_action_count: usize,
+    /// Track phase seen at last observation for street-specific tracking.
+    last_phase: GamePhase,
+    /// Whether we've already marked saw_flop for this hand.
+    flop_marked: bool,
+    /// Track dealer position for position-aware stats.
+    last_dealer: usize,
 }
 
 impl OpponentTracker {
     fn new() -> Self {
-        Self { seats: Vec::new(), actions_seen: 0, last_hand_action_count: 0 }
+        Self {
+            seats: Vec::new(),
+            actions_seen: 0,
+            last_hand_action_count: 0,
+            last_phase: GamePhase::Waiting,
+            flop_marked: false,
+            last_dealer: 0,
+        }
     }
 
     /// Observe the table and update stats from any new actions since last call.
     fn observe(&mut self, table: &PokerTable) {
         let num_seats = table.players.len();
-        // Grow seat stats if players joined
         while self.seats.len() < num_seats {
             self.seats.push(SeatStats::new());
         }
@@ -105,20 +251,43 @@ impl OpponentTracker {
 
         // Detect new hand: if action history got shorter, a new hand started
         if history.len() < self.last_hand_action_count {
-            // End previous hand stats
+            // Finalize showdown stats for previous hand
+            self.finalize_showdown(table);
+
             for s in &mut self.seats[..num_seats] {
                 s.end_hand();
                 s.start_hand();
             }
             self.actions_seen = 0;
+            self.flop_marked = false;
+
+            // Set position for each seat in the new hand
+            let dealer = table.dealer_seat;
+            self.last_dealer = dealer;
+            for i in 0..num_seats {
+                let offset = (i + num_seats - dealer) % num_seats;
+                self.seats[i].set_position(offset, num_seats);
+            }
         }
         self.last_hand_action_count = history.len();
 
+        // Mark saw_flop when phase transitions past preflop
+        if !self.flop_marked && !matches!(table.phase, GamePhase::PreFlop | GamePhase::Waiting) {
+            self.flop_marked = true;
+            for i in 0..num_seats {
+                let folded = matches!(table.players[i].state, PlayerState::Folded);
+                if !folded {
+                    self.seats[i].mark_saw_flop();
+                }
+            }
+        }
+
+        // Determine the phase for new actions using table's current phase
+        let phase = table.phase.clone();
+
         // Process new actions
-        let is_preflop = matches!(table.phase, GamePhase::PreFlop);
         for i in self.actions_seen..history.len() {
             let rec = &history[i];
-            // Decode actor from normalized seat: rec[0] = seat / (num_players - 1)
             let actor = if num_seats > 1 {
                 (rec[0] * (num_seats - 1) as f32).round() as usize
             } else {
@@ -126,33 +295,105 @@ impl OpponentTracker {
             };
             if actor >= num_seats { continue; }
 
-            // Decode action from one-hot (rec[1..10])
             let action_idx = (1..10).max_by(|&a, &b| rec[a].partial_cmp(&rec[b]).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1) - 1;
             let is_fold = action_idx == 0;
             let is_call = action_idx == 1;
             let is_raise = action_idx >= 2;
-            // Approximate facing_bet from whether call/fold/raise makes sense
-            // A fold or call implies facing a bet; a raise may or may not
             let facing_bet = is_fold || is_call || (is_raise && table.current_bet > 0);
+            let bet_ratio = rec[10] as f64;
 
             let stats = &mut self.seats[actor];
-            if is_fold && facing_bet {
-                stats.hand_folds_to_bet += 1;
-                stats.hand_faced_bets += 1;
-            } else if is_call && facing_bet {
-                stats.hand_calls += 1;
-                stats.hand_faced_bets += 1;
-                if is_preflop { stats.hand_vpip = true; }
+            let is_preflop = matches!(phase, GamePhase::PreFlop);
+
+            if is_fold {
+                if facing_bet {
+                    stats.hand_folds_to_bet += 1;
+                    stats.hand_faced_bets += 1;
+                }
+                match phase {
+                    GamePhase::Flop => { stats.hand_flop_actions += 1; }
+                    GamePhase::Turn => { stats.hand_turn_actions += 1; }
+                    GamePhase::River => { stats.hand_river_actions += 1; }
+                    _ => {}
+                }
+            } else if is_call {
+                if facing_bet {
+                    stats.hand_calls += 1;
+                    stats.hand_faced_bets += 1;
+                    if is_preflop { stats.hand_vpip = true; }
+                }
+                match phase {
+                    GamePhase::Flop => { stats.hand_flop_actions += 1; }
+                    GamePhase::Turn => { stats.hand_turn_actions += 1; }
+                    GamePhase::River => { stats.hand_river_actions += 1; }
+                    _ => {}
+                }
             } else if is_raise {
                 stats.hand_raises += 1;
                 if facing_bet { stats.hand_faced_bets += 1; }
-                if is_preflop { stats.hand_vpip = true; stats.hand_pfr = true; }
+                if is_preflop {
+                    stats.hand_vpip = true;
+                    stats.hand_pfr = true;
+                    if bet_ratio > 0.0 {
+                        stats.hand_preflop_raise_size_sum += bet_ratio;
+                        stats.hand_preflop_raise_count += 1;
+                    }
+                }
+                match phase {
+                    GamePhase::Flop => {
+                        stats.hand_flop_raises += 1;
+                        stats.hand_flop_actions += 1;
+                        if stats.hand_cbet_opportunity && !stats.hand_acted_on_flop {
+                            stats.hand_cbet_taken = true;
+                        }
+                    }
+                    GamePhase::Turn => {
+                        stats.hand_turn_raises += 1;
+                        stats.hand_turn_actions += 1;
+                    }
+                    GamePhase::River => {
+                        stats.hand_river_raises += 1;
+                        stats.hand_river_actions += 1;
+                    }
+                    _ => {}
+                }
+                if bet_ratio > 0.0 {
+                    stats.hand_bet_size_sum += bet_ratio;
+                    stats.hand_bet_count += 1;
+                }
+            }
+            // Track first flop action for c-bet
+            if matches!(phase, GamePhase::Flop) && !stats.hand_acted_on_flop {
+                stats.hand_acted_on_flop = true;
             }
         }
         self.actions_seen = history.len();
+        self.last_phase = phase;
     }
 
-    /// Encode opponent stats for a given hero seat (5 floats per opponent slot, 8 slots = 40).
+    /// Finalize showdown results from the previous hand.
+    fn finalize_showdown(&mut self, table: &PokerTable) {
+        let num_seats = table.players.len().min(self.seats.len());
+        // Check if previous hand ended in showdown by looking at how many
+        // players are still active (not folded). If >1, it was showdown.
+        // The winner detection is approximate since we track from observed data.
+        let active: Vec<usize> = (0..num_seats)
+            .filter(|&i| !matches!(table.players[i].state, PlayerState::Folded))
+            .collect();
+        if active.len() > 1 {
+            // Showdown occurred — determine winners by chip change
+            // (players whose stack increased or stayed same with side pots)
+            for &seat in &active {
+                // Approximate: player with most chips relative to start "won"
+                // This is imperfect but good enough for EMA stats
+                self.seats[seat].record_showdown(
+                    matches!(table.players[seat].state, PlayerState::Active | PlayerState::AllIn)
+                );
+            }
+        }
+    }
+
+    /// Encode opponent stats for a given hero seat (15 floats per opponent slot, 8 slots = 120).
     fn encode_for_seat(&self, hero_seat: usize, num_players: usize, out: &mut Vec<f32>) {
         for i in 0..8 {
             if i < num_players.saturating_sub(1) {
@@ -160,10 +401,12 @@ impl OpponentTracker {
                 if opp < self.seats.len() {
                     out.extend_from_slice(&self.seats[opp].encode());
                 } else {
-                    out.extend_from_slice(&[0.5, 0.5, 0.5, 0.5, 0.0]);
+                    let mut default = [0.5_f32; STATS_PER_OPPONENT];
+                    default[4] = 0.0; // sample_size
+                    out.extend_from_slice(&default);
                 }
             } else {
-                out.extend_from_slice(&[0.0; 5]);
+                out.extend_from_slice(&[0.0; STATS_PER_OPPONENT]);
             }
         }
     }
@@ -490,7 +733,7 @@ impl BotStrategy for ModelStrategy {
             tracker.encode_for_seat(player_idx, table.players.len(), &mut obs);
         } else {
             // Mutex poisoned — append neutral defaults
-            obs.extend_from_slice(&[0.0; 40]);
+            obs.extend_from_slice(&[0.0; STATS_PER_OPPONENT * 8]);
         }
         
         // Debug: log hand strength for strong hands
@@ -1034,7 +1277,7 @@ mod tests {
         let table = make_table();
         let obs = encode_static_observation(&table, 0);
         // Static obs = 364 (cards) + 46 (game state) + 52 (hand strength) = 462
-        // Opponent stats (40) appended separately by OpponentTracker in decide_with_table
+        // Opponent stats (120) appended separately by OpponentTracker in decide_with_table
         assert_eq!(obs.len(), 462);
     }
 

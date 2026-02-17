@@ -7,20 +7,61 @@ use crate::pot::{award_pots, calculate_side_pots, SidePot};
 /// EMA adapts to shifting opponent policy (~50 hand effective window).
 const EMA_ALPHA: f64 = 0.02;
 
+/// Number of floats in the encoded per-opponent stats vector.
+pub const STATS_PER_OPPONENT: usize = 15;
+
 #[derive(Debug, Clone)]
 pub struct PlayerStats {
+    // --- EMA running stats (persist across hands) ---
     pub vpip: f64,
     pub pfr: f64,
-    pub aggression: f64,     // EMA of raise events (vs call events)
+    pub aggression: f64,          // overall raise/(raise+call)
     pub fold_to_bet: f64,
     pub hands_played: f64,
-    // Per-hand accumulators (reset each hand)
+    // Street-specific aggression
+    pub flop_aggression: f64,
+    pub turn_aggression: f64,
+    pub river_aggression: f64,
+    // Showdown stats
+    pub wtsd: f64,                // went to showdown % (when saw flop)
+    pub wsd: f64,                 // won at showdown %
+    // C-bet frequency
+    pub cbet: f64,
+    // Bet sizing tendencies
+    pub avg_bet_size: f64,        // avg bet/raise as fraction of pot
+    pub preflop_raise_size: f64,  // avg preflop raise size / pot
+    // Position-aware VPIP
+    pub ep_vpip: f64,             // VPIP from early position
+    pub lp_vpip: f64,             // VPIP from late position
+
+    // --- Per-hand accumulators (reset each hand) ---
     hand_vpip: bool,
     hand_pfr: bool,
     hand_raises: u32,
     hand_calls: u32,
     hand_folds_to_bet: u32,
     hand_faced_bets: u32,
+    // Street-specific raise/call counts
+    hand_flop_raises: u32,
+    hand_flop_actions: u32,       // raises + calls + checks on flop
+    hand_turn_raises: u32,
+    hand_turn_actions: u32,
+    hand_river_raises: u32,
+    hand_river_actions: u32,
+    // Showdown tracking
+    hand_saw_flop: bool,
+    // C-bet tracking
+    hand_cbet_opportunity: bool,  // raised preflop and saw flop
+    hand_cbet_taken: bool,        // bet/raised on flop after preflop raise
+    hand_acted_on_flop: bool,     // already acted on flop (only first action counts for cbet)
+    // Bet sizing accumulators
+    hand_bet_size_sum: f64,       // sum of bet/raise sizes as pot fractions
+    hand_bet_count: u32,
+    hand_preflop_raise_size_sum: f64,
+    hand_preflop_raise_count: u32,
+    // Position tracking
+    hand_is_early_position: bool,
+    hand_is_late_position: bool,
 }
 
 impl PlayerStats {
@@ -28,9 +69,23 @@ impl PlayerStats {
         Self {
             vpip: 0.5, pfr: 0.5, aggression: 0.5, fold_to_bet: 0.5,
             hands_played: 0.0,
+            flop_aggression: 0.5, turn_aggression: 0.5, river_aggression: 0.5,
+            wtsd: 0.5, wsd: 0.5,
+            cbet: 0.5,
+            avg_bet_size: 0.5, preflop_raise_size: 0.5,
+            ep_vpip: 0.5, lp_vpip: 0.5,
             hand_vpip: false, hand_pfr: false,
             hand_raises: 0, hand_calls: 0,
             hand_folds_to_bet: 0, hand_faced_bets: 0,
+            hand_flop_raises: 0, hand_flop_actions: 0,
+            hand_turn_raises: 0, hand_turn_actions: 0,
+            hand_river_raises: 0, hand_river_actions: 0,
+            hand_saw_flop: false,
+            hand_cbet_opportunity: false, hand_cbet_taken: false,
+            hand_acted_on_flop: false,
+            hand_bet_size_sum: 0.0, hand_bet_count: 0,
+            hand_preflop_raise_size_sum: 0.0, hand_preflop_raise_count: 0,
+            hand_is_early_position: false, hand_is_late_position: false,
         }
     }
 
@@ -41,32 +96,145 @@ impl PlayerStats {
         self.hand_calls = 0;
         self.hand_folds_to_bet = 0;
         self.hand_faced_bets = 0;
+        self.hand_flop_raises = 0;
+        self.hand_flop_actions = 0;
+        self.hand_turn_raises = 0;
+        self.hand_turn_actions = 0;
+        self.hand_river_raises = 0;
+        self.hand_river_actions = 0;
+        self.hand_saw_flop = false;
+        self.hand_cbet_opportunity = false;
+        self.hand_cbet_taken = false;
+        self.hand_acted_on_flop = false;
+        self.hand_bet_size_sum = 0.0;
+        self.hand_bet_count = 0;
+        self.hand_preflop_raise_size_sum = 0.0;
+        self.hand_preflop_raise_count = 0;
+        self.hand_is_early_position = false;
+        self.hand_is_late_position = false;
+    }
+
+    /// Set position category for this hand (called during start_hand setup).
+    /// `seat_offset`: seats from dealer (1=SB, 2=BB, 3..=EP, etc.)
+    /// `num_players`: total players at table.
+    pub fn set_position(&mut self, seat_offset: usize, num_players: usize) {
+        // Early position: first third of seats after blinds (or UTG in HU/3-handed)
+        // Late position: dealer (BTN) and cutoff
+        if num_players <= 3 {
+            // HU/3-max: dealer=LP, others=EP
+            self.hand_is_late_position = seat_offset == 0 || seat_offset == num_players;
+            self.hand_is_early_position = !self.hand_is_late_position;
+        } else {
+            // 4+ players: BTN(offset 0)=LP, CO(offset n-1 from dealer... let's think)
+            // seat_offset = (seat - dealer) % num_players
+            // 0 = dealer/BTN, 1 = SB, 2 = BB, 3 = UTG, ...
+            // LP = BTN (0) and CO (num_players-1)
+            // EP = UTG positions (3, 4 for 6-max)
+            self.hand_is_late_position = seat_offset == 0 || seat_offset == num_players - 1;
+            self.hand_is_early_position = seat_offset >= 3 && seat_offset <= num_players / 2 + 1;
+        }
+    }
+
+    /// Notify that this player survived to see the flop.
+    pub fn mark_saw_flop(&mut self) {
+        self.hand_saw_flop = true;
+        if self.hand_pfr {
+            self.hand_cbet_opportunity = true;
+        }
     }
 
     pub fn end_hand(&mut self) {
         self.hands_played += 1.0;
         let a = EMA_ALPHA;
+
+        // Core stats
         self.vpip = self.vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
         self.pfr = self.pfr * (1.0 - a) + if self.hand_pfr { a } else { 0.0 };
-        // Aggression: ratio of raises to (raises + calls) this hand
         let total_rc = (self.hand_raises + self.hand_calls) as f64;
         if total_rc > 0.0 {
             let hand_agg = self.hand_raises as f64 / total_rc;
             self.aggression = self.aggression * (1.0 - a) + hand_agg * a;
         }
-        // Fold to bet
         if self.hand_faced_bets > 0 {
             let hand_ftb = self.hand_folds_to_bet as f64 / self.hand_faced_bets as f64;
             self.fold_to_bet = self.fold_to_bet * (1.0 - a) + hand_ftb * a;
         }
+
+        // Street-specific aggression (only update if player acted on that street)
+        if self.hand_flop_actions > 0 {
+            let agg = self.hand_flop_raises as f64 / self.hand_flop_actions as f64;
+            self.flop_aggression = self.flop_aggression * (1.0 - a) + agg * a;
+        }
+        if self.hand_turn_actions > 0 {
+            let agg = self.hand_turn_raises as f64 / self.hand_turn_actions as f64;
+            self.turn_aggression = self.turn_aggression * (1.0 - a) + agg * a;
+        }
+        if self.hand_river_actions > 0 {
+            let agg = self.hand_river_raises as f64 / self.hand_river_actions as f64;
+            self.river_aggression = self.river_aggression * (1.0 - a) + agg * a;
+        }
+
+        // C-bet: only update when there was an opportunity
+        if self.hand_cbet_opportunity {
+            let cbet_val = if self.hand_cbet_taken { 1.0 } else { 0.0 };
+            self.cbet = self.cbet * (1.0 - a) + cbet_val * a;
+        }
+
+        // Bet sizing
+        if self.hand_bet_count > 0 {
+            let avg = self.hand_bet_size_sum / self.hand_bet_count as f64;
+            self.avg_bet_size = self.avg_bet_size * (1.0 - a) + avg * a;
+        }
+        if self.hand_preflop_raise_count > 0 {
+            let avg = self.hand_preflop_raise_size_sum / self.hand_preflop_raise_count as f64;
+            self.preflop_raise_size = self.preflop_raise_size * (1.0 - a) + avg * a;
+        }
+
+        // Position-aware VPIP (only update for the position category played)
+        if self.hand_is_early_position {
+            self.ep_vpip = self.ep_vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
+        }
+        if self.hand_is_late_position {
+            self.lp_vpip = self.lp_vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
+        }
     }
 
-    pub fn record_action(&mut self, action: &Action, is_preflop: bool, facing_bet: bool) {
+    /// Record showdown result. Called from resolve_hand().
+    pub fn record_showdown(&mut self, won: bool) {
+        let a = EMA_ALPHA;
+        // WTSD: updated when player saw flop (regardless of showdown)
+        // — but we only call this when they ARE at showdown, so wtsd always gets 1.0
+        // The "didn't reach showdown" case is handled in end_hand_no_showdown()
+        if self.hand_saw_flop {
+            self.wtsd = self.wtsd * (1.0 - a) + a; // went to showdown = 1.0
+        }
+        // WSD: won at showdown
+        self.wsd = self.wsd * (1.0 - a) + if won { a } else { 0.0 };
+    }
+
+    /// Record that player saw flop but did NOT reach showdown (folded post-flop).
+    pub fn record_no_showdown(&mut self) {
+        if self.hand_saw_flop {
+            let a = EMA_ALPHA;
+            self.wtsd = self.wtsd * (1.0 - a); // went to showdown = 0.0
+        }
+    }
+
+    pub fn record_action(&mut self, action: &Action, phase: Phase, facing_bet: bool, bet_ratio: f64) {
+        let is_preflop = phase == Phase::Preflop;
+
         match action {
             Action::Fold => {
                 if facing_bet {
                     self.hand_folds_to_bet += 1;
                     self.hand_faced_bets += 1;
+                }
+                // Count as non-raise action on the current street
+                match phase {
+                    Phase::Flop => { self.hand_flop_actions += 1; }
+                    Phase::Turn => { self.hand_turn_actions += 1; }
+                    Phase::River => { self.hand_river_actions += 1; }
+                    _ => {}
                 }
             }
             Action::CheckCall => {
@@ -75,6 +243,12 @@ impl PlayerStats {
                     self.hand_faced_bets += 1;
                     if is_preflop { self.hand_vpip = true; }
                 }
+                match phase {
+                    Phase::Flop => { self.hand_flop_actions += 1; }
+                    Phase::Turn => { self.hand_turn_actions += 1; }
+                    Phase::River => { self.hand_river_actions += 1; }
+                    _ => {}
+                }
             }
             Action::Raise(_) | Action::AllIn => {
                 self.hand_raises += 1;
@@ -82,8 +256,43 @@ impl PlayerStats {
                 if is_preflop {
                     self.hand_vpip = true;
                     self.hand_pfr = true;
+                    // Track preflop raise sizing
+                    if bet_ratio > 0.0 {
+                        self.hand_preflop_raise_size_sum += bet_ratio;
+                        self.hand_preflop_raise_count += 1;
+                    }
+                }
+                // Street-specific raise tracking
+                match phase {
+                    Phase::Flop => {
+                        self.hand_flop_raises += 1;
+                        self.hand_flop_actions += 1;
+                        // C-bet: first aggressive action on flop after preflop raise
+                        if self.hand_cbet_opportunity && !self.hand_acted_on_flop {
+                            self.hand_cbet_taken = true;
+                        }
+                    }
+                    Phase::Turn => {
+                        self.hand_turn_raises += 1;
+                        self.hand_turn_actions += 1;
+                    }
+                    Phase::River => {
+                        self.hand_river_raises += 1;
+                        self.hand_river_actions += 1;
+                    }
+                    _ => {}
+                }
+                // Track bet sizing (all streets)
+                if bet_ratio > 0.0 {
+                    self.hand_bet_size_sum += bet_ratio;
+                    self.hand_bet_count += 1;
                 }
             }
+        }
+
+        // Track first flop action for c-bet detection
+        if phase == Phase::Flop && !self.hand_acted_on_flop {
+            self.hand_acted_on_flop = true;
         }
     }
 
@@ -92,10 +301,25 @@ impl PlayerStats {
         (self.hands_played as f32 / 100.0).min(1.0)
     }
 
-    /// Encode as 5 floats: [vpip, pfr, aggression, fold_to_bet, sample_size]
-    pub fn encode(&self) -> [f32; 5] {
-        [self.vpip as f32, self.pfr as f32, self.aggression as f32,
-         self.fold_to_bet as f32, self.sample_size()]
+    /// Encode as 15 floats for observation vector.
+    pub fn encode(&self) -> [f32; STATS_PER_OPPONENT] {
+        [
+            self.vpip as f32,
+            self.pfr as f32,
+            self.aggression as f32,
+            self.fold_to_bet as f32,
+            self.sample_size(),
+            self.flop_aggression as f32,
+            self.turn_aggression as f32,
+            self.river_aggression as f32,
+            self.wtsd as f32,
+            self.wsd as f32,
+            self.cbet as f32,
+            self.avg_bet_size as f32,
+            self.preflop_raise_size as f32,
+            self.ep_vpip as f32,
+            self.lp_vpip as f32,
+        ]
     }
 }
 
@@ -215,9 +439,11 @@ impl SimTable {
         self.street_action_count = 0;
         self.street_raise_count = 0;
 
-        // Reset per-hand stat flags
-        for s in &mut self.player_stats {
-            s.start_hand();
+        // Reset per-hand stat flags and set position
+        for i in 0..self.num_players {
+            self.player_stats[i].start_hand();
+            let seat_offset = (i + self.num_players - self.dealer) % self.num_players;
+            self.player_stats[i].set_position(seat_offset, self.num_players);
         }
 
         // Mark busted players as folded
@@ -354,9 +580,8 @@ impl SimTable {
         self.street_action_count += 1;
 
         // Record stats for cross-hand opponent modeling
-        let is_preflop = self.phase == Phase::Preflop;
         let facing_bet = self.current_bet > self.player_bets[seat];
-        self.player_stats[seat].record_action(&action, is_preflop, facing_bet);
+        self.player_stats[seat].record_action(&action, self.phase, facing_bet, bet_ratio as f64);
 
         match action {
             Action::Fold => {
@@ -495,6 +720,12 @@ impl SimTable {
         match self.phase {
             Phase::Preflop => {
                 self.phase = Phase::Flop;
+                // Mark non-folded players as having seen the flop
+                for i in 0..self.num_players {
+                    if !self.folded[i] {
+                        self.player_stats[i].mark_saw_flop();
+                    }
+                }
                 // Burn and deal 3
                 self.deck.deal(); // burn
                 for _ in 0..3 {
@@ -549,19 +780,33 @@ impl SimTable {
     fn resolve_hand(&mut self) {
         self.phase = Phase::HandOver;
 
-        // Commit per-hand stats for all players
-        for s in &mut self.player_stats {
-            s.end_hand();
-        }
-
         let active: Vec<usize> = (0..self.num_players)
             .filter(|&i| !self.folded[i])
             .collect();
 
+        let is_showdown = active.len() > 1;
+
         if active.len() == 1 {
-            // Uncontested pot
+            // Uncontested pot — no showdown
             let winner = active[0];
             self.stacks[winner] += self.pot;
+
+            // Record no-showdown for folded players who saw flop
+            for i in 0..self.num_players {
+                if self.folded[i] {
+                    self.player_stats[i].record_no_showdown();
+                }
+                // Winner also didn't go to showdown (won by fold)
+                if i == winner {
+                    self.player_stats[i].record_no_showdown();
+                }
+            }
+
+            // Commit per-hand stats
+            for s in &mut self.player_stats {
+                s.end_hand();
+            }
+
             self.rewards[winner] = (self.stacks[winner] - self.initial_stacks[winner]) as f64;
             for i in 0..self.num_players {
                 if i != winner {
@@ -599,6 +844,9 @@ impl SimTable {
             })
             .collect();
 
+        // Collect all winners across all pots for showdown stats
+        let mut all_winners: Vec<usize> = Vec::new();
+
         // Determine winners for each pot
         let winners_by_pot: Vec<Vec<usize>> = if pots.is_empty() {
             // Simple case: all bets equal, one pot
@@ -609,11 +857,30 @@ impl SimTable {
                 for (i, &w) in winners.iter().enumerate() {
                     self.stacks[w] += if i == 0 { share + remainder } else { share };
                 }
+                all_winners.extend_from_slice(&winners);
             } else if let Some(&first_active) = active.first() {
-                // Fallback: give pot to first active player
                 self.stacks[first_active] += self.pot;
+                all_winners.push(first_active);
             }
-            // Set rewards
+
+            // Record showdown stats for all active players
+            if is_showdown {
+                for &seat in &active {
+                    self.player_stats[seat].record_showdown(all_winners.contains(&seat));
+                }
+            }
+            // Record no-showdown for folded players
+            for i in 0..self.num_players {
+                if self.folded[i] {
+                    self.player_stats[i].record_no_showdown();
+                }
+            }
+
+            // Commit per-hand stats
+            for s in &mut self.player_stats {
+                s.end_hand();
+            }
+
             for i in 0..self.num_players {
                 self.rewards[i] = (self.stacks[i] - self.initial_stacks[i]) as f64;
             }
@@ -626,7 +893,9 @@ impl SimTable {
                         .filter(|(idx, _)| pot.eligible.contains(idx))
                         .cloned()
                         .collect();
-                    crate::hand_eval::determine_winners(&eligible_hands)
+                    let w = crate::hand_eval::determine_winners(&eligible_hands);
+                    all_winners.extend_from_slice(&w);
+                    w
                 })
                 .collect()
         };
@@ -634,6 +903,24 @@ impl SimTable {
         let payouts = award_pots(&pots, &winners_by_pot);
         for (idx, amount) in payouts {
             self.stacks[idx] += amount;
+        }
+
+        // Record showdown stats for all active players
+        if is_showdown {
+            for &seat in &active {
+                self.player_stats[seat].record_showdown(all_winners.contains(&seat));
+            }
+        }
+        // Record no-showdown for folded players
+        for i in 0..self.num_players {
+            if self.folded[i] {
+                self.player_stats[i].record_no_showdown();
+            }
+        }
+
+        // Commit per-hand stats for all players
+        for s in &mut self.player_stats {
+            s.end_hand();
         }
 
         // Set rewards
@@ -648,10 +935,10 @@ impl SimTable {
     }
 
     /// Encode observation for the given player as a feature vector.
-    /// Returns 630 floats total:
-    ///   364 (cards) + 86 (game state) + 128 (history placeholder) + 52 (hand strength)
+    /// Returns 710 floats total:
+    ///   364 (cards) + 166 (game state) + 128 (history placeholder) + 52 (hand strength)
     pub fn encode_observation(&self, seat: usize) -> Vec<f32> {
-        let mut features = Vec::with_capacity(630);
+        let mut features = Vec::with_capacity(710);
 
         // --- Card encoding (364 floats) ---
         // Hole cards: 2 x 52 one-hot
@@ -797,22 +1084,22 @@ impl SimTable {
             }
         }
 
-        // Per-opponent running stats: vpip, pfr, aggression, fold_to_bet, sample_size (up to 8 = 40)
+        // Per-opponent running stats (15 per opponent, up to 8 = 120)
         for i in 0..8 {
             let opp = (seat + 1 + i) % self.num_players;
             if i < self.num_players - 1 {
                 let stats = &self.player_stats[opp];
                 features.extend_from_slice(&stats.encode());
             } else {
-                features.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+                features.extend_from_slice(&[0.0f32; STATS_PER_OPPONENT]);
             }
         }
-        // Game state: 6 phase + 8 scalars + 8 new + 24 opponents + 40 opp_stats = 86
-        debug_assert_eq!(features.len(), 364 + 86,
-            "game state mismatch: got {} floats, expected 86", features.len() - 364);
+        // Game state: 6 phase + 8 scalars + 8 new + 24 opponents + 120 opp_stats = 166
+        debug_assert_eq!(features.len(), 364 + 166,
+            "game state mismatch: got {} floats, expected 166", features.len() - 364);
 
         // --- Placeholder for history hidden state (128 floats) - filled by Python ---
-        features.resize(364 + 86 + 128, 0.0);
+        features.resize(364 + 166 + 128, 0.0);
 
         // --- Hand strength features (52 floats) ---
         if seat < self.hole_cards.len() && !self.hole_cards.is_empty() {
@@ -831,9 +1118,9 @@ impl SimTable {
             ));
 
             // Pad remaining hand strength features
-            features.resize(630, 0.0);
+            features.resize(710, 0.0);
         } else {
-            features.resize(630, 0.0);
+            features.resize(710, 0.0);
         }
 
         features
