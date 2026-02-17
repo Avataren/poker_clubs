@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/club.dart';
@@ -10,7 +11,7 @@ import '../services/websocket_service.dart';
 import '../services/sound_service.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/dialogs.dart';
-import '../widgets/bet_sizing_panel.dart';
+import '../widgets/bet_action_panel.dart';
 import '../widgets/table_seat_widget.dart';
 
 class GameScreen extends StatefulWidget {
@@ -32,8 +33,6 @@ class _GameScreenState extends State<GameScreen> {
   final _soundService = SoundService();
   GameState? _gameState;
   GameState? _previousGameState;
-  final _raiseController = TextEditingController(text: '200');
-  bool _showBetPanel = false;
   final _buyinController = TextEditingController(text: '5000');
   final _topUpController = TextEditingController(text: '5000');
   final List<_TableFeedEntry> _eventFeed = <_TableFeedEntry>[];
@@ -68,7 +67,6 @@ class _GameScreenState extends State<GameScreen> {
         final wasTableClosed = _isTableClosed;
         _previousGameState = _gameState;
         _gameState = gameState;
-        _showBetPanel = false;
         _updateTableClosedState(gameState);
         _checkIfSeated();
         if (!wasSeated && _isSeated) {
@@ -380,19 +378,6 @@ class _GameScreenState extends State<GameScreen> {
       print('Action error: $e');
       _recordFeedEvent('Action failed: $e');
     }
-  }
-
-  ButtonStyle _actionButtonStyle(Color color) {
-    return ElevatedButton.styleFrom(
-      backgroundColor: color,
-      foregroundColor: Colors.black,
-      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      elevation: 4,
-      shadowColor: Colors.black87,
-      // Add border for depth
-      side: BorderSide(color: Colors.black.withOpacity(0.4), width: 1.5),
-    );
   }
 
   List<String> _collectStateFeedEvents(GameState newState) {
@@ -1314,99 +1299,24 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildActionButtons(bool isMyTurn, Player? myPlayer) {
     if (!_isSeated || _isTableClosed || !isMyTurn || myPlayer == null) {
-      if (_showBetPanel) {
-        setState(() => _showBetPanel = false);
-      }
       return const SizedBox.shrink();
     }
 
     final gs = _gameState!;
-    final toCall = gs.currentBet - myPlayer.currentBet;
+    final toCall = max(0, gs.currentBet - myPlayer.currentBet);
     final canCheck = toCall <= 0;
-    final canRaise = myPlayer.stack > toCall;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // Fold
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: ElevatedButton(
-              onPressed: () => _playerAction('Fold'),
-              style: _actionButtonStyle(Colors.red),
-              child: const Text('Fold'),
-            ),
-          ),
-          // Check or Call
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: canCheck
-                ? ElevatedButton(
-                    onPressed: () => _playerAction('Check'),
-                    style: _actionButtonStyle(Colors.blue),
-                    child: const Text('Check'),
-                  )
-                : ElevatedButton(
-                    onPressed: () => _playerAction('Call'),
-                    style: _actionButtonStyle(Colors.orange),
-                    child: Text('Call \$$toCall'),
-                  ),
-          ),
-          // Bet/Raise with popup stacked above, or All-In
-          if (canRaise)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: IntrinsicWidth(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (_showBetPanel)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: BetSizingPopup(
-                          isPreflop: gs.phase.toLowerCase() == 'preflop',
-                          bigBlind: gs.bigBlind > 0
-                              ? gs.bigBlind
-                              : widget.table.bigBlind,
-                          potTotal: gs.potTotal,
-                          currentBet: gs.currentBet,
-                          playerCurrentBet: myPlayer.currentBet,
-                          playerStack: myPlayer.stack,
-                          minRaise: gs.minRaise > 0 ? gs.minRaise : gs.bigBlind,
-                          onSelect: (amount) {
-                            setState(() => _showBetPanel = false);
-                            _playerAction('Raise', amount: amount);
-                          },
-                        ),
-                      ),
-                    ElevatedButton(
-                      onPressed: () =>
-                          setState(() => _showBetPanel = !_showBetPanel),
-                      style: _actionButtonStyle(
-                        _showBetPanel ? Colors.grey : Colors.green,
-                      ),
-                      child: Text(gs.currentBet > 0 ? 'Raise' : 'Bet'),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: ElevatedButton(
-                onPressed: () => _playerAction('AllIn'),
-                style: _actionButtonStyle(Colors.purple),
-                child: const Text('All In'),
-              ),
-            ),
-        ],
-      ),
+    return BetActionPanel(
+      isPreflop: gs.phase.toLowerCase() == 'preflop',
+      bigBlind: gs.bigBlind > 0 ? gs.bigBlind : widget.table.bigBlind,
+      potTotal: gs.potTotal,
+      currentBet: gs.currentBet,
+      playerCurrentBet: myPlayer.currentBet,
+      playerStack: myPlayer.stack,
+      minRaise: gs.minRaise > 0 ? gs.minRaise : gs.bigBlind,
+      canCheck: canCheck,
+      toCall: toCall,
+      onAction: (action, {amount}) => _playerAction(action, amount: amount),
     );
   }
 
@@ -1521,7 +1431,6 @@ class _GameScreenState extends State<GameScreen> {
     _wsService.onTournamentFinished = null;
     _wsService.onTournamentTableChanged = null;
     _wsService.disconnect();
-    _raiseController.dispose();
     _buyinController.dispose();
     _topUpController.dispose();
     super.dispose();
