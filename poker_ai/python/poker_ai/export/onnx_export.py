@@ -56,8 +56,12 @@ class AverageStrategyONNXWrapper(nn.Module):
         enc = self.as_net.history_encoder
         dtype = action_seq.dtype
 
+        # Clamp lengths to min 1 so softmax always has at least one
+        # unmasked position (avoids NaN when history is empty).
+        safe_lengths = lengths.clamp(min=1)
+
         # Masking (uses pre-computed positions buffer)
-        valid_mask_f = (self.positions < lengths.unsqueeze(1)).to(dtype)
+        valid_mask_f = (self.positions < safe_lengths.unsqueeze(1)).to(dtype)
         pad_mask = (1.0 - valid_mask_f) * torch.finfo(dtype).min
 
         # Project input and add positional embeddings (uses pre-computed pos_ids)
@@ -70,7 +74,8 @@ class AverageStrategyONNXWrapper(nn.Module):
         # Mean pool over valid positions
         valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)
         x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts
-        has_history = (valid_counts > 0.5).to(dtype)
+        # Zero out output for fully empty histories (lengths==0)
+        has_history = (lengths > 0).unsqueeze(1).to(dtype)
         x = x * has_history
 
         return enc.output_proj(x)
@@ -112,7 +117,8 @@ class BestResponseONNXWrapper(nn.Module):
         enc = self.br_net.history_encoder
         dtype = action_seq.dtype
 
-        valid_mask_f = (self.positions < lengths.unsqueeze(1)).to(dtype)
+        safe_lengths = lengths.clamp(min=1)
+        valid_mask_f = (self.positions < safe_lengths.unsqueeze(1)).to(dtype)
         pad_mask = (1.0 - valid_mask_f) * torch.finfo(dtype).min
 
         x = enc.input_proj(action_seq)
@@ -122,7 +128,7 @@ class BestResponseONNXWrapper(nn.Module):
 
         valid_counts = valid_mask_f.sum(dim=1, keepdim=True).clamp(min=1)
         x = (x * valid_mask_f.unsqueeze(-1)).sum(dim=1) / valid_counts
-        has_history = (valid_counts > 0.5).to(dtype)
+        has_history = (lengths > 0).unsqueeze(1).to(dtype)
         x = x * has_history
 
         return enc.output_proj(x)

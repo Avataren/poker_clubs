@@ -64,6 +64,8 @@ impl PokerTable {
         
         self.current_bet = 0;
         self.raises_this_round = 0;
+        self.actions_this_round = 0;
+        self.last_raiser_seat = None;
 
         // If only one player is active in hand, they win immediately (no showdown)
 

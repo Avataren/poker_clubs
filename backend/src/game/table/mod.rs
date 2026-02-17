@@ -106,6 +106,8 @@ pub struct PokerTable {
     pub min_raise: i64,
     pub ante: i64,                // Ante amount (0 if no ante)
     pub raises_this_round: usize, // Number of raises in the current betting round (for fixed-limit)
+    pub actions_this_round: usize, // Number of actions in the current betting round
+    pub last_raiser_seat: Option<usize>, // Seat of the last player who raised this hand
     pub last_phase_change_time: Option<u64>,
     pub street_delay_ms: u64,          // Delay between flop/turn/river
     pub showdown_delay_ms: u64,        // Delay to show results
@@ -153,6 +155,8 @@ impl Clone for PokerTable {
             min_raise: self.min_raise,
             ante: self.ante,
             raises_this_round: self.raises_this_round,
+            actions_this_round: self.actions_this_round,
+            last_raiser_seat: self.last_raiser_seat,
             last_phase_change_time: self.last_phase_change_time,
             street_delay_ms: self.street_delay_ms,
             showdown_delay_ms: self.showdown_delay_ms,
@@ -248,6 +252,8 @@ impl PokerTable {
             min_raise: big_blind,
             ante: 0,
             raises_this_round: 0,
+            actions_this_round: 0,
+            last_raiser_seat: None,
             last_phase_change_time: None,
             street_delay_ms: DEFAULT_STREET_DELAY_MS,
             showdown_delay_ms: DEFAULT_SHOWDOWN_DELAY_MS,

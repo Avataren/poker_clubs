@@ -134,6 +134,7 @@ impl PokerTable {
                 // min_raise is the raise size, but never below big_blind
                 self.min_raise = amount.max(self.big_blind);
                 self.raises_this_round += 1;
+                self.last_raiser_seat = Some(self.current_player);
 
                 // Reset has_acted for all other players since there's a new bet
                 for (idx, player) in self.players.iter_mut().enumerate() {
@@ -187,6 +188,7 @@ impl PokerTable {
                     self.min_raise = (new_total - self.current_bet).max(self.big_blind);
                     self.current_bet = new_total;
                     self.raises_this_round += 1;
+                    self.last_raiser_seat = Some(self.current_player);
 
                     // Reset has_acted for all other players since there's a new bet
                     for (idx, player) in self.players.iter_mut().enumerate() {
@@ -201,6 +203,9 @@ impl PokerTable {
                 return self.handle_show_cards(user_id, card_indices);
             }
         }
+
+        // Track per-street action count
+        self.actions_this_round += 1;
 
         if let Some(action_idx) = action_to_history_index(
             &action,

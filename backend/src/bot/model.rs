@@ -707,20 +707,23 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
     };
     out.push(eff_stack_pot.min(20.0) / 20.0);
 
-    // Street action count / 10 (approximate from hand history)
-    let street_actions = table.hand_action_history.len().min(30) as f32;
+    // Street action count / 10
+    let street_actions = table.actions_this_round.min(30) as f32;
     out.push((street_actions / 10.0).min(1.0));
 
     // Total action count / 30
     out.push((table.hand_action_history.len() as f32 / 30.0).min(1.0));
 
-    // Num raises this street / 4 (approximate: count raises in history)
+    // Num raises this street / 4
     let raises_count = table.raises_this_round.min(10) as f32;
     out.push((raises_count / 4.0).min(1.0));
 
     // Last aggressor is hero
-    // (approximation: check if last raiser seat matches player_idx)
-    out.push(0.0); // conservative default since we don't track last raiser seat precisely
+    let last_agg_hero = match table.last_raiser_seat {
+        Some(seat) if seat == player_idx => 1.0,
+        _ => 0.0,
+    };
+    out.push(last_agg_hero);
 
     // Hero's current bet / pot
     let hero_bet = player.current_bet.max(0) as f32;

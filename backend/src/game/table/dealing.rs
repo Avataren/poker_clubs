@@ -30,6 +30,8 @@ impl PokerTable {
             self.pot.reset();
             self.current_bet = 0;
             self.raises_this_round = 0;
+            self.actions_this_round = 0;
+            self.last_raiser_seat = None;
             tracing::info!("Not enough players with chips to start hand, going to Waiting phase");
             return;
         }
@@ -41,6 +43,8 @@ impl PokerTable {
         self.current_bet = 0;
         self.min_raise = self.big_blind;
         self.raises_this_round = 0;
+        self.actions_this_round = 0;
+        self.last_raiser_seat = None;
 
         // Move dealer button to next eligible player (skip sitting out/broke players).
         // Only pick "first eligible" on true table startup (no prior phase timestamps).
