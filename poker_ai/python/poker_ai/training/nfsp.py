@@ -456,27 +456,23 @@ class NFSPTrainer:
         obs = apply_card_augmentation(obs, br_aug_idx)
         next_obs = apply_card_augmentation(next_obs, br_aug_idx)
 
-        with torch.autocast(
-            device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
-        ):
-            # Current Q-values
-            q_values = self.br_net(obs, ah, ah_len, masks)
-            q_taken = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        # Forward pass in float32 — training is not the throughput bottleneck
+        # (self-play is), and float16 causes sporadic NaN in trunk/transformer.
+        q_values = self.br_net(obs, ah, ah_len, masks)
+        q_taken = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-            # Target Q-values (Double DQN)
-            with torch.no_grad():
-                next_q_online = self.br_net(next_obs, next_ah, next_ah_len, next_mask)
-                next_actions = next_q_online.argmax(dim=-1)
-                next_q_target = self.br_target(next_obs, next_ah, next_ah_len, next_mask)
-                next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
-                # Terminal states have no bootstrap term; avoid (-inf * 0) -> NaN.
-                next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
-                # Compute target in float32 to prevent overflow before clamp
-                target = rewards.float() + self.config.gamma * next_q.float()
-                target = target.clamp(-10000, 10000)
+        # Target Q-values (Double DQN)
+        with torch.no_grad():
+            next_q_online = self.br_net(next_obs, next_ah, next_ah_len, next_mask)
+            next_actions = next_q_online.argmax(dim=-1)
+            next_q_target = self.br_target(next_obs, next_ah, next_ah_len, next_mask)
+            next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
+            # Terminal states have no bootstrap term; avoid (-inf * 0) -> NaN.
+            next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
+            target = rewards + self.config.gamma * next_q
+            target = target.clamp(-10000, 10000)
 
-            # Upcast to float32 for loss to prevent float16 overflow in q_taken
-            loss = F.smooth_l1_loss(q_taken.float(), target.float(), beta=self.config.huber_delta)
+        loss = F.smooth_l1_loss(q_taken, target, beta=self.config.huber_delta)
 
         # Skip optimizer step on NaN/inf loss to avoid poisoning weights
         loss_val = loss.item()
@@ -503,16 +499,9 @@ class NFSPTrainer:
             return loss_val
 
         self.br_optimizer.zero_grad(set_to_none=True)
-        if self.use_amp:
-            self.br_scaler.scale(loss).backward()
-            self.br_scaler.unscale_(self.br_optimizer)
-            self._last_br_grad_norm = torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0).item()
-            self.br_scaler.step(self.br_optimizer)
-            self.br_scaler.update()
-        else:
-            loss.backward()
-            self._last_br_grad_norm = torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0).item()
-            self.br_optimizer.step()
+        loss.backward()
+        self._last_br_grad_norm = torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0).item()
+        self.br_optimizer.step()
 
         self.br_updates += 1
         return loss_val
@@ -537,12 +526,9 @@ class NFSPTrainer:
         # Suit permutation augmentation
         obs = apply_card_augmentation(obs)
 
-        with torch.autocast(
-            device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp
-        ):
-            logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
-            # Upcast to float32 for loss to prevent float16 overflow
-            loss = F.cross_entropy(logits.float(), actions)
+        # Forward pass in float32
+        logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
+        loss = F.cross_entropy(logits, actions)
 
         # Skip optimizer step on NaN/inf loss to avoid poisoning weights
         loss_val = loss.item()
@@ -552,16 +538,9 @@ class NFSPTrainer:
             return loss_val
 
         self.as_optimizer.zero_grad(set_to_none=True)
-        if self.use_amp:
-            self.as_scaler.scale(loss).backward()
-            self.as_scaler.unscale_(self.as_optimizer)
-            self._last_as_grad_norm = torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0).item()
-            self.as_scaler.step(self.as_optimizer)
-            self.as_scaler.update()
-        else:
-            loss.backward()
-            self._last_as_grad_norm = torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0).item()
-            self.as_optimizer.step()
+        loss.backward()
+        self._last_as_grad_norm = torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0).item()
+        self.as_optimizer.step()
 
         self.as_updates += 1
         return loss_val
