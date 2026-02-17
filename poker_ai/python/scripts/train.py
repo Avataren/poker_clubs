@@ -54,8 +54,8 @@ def main():
                              "Lets buffer accumulate diverse BR data before AS trains on it.")
     parser.add_argument("--as-warmup-episodes", type=int, default=None,
                         help="AS LR warmup episodes after unfreeze (ramp from 1%% to 100%%, default 2M)")
-    parser.add_argument("--save-buffers", action="store_true",
-                        help="Save replay buffers alongside checkpoints (large files, enables perfect resume)")
+    parser.add_argument("--no-save-buffers", action="store_true",
+                        help="Disable saving replay buffers alongside checkpoints")
     parser.add_argument("--bootstrap-as", action="store_true",
                         help="On resume without saved buffers, pre-fill AS buffer by running AS self-play")
     parser.add_argument("--restart-schedules", action="store_true",
@@ -127,8 +127,8 @@ def main():
         config_kwargs["as_freeze_duration"] = args.as_freeze_duration
     if args.as_warmup_episodes is not None:
         config_kwargs["as_warmup_episodes"] = args.as_warmup_episodes
-    if args.save_buffers:
-        config_kwargs["save_buffers"] = True
+    if args.no_save_buffers:
+        config_kwargs["save_buffers"] = False
     if args.exploit_opponent_prob is not None:
         config_kwargs["exploit_opponent_prob"] = args.exploit_opponent_prob
 

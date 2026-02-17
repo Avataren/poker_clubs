@@ -78,7 +78,7 @@ class NFSPConfig:
     freeze_as: bool = False  # skip AS gradient updates permanently (overridden by as_freeze_duration)
     as_freeze_duration: int = 0  # episodes to freeze AS after resume (0 = no freeze unless freeze_as=True)
     as_warmup_episodes: int = 2_000_000  # LR warmup episodes for AS after unfreeze (ramp from 1% to 100%)
-    save_buffers: bool = False  # save replay buffers alongside checkpoint (large files)
+    save_buffers: bool = True  # save replay buffers alongside checkpoint (large files)
 
     # Hardware
     device: str = "cuda"  # ROCm via HIP exposes as cuda
