@@ -4,6 +4,7 @@ import copy
 import math
 import os
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,34 @@ from poker_ai.model.network import BestResponseNet, AverageStrategyNet
 from poker_ai.training.circular_buffer import CircularBuffer
 from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record, _STATIC_COLS
+
+
+class CheckpointPool:
+    """Pool of historical network weights for diverse opponent training.
+
+    Stores AS network state_dicts (CPU tensors) from periodic training
+    snapshots. Self-play workers sample from this pool to create historical
+    opponents, providing realistic diversity without scripted bots.
+    Inspired by Pluribus (Brown & Sandholm, 2019).
+    """
+
+    def __init__(self, max_size: int = 10):
+        self._pool: deque[dict] = deque(maxlen=max_size)
+
+    def snapshot(self, as_net: nn.Module):
+        """Save a copy of the AS network's current weights to the pool."""
+        sd = {k: v.cpu().clone() for k, v in as_net.state_dict().items()}
+        self._pool.append(sd)
+
+    def sample(self) -> dict | None:
+        """Return a random state_dict from the pool, or None if empty."""
+        if not self._pool:
+            return None
+        idx = np.random.randint(len(self._pool))
+        return self._pool[idx]
+
+    def __len__(self) -> int:
+        return len(self._pool)
 from poker_ai.env.poker_env import PokerEnv, BatchPokerEnv
 from poker_ai.model.state_encoder import HAND_STRENGTH_START, STATIC_FEATURE_SIZE
 
@@ -239,8 +268,10 @@ class NFSPTrainer:
         )
 
         # Self-play worker
+        self.checkpoint_pool = CheckpointPool(max_size=10)
         self.worker = SelfPlayWorker(
-            config, self.br_net, self.as_net, self.br_buffer, self.as_buffer, self.device
+            config, self.br_net, self.as_net, self.br_buffer, self.as_buffer, self.device,
+            checkpoint_pool=self.checkpoint_pool,
         )
 
         # Logging
@@ -1202,6 +1233,11 @@ class NFSPTrainer:
         torch.save(checkpoint, path / f"checkpoint_{episode}.pt")
         torch.save(checkpoint, path / "checkpoint_latest.pt")
         print(f"  Saved checkpoint at episode {episode:,}")
+
+        # Snapshot AS weights into the pool for diverse historical opponents
+        self.checkpoint_pool.snapshot(self._unwrap(self.as_net))
+        if len(self.checkpoint_pool) > 1:
+            print(f"  Checkpoint pool: {len(self.checkpoint_pool)} historical opponents")
 
         if self.config.save_buffers:
             import time as _time

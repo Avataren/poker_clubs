@@ -60,6 +60,7 @@ class AsyncNFSPTrainer(NFSPTrainer):
             br_inference=self.br_inference,
             as_inference=self.as_inference,
             pause_check=self._handle_pause_in_worker,
+            checkpoint_pool=self.checkpoint_pool,
         )
 
         # Threading primitives

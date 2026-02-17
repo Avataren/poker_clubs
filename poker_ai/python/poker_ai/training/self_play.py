@@ -70,6 +70,7 @@ class SelfPlayWorker:
         br_inference: BestResponseNet | None = None,
         as_inference: AverageStrategyNet | None = None,
         pause_check: callable = None,
+        checkpoint_pool=None,
     ):
         self.config = config
         # Use separate inference copies if provided (async training),
@@ -80,6 +81,10 @@ class SelfPlayWorker:
         self.as_buffer = as_buffer
         self.device = device
         self._pause_check = pause_check
+
+        # Historical opponent pool (Pluribus-inspired)
+        self._checkpoint_pool = checkpoint_pool
+        self._historical_net: AverageStrategyNet | None = None
         self.env = BatchPokerEnv(
             num_envs=config.num_envs,
             num_players=config.num_players,
@@ -146,7 +151,8 @@ class SelfPlayWorker:
 
         # Diverse opponent tracking: which seats use fixed exploit strategies
         self.exploit_prob = config.exploit_opponent_prob
-        # Per-env per-seat: 0=learning, 1=always-raise, 2=calling-station, 3=tight-fold
+        # Per-env per-seat: 0=learning, 1=always-raise, 2=calling-station,
+        # 3=tight-fold, 4=historical checkpoint opponent
         self.exploit_type = np.zeros((config.num_envs, config.num_players), dtype=np.int8)
         # Remaining hands before exploit bot reverts to learning agent.
         # Exploit bots persist for 50-200 hands so EMA stats can reflect their behavior.
@@ -244,6 +250,10 @@ class SelfPlayWorker:
         window) have time to reflect their extreme behavior. The per-hand roll
         probability is adjusted so that the effective fraction of hands with an
         exploit opponent matches exploit_opponent_prob.
+
+        Types: 1=always-raise, 2=calling-station, 3=tight-fold,
+               4=historical checkpoint opponent (Pluribus-inspired).
+        When the checkpoint pool has entries, ~50% of new stints use type 4.
         """
         n = len(env_indices)
         if self.exploit_prob <= 0.0 or self.num_players < 2:
@@ -273,14 +283,42 @@ class SelfPlayWorker:
         new_exploit = inactive & (rolls < p_roll)
 
         if new_exploit.any():
-            new_types = np.random.randint(1, 4, size=(n, self.num_players))
+            pool_available = (
+                self._checkpoint_pool is not None and len(self._checkpoint_pool) > 1
+            )
+            if pool_available:
+                # 50% historical, 50% scripted (types 1-3)
+                type_rolls = np.random.random(new_exploit.shape)
+                hist_mask = new_exploit & (type_rolls < 0.5)
+                script_mask = new_exploit & ~hist_mask
+
+                if script_mask.any():
+                    scripted = np.random.randint(1, 4, size=(n, self.num_players))
+                    types[script_mask] = scripted[script_mask]
+                if hist_mask.any():
+                    types[hist_mask] = 4
+                    self._load_historical_opponent()
+            else:
+                # No pool yet — all scripted
+                new_types = np.random.randint(1, 4, size=(n, self.num_players))
+                types[new_exploit] = new_types[new_exploit]
+
             # Duration: 50-200 hands (uniform), matching EMA effective window
             new_duration = np.random.randint(50, 201, size=(n, self.num_players))
-            types[new_exploit] = new_types[new_exploit]
             remaining[new_exploit] = new_duration[new_exploit]
 
         self.exploit_type[env_indices] = types
         self.exploit_remaining[env_indices] = remaining
+
+    def _load_historical_opponent(self):
+        """Load random checkpoint weights into the historical opponent network."""
+        sd = self._checkpoint_pool.sample()
+        if sd is None:
+            return
+        if self._historical_net is None:
+            self._historical_net = AverageStrategyNet(self.config).to(self.device)
+            self._historical_net.eval()
+        self._historical_net.load_state_dict(sd)
 
     @staticmethod
     def _exploit_action(exploit_type: int, mask: np.ndarray) -> int:
@@ -340,12 +378,16 @@ class SelfPlayWorker:
 
             # Classify AS vs BR for the current player in each env
             is_as = self.use_as[env_idx, players]
-            # Check which current actors are exploit bots (fixed strategy)
-            is_exploit = self.exploit_type[env_idx, players] > 0
+            # Check which current actors are exploit bots
+            cur_exploit = self.exploit_type[env_idx, players]
+            is_exploit = cur_exploit > 0
+            is_scripted = (cur_exploit >= 1) & (cur_exploit <= 3)
+            is_historical = cur_exploit == 4
             is_learning = ~is_exploit
             as_idx = np.where(is_as & is_learning)[0]
             br_idx = np.where(~is_as & is_learning)[0]
-            exploit_idx = np.where(is_exploit)[0]
+            scripted_idx = np.where(is_scripted)[0]
+            historical_idx = np.where(is_historical)[0]
 
             # Batched GPU inference — single CPU sync
             actions_np = self.actions_np
@@ -363,13 +405,25 @@ class SelfPlayWorker:
                     )
                     actions_gpu[br_idx] = eps_greedy_br
                     greedy_br_np = greedy_br.cpu().numpy()
-                # Exploit bots get dummy GPU values (overwritten below)
-                if len(exploit_idx) > 0:
-                    actions_gpu[exploit_idx] = 1  # placeholder
+                # Historical opponents: GPU inference via historical net
+                if len(historical_idx) > 0 and self._historical_net is not None:
+                    actions_gpu[historical_idx] = self._historical_net.select_action(
+                        obs_t[historical_idx], ah_t[historical_idx],
+                        ah_len_t[historical_idx], mask_t[historical_idx],
+                    )
+                elif len(historical_idx) > 0:
+                    # Fallback: pool empty or net not loaded — use AS net
+                    actions_gpu[historical_idx] = self.as_net.select_action(
+                        obs_t[historical_idx], ah_t[historical_idx],
+                        ah_len_t[historical_idx], mask_t[historical_idx],
+                    )
+                # Scripted exploit bots get placeholder (overwritten below)
+                if len(scripted_idx) > 0:
+                    actions_gpu[scripted_idx] = 1
                 actions_np[:] = actions_gpu.cpu().numpy()
 
-            # Override actions for exploit bot seats with fixed policies
-            for ei in exploit_idx:
+            # Override actions for scripted exploit bot seats
+            for ei in scripted_idx:
                 etype = int(self.exploit_type[ei, players[ei]])
                 actions_np[ei] = self._exploit_action(etype, self.pre_mask[ei])
 
