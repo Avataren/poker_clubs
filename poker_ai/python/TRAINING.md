@@ -4,7 +4,7 @@
 
 Training follows a 3-stage pipeline: heads-up (2p) → 6-max (6p) → full ring (9p).
 Each stage fine-tunes from the previous checkpoint. The network architecture is
-player-count agnostic (fixed 462-dim observation), so weights transfer directly.
+player-count agnostic (fixed 582-dim observation), so weights transfer directly.
 
 **Important:** v4 fixed critical transition bugs — old checkpoints are incompatible.
 Start Stage 1 from scratch.
@@ -14,9 +14,12 @@ Start Stage 1 from scratch.
 ```bash
 cd /home/avataren/src/poker/poker_ai/python
 source .venv/bin/activate
-# Rebuild engine if needed:
-cd ../engine && maturin develop --release && cd ../python
+# Rebuild engine if needed (or use train.sh which rebuilds automatically):
+cd ../engine && PYO3_PYTHON=$(pwd)/../python/.venv/bin/python cargo build --release && cd ../python
 ```
+
+Alternatively, use `./scripts/train.sh` which rebuilds the Rust engine, installs
+the updated `.so`, and launches training in one step.
 
 ## Key Hyperparameters
 
@@ -55,7 +58,7 @@ Use at least 8/4 (BR/AS); 24/12 is recommended if your GPU can keep up.
 | `--train-ahead` | 4 | Max training rounds ahead of self-play before sleeping |
 | `--sync-every` | 15 | Sync training weights → inference copies every N rounds |
 | `--num-envs` | 2048 | Larger inference batches for better GPU utilization |
-| `--save-buffers` | flag | Save replay buffers alongside checkpoints (~11GB) |
+| `--no-save-buffers` | flag | Disable saving replay buffers (on by default) |
 
 ### Resume & Warm Restart Parameters
 
@@ -67,34 +70,39 @@ Use at least 8/4 (BR/AS); 24/12 is recommended if your GPU can keep up.
 | `--restart-schedules` | flag | Warm restart: reset LR/epsilon/eta to start values on resume |
 | `--reset-optimizers` | flag | Clear Adam momentum on resume (use with `--restart-schedules`) |
 
+### Opponent Modeling Parameters
+
+| Parameter | Value | Why |
+|---|---|---|
+| `--exploit-opponent-prob` | 0.05 | Fraction of seats using scripted/historical opponent policies |
+
+See [Cross-Hand Opponent Modeling](#cross-hand-opponent-modeling) and
+[Diverse Training Opponents](#diverse-training-opponents) below for details.
+
 ## Stage 1: Heads-Up (2 players)
 
 Train from scratch. This builds the foundation: hand values, bet sizing, aggression.
 
 ```bash
-python scripts/train.py \
-  --num-players 2 \
-  --device cuda --async --train-ahead 4 --sync-every 15 \
+./scripts/train.sh \
+  --device cuda --async --train-ahead 1 --sync-every 15 \
   --num-envs 2048 \
   --batch-size 8192 \
-  --eta-start 0.01 \
+  --eta-start 0.1 \
   --eta-end 0.4 \
   --eta-ramp-steps 200000000 \
-  --br-lr 0.0001 --br-train-steps 24 \
-  --as-lr 0.0001 --as-train-steps 12 \
-  --br-buffer-size 2000000 \
-  --as-buffer-size 3000000 \
+  --br-lr 0.0001 --br-train-steps 16 \
+  --as-lr 0.0001 --as-train-steps 8 \
+  --br-buffer-size 1000000 \
+  --as-buffer-size 10000000 \
   --epsilon-start 0.10 \
   --epsilon-end 0.003 \
-  --epsilon-decay-steps 1200000000 \
-  --huber-delta 10.0 \
-  --lr-warmup-steps 8000000 \
+  --epsilon-decay-steps 400000000 \
+  --lr-warmup-steps 4000000 \
   --lr-min-factor 0.01 \
-  --tau 0.005 \
-  --eval-every 1000000 \
-  --eval-hands 5000 \
-  --checkpoint-every 5000000 \
-  --save-buffers \
+  --exploit-opponent-prob 0.05 \
+  --eval-every 750000 \
+  --checkpoint-every 2500000 \
   --episodes 300000000 \
   --checkpoint-dir checkpoints/hu \
   --log-dir logs/hu
@@ -102,21 +110,20 @@ python scripts/train.py \
 
 ### Resuming Heads-Up Training
 
-**With saved buffers** (`--save-buffers` was used): buffers are loaded automatically
+**With saved buffers** (default): buffers are loaded automatically
 on resume. No freeze/warmup needed — training continues seamlessly.
 
 ```bash
-python scripts/train.py \
+./scripts/train.sh \
   --resume checkpoints/hu/checkpoint_latest.pt \
-  --save-buffers \
-  --device cuda --async --train-ahead 4 --sync-every 15 \
+  --device cuda --async --train-ahead 1 --sync-every 15 \
   --num-envs 2048 \
   --batch-size 8192 \
-  --br-lr 0.0001 --br-train-steps 24 \
-  --as-lr 0.0001 --as-train-steps 12 \
-  --episodes 300000000 --eval-every 1000000 \
-  --eval-hands 5000 \
-  --checkpoint-dir checkpoints/hu --checkpoint-every 5000000 \
+  --br-lr 0.0001 --br-train-steps 16 \
+  --as-lr 0.0001 --as-train-steps 8 \
+  --exploit-opponent-prob 0.05 \
+  --episodes 300000000 --eval-every 750000 \
+  --checkpoint-dir checkpoints/hu --checkpoint-every 2500000 \
   --log-dir logs/hu
 ```
 
@@ -137,19 +144,18 @@ turns over several times in that period, accumulating data from many different B
 policies as BR evolves during training.
 
 ```bash
-python scripts/train.py \
+./scripts/train.sh \
   --resume checkpoints/hu/checkpoint_latest.pt \
   --as-freeze-duration 5000000 \
   --as-warmup-episodes 5000000 \
-  --save-buffers \
-  --device cuda --async --train-ahead 4 --sync-every 15 \
+  --device cuda --async --train-ahead 1 --sync-every 15 \
   --num-envs 2048 \
   --batch-size 8192 \
-  --br-lr 0.0001 --br-train-steps 24 \
-  --as-lr 0.0001 --as-train-steps 12 \
-  --episodes 300000000 --eval-every 1000000 \
-  --eval-hands 5000 \
-  --checkpoint-dir checkpoints/hu --checkpoint-every 5000000 \
+  --br-lr 0.0001 --br-train-steps 16 \
+  --as-lr 0.0001 --as-train-steps 8 \
+  --exploit-opponent-prob 0.05 \
+  --episodes 300000000 --eval-every 750000 \
+  --checkpoint-dir checkpoints/hu --checkpoint-every 2500000 \
   --log-dir logs/hu
 ```
 
@@ -174,22 +180,21 @@ for escaping local minima and finding better solutions.
   the correct position.
 
 ```bash
-python scripts/train.py \
+./scripts/train.sh \
   --resume checkpoints/hu/checkpoint_latest.pt \
   --restart-schedules --reset-optimizers \
-  --save-buffers \
-  --device cuda --async --train-ahead 4 --sync-every 15 \
+  --device cuda --async --train-ahead 1 --sync-every 15 \
   --num-envs 2048 \
   --batch-size 8192 \
   --eta-start 0.01 --eta-end 0.4 --eta-ramp-steps 200000000 \
-  --epsilon-start 0.05 --epsilon-end 0.003 --epsilon-decay-steps 600000000 \
+  --epsilon-start 0.05 --epsilon-end 0.003 --epsilon-decay-steps 400000000 \
   --lr-warmup-steps 4000000 --lr-min-factor 0.01 \
-  --br-lr 0.0001 --br-train-steps 24 \
-  --as-lr 0.0001 --as-train-steps 12 \
-  --episodes 500000000 --eval-every 1000000 \
-  --eval-hands 5000 \
+  --br-lr 0.0001 --br-train-steps 16 \
+  --as-lr 0.0001 --as-train-steps 8 \
+  --exploit-opponent-prob 0.05 \
+  --episodes 500000000 --eval-every 750000 \
   --checkpoint-dir checkpoints/hu_restart \
-  --checkpoint-every 5000000 \
+  --checkpoint-every 2500000 \
   --log-dir logs/hu_restart
 ```
 
@@ -317,6 +322,19 @@ Critical convergence fixes:
 **Old checkpoints are incompatible** — they trained on corrupted transitions.
 Start fresh from Stage 1.
 
+## What Changed (v4)
+
+Key improvements over v3:
+
+| Change | Before | After | Why |
+|---|---|---|---|
+| **Opponent stats** | 5 per opponent (40 total) | 15 per opponent (120 total) | Street-specific aggression, showdown stats, c-bet, bet sizing, positional VPIP |
+| **Observation** | 502-dim static, 630-dim total | 582-dim static, 710-dim total | +80 floats from expanded opponent modeling |
+| **Trunk input** | 718 dim (462+256) | 838 dim (582+256) | Wider first layer to accommodate richer features |
+| **Diverse opponents** | Self-play only | 5% scripted/checkpoint opponents | Prevents narrow self-play strategies, teaches exploitation |
+| **Save buffers** | Off by default (`--save-buffers`) | On by default (`--no-save-buffers` to disable) | Prevents accidental data loss on resume |
+| **Build system** | Manual `maturin develop` | `./scripts/train.sh` (auto-build) | One command to rebuild engine + start training |
+
 ## What Changed (v3)
 
 Key improvements over v2:
@@ -325,7 +343,7 @@ Key improvements over v2:
 |---|---|---|---|
 | **Action space** | 8 actions (overlapping raises) | 9 actions (0.25×–1.5× pot) | Better strategic coverage, cleaner pot-relative sizing |
 | **History encoding** | 7-dim (coarse 5-cat one-hot) | 11-dim (9-action one-hot + bet/pot ratio) | Richer action history for pattern recognition |
-| **Observation** | 569 floats, 25 game state features | 462 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking |
+| **Observation** | 569 floats, 25 game state features | 502 floats, 46 game state features | Pot odds, SPR, street counts, aggressor tracking, 5 per-opponent EMA stats |
 | **Head network** | 256-dim heads | 512-dim heads | More capacity for value/policy heads |
 | **Legal mask** | `logits.clamp(min=-1e9)` | `torch.where(mask, logits, -1e9)` | Proper masking — clamp affected legal actions too |
 | **Epsilon** | 0.12 → 0.003 over 20M | 0.10 → 0.003 over 200M steps | Sufficient exploration for 9 actions, less BR noise |
@@ -563,19 +581,22 @@ equilibrium.
 Both BR and AS share the same architecture — a shared trunk with separate heads:
 
 ```
-Input: 462 static features + 256 history encoding = 718 dimensions
+Input: 582 static features + 256 history encoding = 838 dimensions
 
-Static features (462):
+Static features (582):
   ├── Hole cards: 2 × 52 one-hot encodings (104)
   ├── Community cards: 5 × 52 one-hot, zero-padded pre-flop (260)
-  ├── Game state: 46 floats (pot odds, stack-to-pot ratio, position,
-  │   street counts, aggressor tracking, bet sizes, etc.)
+  ├── Game state: 166 floats
+  │   ├── Core (46): pot odds, stack-to-pot ratio, position,
+  │   │   street counts, aggressor tracking, bet sizes, etc.
+  │   └── Opponent stats (120): 15 EMA stats × 8 opponent slots
+  │       (see Cross-Hand Opponent Modeling below)
   └── Hand strength: 52 floats (Monte Carlo win probability estimates)
 
 History encoding (256): from transformer attention (see below)
 
 Shared trunk:
-  Linear(718 → 1024) → LayerNorm → ReLU → ResidualBlock(1024)
+  Linear(838 → 1024) → LayerNorm → ReLU → ResidualBlock(1024)
   Linear(1024 → 512) → LayerNorm → ReLU → ResidualBlock(512)
 
 BR head (Dueling DQN):
@@ -756,3 +777,84 @@ A well-trained model should:
 
 Getting close to break-even vs TAG indicates the model has learned a reasonable
 approximation of GTO play, since TAG plays a simplified but solid strategy.
+
+### Cross-Hand Opponent Modeling
+
+The observation includes 15 EMA (exponential moving average) stats per opponent
+slot, tracked across hands. These give the network a running profile of each
+opponent's tendencies, enabling exploitative play.
+
+All stats use EMA α=0.02 (~50-hand smoothing window) and initialize to 0.5
+(neutral prior), except `sample_size` which starts at 0.0 and grows toward 1.0
+as more hands are observed.
+
+| Stat | Description |
+|---|---|
+| **vpip** | Voluntarily Put $ In Pot — how often the player enters a pot (calls or raises preflop) |
+| **pfr** | Pre-Flop Raise % — how often the player raises preflop (subset of VPIP) |
+| **aggression** | Overall aggression — ratio of raises to total actions (raises+calls+checks) across all streets |
+| **fold_to_bet** | How often the player folds when facing a bet or raise |
+| **sample_size** | Number of hands observed (saturates toward 1.0) — lets the network know how reliable the other stats are |
+| **flop_aggression** | Aggression specifically on the flop street |
+| **turn_aggression** | Aggression specifically on the turn street |
+| **river_aggression** | Aggression specifically on the river street |
+| **wtsd** | Went To ShowDown % — how often the player reaches showdown (after seeing the flop) |
+| **wsd** | Won at ShowDown % — how often the player wins when reaching showdown |
+| **cbet** | Continuation bet % — how often the player bets the flop after raising preflop |
+| **avg_bet_size** | Average bet size as a fraction of the pot (EMA of per-hand averages) |
+| **preflop_raise_size** | Average preflop raise size as a fraction of the pot |
+| **ep_vpip** | VPIP from early position (UTG/MP) — a tight ep_vpip suggests strong opening ranges |
+| **lp_vpip** | VPIP from late position (CO/BTN) — a loose lp_vpip suggests positional awareness |
+
+**Why per-street aggression?** A player who bets aggressively on the flop but
+shuts down on the turn/river is likely bluffing. Street-specific stats let the
+network detect these patterns and adjust accordingly.
+
+**Why position-aware VPIP?** Good players open wider from late position and
+tighter from early position. A large gap between `lp_vpip` and `ep_vpip` signals
+a skilled, positionally aware opponent. If they're equally loose from all positions,
+they're likely a weak player whose range can be exploited.
+
+**Showdown stats insight:** A player with high WTSD but low WSD is a calling
+station — they call too much and lose at showdown. High WTSD with high WSD means
+a tight player who only goes to showdown with strong hands. The network learns
+to value bet thinner against calling stations and bluff less against tight showdown
+players.
+
+**How tracking works:** The Rust engine maintains per-hand accumulators (e.g.,
+`hand_flop_raises`, `hand_flop_actions`) that reset each hand. At hand end,
+per-hand ratios are committed to the EMA stats. For showdown tracking,
+`resolve_hand()` records which players reached showdown and who won before the
+EMA update in `end_hand()`. C-bet detection checks if the player raised preflop
+(`hand_pfr`) and then bet the flop (first aggressive flop action).
+
+### Diverse Training Opponents
+
+Pure self-play (agent vs itself) can lead to narrow, exploitable strategies where
+the agent only learns to beat its own policy. To build a more robust player, a
+fraction of seats use diverse opponent policies during training.
+
+**`--exploit-opponent-prob`** (default: 0.05) controls what fraction of seats are
+replaced with non-self-play opponents. At 0.05, roughly 5% of opponent seats use
+a scripted bot or historical checkpoint instead of the current policy.
+
+The opponent pool includes:
+
+| Opponent | Strategy |
+|---|---|
+| **Random** | Plays random legal actions — forces the agent to punish loose play |
+| **Caller** | Always calls — teaches value betting and when folding is correct |
+| **TAG** | Tight-aggressive — folds weak, calls medium, raises strong hands by hand strength |
+| **Checkpoint pool** | Past versions of the agent loaded from saved checkpoints |
+
+Checkpoint opponents are loaded from the checkpoint directory. As training
+progresses and new checkpoints are saved, they're automatically added to the pool.
+This creates a league-like effect where the agent must beat both current and
+historical versions of itself, preventing cyclical strategy drift.
+
+**Why this matters for opponent modeling:** Without diverse opponents, the 15
+per-opponent EMA stats would always track the same policy (self-play). With diverse
+opponents, the stats genuinely vary across seats — a caller will have VPIP≈1.0 and
+fold_to_bet≈0.0, while a TAG will have VPIP≈0.3 and high aggression. This teaches
+the network to actually *use* the opponent stats for exploitation, not just ignore
+them as noise.
