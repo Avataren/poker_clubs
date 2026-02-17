@@ -490,8 +490,19 @@ class NFSPTrainer:
                 nan_sources.append(f"obs({torch.isnan(obs).sum().item()})")
             if torch.isnan(next_obs).any():
                 nan_sources.append(f"next_obs({torch.isnan(next_obs).sum().item()})")
+            if torch.isnan(ah).any():
+                nan_sources.append(f"ah({torch.isnan(ah).sum().item()})")
+            if torch.isnan(next_ah).any():
+                nan_sources.append(f"next_ah({torch.isnan(next_ah).sum().item()})")
             if torch.isinf(q_taken).any():
                 nan_sources.append(f"q_taken_inf({torch.isinf(q_taken).sum().item()})")
+            if torch.isinf(obs).any():
+                nan_sources.append(f"obs_inf({torch.isinf(obs).sum().item()})")
+            # Check for NaN in model weights
+            for name, p in self.br_net.named_parameters():
+                if torch.isnan(p).any():
+                    nan_sources.append(f"weight:{name}({torch.isnan(p).sum().item()})")
+                    break  # one is enough
             src = ", ".join(nan_sources) if nan_sources else "loss computation only"
             if self.br_updates % 50 == 0 or self.br_updates <= 10:
                 print(f"  [WARNING] BR loss is {loss_val} at update {self.br_updates}, "
@@ -534,7 +545,22 @@ class NFSPTrainer:
         loss_val = loss.item()
         if not math.isfinite(loss_val):
             self.as_updates += 1
-            print(f"  [WARNING] AS loss is {loss_val} at update {self.as_updates}, skipping optimizer step")
+            nan_sources = []
+            if torch.isnan(logits).any():
+                nan_sources.append(f"logits({torch.isnan(logits).sum().item()})")
+            if torch.isnan(obs).any():
+                nan_sources.append(f"obs({torch.isnan(obs).sum().item()})")
+            if torch.isnan(ah).any():
+                nan_sources.append(f"ah({torch.isnan(ah).sum().item()})")
+            if torch.isinf(logits).any():
+                nan_sources.append(f"logits_inf({torch.isinf(logits).sum().item()})")
+            for name, p in self.as_net.named_parameters():
+                if torch.isnan(p).any():
+                    nan_sources.append(f"weight:{name}({torch.isnan(p).sum().item()})")
+                    break
+            src = ", ".join(nan_sources) if nan_sources else "loss computation only"
+            print(f"  [WARNING] AS loss is {loss_val} at update {self.as_updates}, "
+                  f"skipping optimizer step | NaN in: {src}")
             return loss_val
 
         self.as_optimizer.zero_grad(set_to_none=True)
