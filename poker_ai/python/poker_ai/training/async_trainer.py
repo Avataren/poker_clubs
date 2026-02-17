@@ -220,6 +220,13 @@ class AsyncNFSPTrainer(NFSPTrainer):
             self.writer.add_scalar("meta/lr_factor", cur_lr_f, total_steps)
             self.writer.add_scalar("buffer/br_size", len(self.br_buffer), total_steps)
             self.writer.add_scalar("buffer/as_size", len(self.as_buffer), total_steps)
+            # Weight and gradient norms
+            br_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.br_net).parameters())**0.5
+            as_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.as_net).parameters())**0.5
+            self.writer.add_scalar("norms/br_weight", br_wnorm, total_steps)
+            self.writer.add_scalar("norms/as_weight", as_wnorm, total_steps)
+            self.writer.add_scalar("norms/br_grad", self._last_br_grad_norm, total_steps)
+            self.writer.add_scalar("norms/as_grad", self._last_as_grad_norm, total_steps)
             while episode_count >= next_log:
                 next_log += 10000
 

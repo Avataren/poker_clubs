@@ -134,6 +134,33 @@ class EvalStats:
     bluff_pct: float = 0.0         # raises with hand_strength < 0.3
     thin_value_pct: float = 0.0    # raises with 0.3 <= strength < 0.6
     value_bet_pct: float = 0.0     # raises with strength >= 0.6
+    # HUD stats
+    vpip: float = 0.0              # voluntarily put $ in pot (%)
+    pfr: float = 0.0               # preflop raise (%)
+    aggression: float = 0.0        # raises / (raises + calls + checks)
+    wtsd: float = 0.0              # went to showdown (%)
+    cbet: float = 0.0              # continuation bet (%)
+    # Per-street action distributions
+    flop_fold_pct: float = 0.0
+    flop_call_pct: float = 0.0
+    flop_raise_pct: float = 0.0
+    turn_fold_pct: float = 0.0
+    turn_call_pct: float = 0.0
+    turn_raise_pct: float = 0.0
+    river_fold_pct: float = 0.0
+    river_call_pct: float = 0.0
+    river_raise_pct: float = 0.0
+    # Bet sizing
+    avg_bet_size: float = 0.0      # mean bet/pot ratio when raising
+    # Per-street bluff rates
+    flop_bluff_pct: float = 0.0
+    turn_bluff_pct: float = 0.0
+    river_bluff_pct: float = 0.0
+    # Showdown & fold-to-bet
+    showdown_pct: float = 0.0      # hands reaching showdown (%)
+    fold_to_flop_bet: float = 0.0  # fold when facing flop bet (%)
+    fold_to_turn_bet: float = 0.0
+    fold_to_river_bet: float = 0.0
 
 
 @dataclass
@@ -285,6 +312,8 @@ class NFSPTrainer:
         self.br_updates = 0
         self.as_updates = 0
         self._schedule_step_offset = 0  # for warm restarts: schedules use (total_steps - offset)
+        self._last_br_grad_norm = 0.0
+        self._last_as_grad_norm = 0.0
 
     def is_as_frozen(self) -> bool:
         """Check if AS training is currently frozen."""
@@ -454,12 +483,12 @@ class NFSPTrainer:
         if self.use_amp:
             self.br_scaler.scale(loss).backward()
             self.br_scaler.unscale_(self.br_optimizer)
-            torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0)
+            self._last_br_grad_norm = torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0).item()
             self.br_scaler.step(self.br_optimizer)
             self.br_scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0)
+            self._last_br_grad_norm = torch.nn.utils.clip_grad_norm_(self.br_net.parameters(), 10.0).item()
             self.br_optimizer.step()
 
         self.br_updates += 1
@@ -502,12 +531,12 @@ class NFSPTrainer:
         if self.use_amp:
             self.as_scaler.scale(loss).backward()
             self.as_scaler.unscale_(self.as_optimizer)
-            torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0)
+            self._last_as_grad_norm = torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0).item()
             self.as_scaler.step(self.as_optimizer)
             self.as_scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0)
+            self._last_as_grad_norm = torch.nn.utils.clip_grad_norm_(self.as_net.parameters(), 10.0).item()
             self.as_optimizer.step()
 
         self.as_updates += 1
@@ -592,6 +621,13 @@ class NFSPTrainer:
                 self.writer.add_scalar("meta/lr_factor", self._get_lr_factor(), self.total_steps)
                 self.writer.add_scalar("buffer/br_size", len(self.br_buffer), self.total_steps)
                 self.writer.add_scalar("buffer/as_size", len(self.as_buffer), self.total_steps)
+                # Weight and gradient norms
+                br_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.br_net).parameters())**0.5
+                as_wnorm = sum(p.data.norm().item()**2 for p in self._unwrap(self.as_net).parameters())**0.5
+                self.writer.add_scalar("norms/br_weight", br_wnorm, self.total_steps)
+                self.writer.add_scalar("norms/as_weight", as_wnorm, self.total_steps)
+                self.writer.add_scalar("norms/br_grad", self._last_br_grad_norm, self.total_steps)
+                self.writer.add_scalar("norms/as_grad", self._last_as_grad_norm, self.total_steps)
                 while episode_count >= next_log:
                     next_log += log_every
 
@@ -697,6 +733,36 @@ class NFSPTrainer:
         # Exploitability proxy (BR advantage over AS — lower is better)
         self.writer.add_scalar("eval/br_exploit_bb100", exploit.bb100, episode)
         self.writer.add_scalar("eval/br_exploit_ci95", exploit.ci95, episode)
+
+        # HUD stats (vs TAG — most representative opponent)
+        self.writer.add_scalar("hud/vpip", vs_tag.vpip, episode)
+        self.writer.add_scalar("hud/pfr", vs_tag.pfr, episode)
+        self.writer.add_scalar("hud/aggression", vs_tag.aggression, episode)
+        self.writer.add_scalar("hud/wtsd", vs_tag.wtsd, episode)
+        self.writer.add_scalar("hud/cbet", vs_tag.cbet, episode)
+        self.writer.add_scalar("hud/showdown_pct", vs_tag.showdown_pct, episode)
+        self.writer.add_scalar("hud/avg_bet_size", vs_tag.avg_bet_size, episode)
+
+        # Per-street action distributions (vs TAG)
+        self.writer.add_scalar("street/flop_fold", vs_tag.flop_fold_pct, episode)
+        self.writer.add_scalar("street/flop_call", vs_tag.flop_call_pct, episode)
+        self.writer.add_scalar("street/flop_raise", vs_tag.flop_raise_pct, episode)
+        self.writer.add_scalar("street/turn_fold", vs_tag.turn_fold_pct, episode)
+        self.writer.add_scalar("street/turn_call", vs_tag.turn_call_pct, episode)
+        self.writer.add_scalar("street/turn_raise", vs_tag.turn_raise_pct, episode)
+        self.writer.add_scalar("street/river_fold", vs_tag.river_fold_pct, episode)
+        self.writer.add_scalar("street/river_call", vs_tag.river_call_pct, episode)
+        self.writer.add_scalar("street/river_raise", vs_tag.river_raise_pct, episode)
+
+        # Per-street bluff rates (vs TAG)
+        self.writer.add_scalar("bluff/flop", vs_tag.flop_bluff_pct, episode)
+        self.writer.add_scalar("bluff/turn", vs_tag.turn_bluff_pct, episode)
+        self.writer.add_scalar("bluff/river", vs_tag.river_bluff_pct, episode)
+
+        # Fold-to-bet per street (vs TAG)
+        self.writer.add_scalar("fold_to_bet/flop", vs_tag.fold_to_flop_bet, episode)
+        self.writer.add_scalar("fold_to_bet/turn", vs_tag.fold_to_turn_bet, episode)
+        self.writer.add_scalar("fold_to_bet/river", vs_tag.fold_to_river_bet, episode)
 
     def _evaluate_multiway(self, eval_model, episode: int):
         """Multiway evaluation: vs TAG table with positional and HUD stats."""
@@ -861,13 +927,58 @@ class NFSPTrainer:
         # Per-street bluff tracking (postflop only)
         street_bluffs: dict[str, list[int]] = {"flop": [0, 0], "turn": [0, 0], "river": [0, 0]}  # [bluffs, total_raises]
 
+        # HUD stats counters
+        hands_vpip = 0       # hands where hero voluntarily put $ in
+        hands_pfr = 0        # hands where hero raised preflop
+        total_hero_hands = 0
+        raise_actions = 0    # total raises across all streets
+        passive_actions = 0  # calls + checks
+        # Per-street action tracking
+        street_actions: dict[str, np.ndarray] = {
+            "flop": np.zeros(3, dtype=np.int64),    # [fold, call, raise]
+            "turn": np.zeros(3, dtype=np.int64),
+            "river": np.zeros(3, dtype=np.int64),
+        }
+        # Bet sizing
+        bet_size_sum = 0.0
+        bet_size_count = 0
+        _BET_SIZES = {2: 0.25, 3: 0.4, 4: 0.6, 5: 0.8, 6: 1.0, 7: 1.5}
+        # Showdown tracking
+        showdown_count = 0
+        # Fold-to-bet per street
+        fold_to_bet: dict[str, list[int]] = {
+            "flop": [0, 0], "turn": [0, 0], "river": [0, 0]  # [folds, opportunities]
+        }
+        # C-bet tracking
+        cbet_opportunities = 0
+        cbet_taken = 0
+
         for hand_idx in range(num_hands):
             hero_seat = hand_idx % 2
             player, obs, mask = env.reset()
             action_history: list[list[np.ndarray]] = [[], []]
             done = False
+            total_hero_hands += 1
+
+            # Per-hand state
+            hero_vpip = False
+            hero_pfr = False
+            is_preflop = True
+            hero_raised_preflop = False
+            hero_acted_on_flop = False
+            last_action_was_bet = False  # opponent bet/raised, hero faces it
+            current_phase = 0
+            hand_showdown = False
 
             while not done:
+                phase = int(np.argmax(obs[364:370]))
+                # Detect phase transition
+                if phase > current_phase:
+                    is_preflop = (phase == 0)
+                    current_phase = phase
+                    last_action_was_bet = False
+                    hero_acted_on_flop = (phase > 1)  # past flop
+
                 if player == hero_seat:
                     static_obs = extract_static_features_batch(obs.reshape(1, -1))[0]
                     ah_padded, ah_len = pad_action_history(action_history[player], max_hist)
@@ -880,10 +991,33 @@ class NFSPTrainer:
                         action = eval_model.select_action(obs_t, ah_t, ah_len_t, mask_t).item()
                     action_counts[action] += 1
 
+                    strength = float(obs[HAND_STRENGTH_START]) if phase > 0 else float(obs[HAND_STRENGTH_START + 1])
+
+                    # HUD: VPIP/PFR (preflop only)
+                    if phase == 0 and action >= 1:  # call or raise preflop
+                        hero_vpip = True
+                    if phase == 0 and action >= 2:
+                        hero_pfr = True
+                        hero_raised_preflop = True
+
+                    # Action categorization
+                    if action == 0:
+                        cat = 0  # fold
+                    elif action == 1:
+                        cat = 1  # call/check
+                        passive_actions += 1
+                    else:
+                        cat = 2  # raise
+                        raise_actions += 1
+                        passive_actions += 0  # don't count raise as passive
+
+                    # Per-street action tracking
+                    street_name = {1: "flop", 2: "turn", 3: "river"}.get(phase)
+                    if street_name:
+                        street_actions[street_name][cat] += 1
+
                     # Bluff tracking: classify raises by hand strength
                     if action >= 2:  # any raise
-                        phase = int(np.argmax(obs[364:370]))
-                        strength = float(obs[HAND_STRENGTH_START]) if phase > 0 else float(obs[HAND_STRENGTH_START + 1])
                         total_raises += 1
                         if strength < 0.3:
                             bluff_count += 1
@@ -891,14 +1025,36 @@ class NFSPTrainer:
                             thin_value_count += 1
                         else:
                             value_bet_count += 1
-                        # Per-street postflop tracking
-                        street_name = {1: "flop", 2: "turn", 3: "river"}.get(phase)
                         if street_name:
                             street_bluffs[street_name][1] += 1
                             if strength < 0.3:
                                 street_bluffs[street_name][0] += 1
+                        # Bet sizing
+                        if action in _BET_SIZES:
+                            bet_size_sum += _BET_SIZES[action]
+                            bet_size_count += 1
+
+                    # Fold-to-bet: did hero fold when facing a bet?
+                    if last_action_was_bet and street_name:
+                        fold_to_bet[street_name][1] += 1  # opportunity
+                        if action == 0:
+                            fold_to_bet[street_name][0] += 1  # folded
+
+                    # C-bet: hero raised preflop and now acts on flop
+                    if phase == 1 and hero_raised_preflop and not hero_acted_on_flop:
+                        hero_acted_on_flop = True
+                        cbet_opportunities += 1
+                        if action >= 2:
+                            cbet_taken += 1
+
+                    last_action_was_bet = False
                 else:
                     action = self._select_baseline_action(opponent, obs, mask)
+                    # Track if opponent bet/raised (hero will face it next)
+                    if action >= 2:
+                        last_action_was_bet = True
+                    else:
+                        last_action_was_bet = False
 
                 action_record = make_action_record(player, action, 2)
                 for p in range(2):
@@ -911,6 +1067,15 @@ class NFSPTrainer:
                     hand_bb100 = float(rewards[hero_seat]) * 100.0
                     hand_returns_bb100[hand_idx] = hand_bb100
                     seat_returns_bb100[hero_seat].append(hand_bb100)
+                    # Showdown detection: neither player folded (both have non-zero rewards or tie)
+                    if action != 0 and (player != hero_seat or action != 0):
+                        # Approximate: if last action wasn't fold, it's a showdown
+                        showdown_count += 1
+
+            if hero_vpip:
+                hands_vpip += 1
+            if hero_pfr:
+                hands_pfr += 1
 
         # Log action distribution for debugging
         total_actions = action_counts.sum()
@@ -945,6 +1110,23 @@ class NFSPTrainer:
         t_pct = (thin_value_count / total_raises * 100) if total_raises > 0 else 0.0
         v_pct = (value_bet_count / total_raises * 100) if total_raises > 0 else 0.0
 
+        # Compute per-street action percentages
+        def _street_pcts(arr):
+            s = arr.sum()
+            if s == 0:
+                return 0.0, 0.0, 0.0
+            return float(arr[0] / s * 100), float(arr[1] / s * 100), float(arr[2] / s * 100)
+
+        ff, fc, fr = _street_pcts(street_actions["flop"])
+        tf, tc, tr = _street_pcts(street_actions["turn"])
+        rf, rc, rr = _street_pcts(street_actions["river"])
+
+        # Fold-to-bet percentages
+        def _ftb_pct(arr):
+            return (arr[0] / arr[1] * 100) if arr[1] > 0 else 0.0
+
+        agg = raise_actions / max(raise_actions + passive_actions, 1) * 100
+
         return EvalStats(
             bb100=mean_bb100,
             ci95=ci95,
@@ -955,6 +1137,22 @@ class NFSPTrainer:
             bluff_pct=b_pct,
             thin_value_pct=t_pct,
             value_bet_pct=v_pct,
+            vpip=hands_vpip / max(total_hero_hands, 1) * 100,
+            pfr=hands_pfr / max(total_hero_hands, 1) * 100,
+            aggression=agg,
+            wtsd=showdown_count / max(total_hero_hands, 1) * 100,
+            cbet=cbet_taken / max(cbet_opportunities, 1) * 100,
+            flop_fold_pct=ff, flop_call_pct=fc, flop_raise_pct=fr,
+            turn_fold_pct=tf, turn_call_pct=tc, turn_raise_pct=tr,
+            river_fold_pct=rf, river_call_pct=rc, river_raise_pct=rr,
+            avg_bet_size=bet_size_sum / max(bet_size_count, 1),
+            flop_bluff_pct=(street_bluffs["flop"][0] / max(street_bluffs["flop"][1], 1) * 100),
+            turn_bluff_pct=(street_bluffs["turn"][0] / max(street_bluffs["turn"][1], 1) * 100),
+            river_bluff_pct=(street_bluffs["river"][0] / max(street_bluffs["river"][1], 1) * 100),
+            showdown_pct=showdown_count / max(total_hero_hands, 1) * 100,
+            fold_to_flop_bet=_ftb_pct(fold_to_bet["flop"]),
+            fold_to_turn_bet=_ftb_pct(fold_to_bet["turn"]),
+            fold_to_river_bet=_ftb_pct(fold_to_bet["river"]),
         )
 
     def _eval_multiway(self, opponent: str, num_hands: int,
