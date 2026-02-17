@@ -87,7 +87,7 @@ class CircularBuffer:
         if n == 0:
             return
 
-        with self._lock:
+        with self._lock, np.errstate(over="ignore"):
             pos = self.position
             # Check if we wrap around
             if pos + n <= self.capacity:
