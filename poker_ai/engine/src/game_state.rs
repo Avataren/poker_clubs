@@ -3,6 +3,102 @@ use crate::card::{Card, Deck};
 use crate::hand_eval::{evaluate_hand, HandRank};
 use crate::pot::{award_pots, calculate_side_pots, SidePot};
 
+/// Per-opponent running statistics using exponential moving average.
+/// EMA adapts to shifting opponent policy (~50 hand effective window).
+const EMA_ALPHA: f64 = 0.02;
+
+#[derive(Debug, Clone)]
+pub struct PlayerStats {
+    pub vpip: f64,
+    pub pfr: f64,
+    pub aggression: f64,     // EMA of raise events (vs call events)
+    pub fold_to_bet: f64,
+    pub hands_played: f64,
+    // Per-hand accumulators (reset each hand)
+    hand_vpip: bool,
+    hand_pfr: bool,
+    hand_raises: u32,
+    hand_calls: u32,
+    hand_folds_to_bet: u32,
+    hand_faced_bets: u32,
+}
+
+impl PlayerStats {
+    pub fn new() -> Self {
+        Self {
+            vpip: 0.5, pfr: 0.5, aggression: 0.5, fold_to_bet: 0.5,
+            hands_played: 0.0,
+            hand_vpip: false, hand_pfr: false,
+            hand_raises: 0, hand_calls: 0,
+            hand_folds_to_bet: 0, hand_faced_bets: 0,
+        }
+    }
+
+    pub fn start_hand(&mut self) {
+        self.hand_vpip = false;
+        self.hand_pfr = false;
+        self.hand_raises = 0;
+        self.hand_calls = 0;
+        self.hand_folds_to_bet = 0;
+        self.hand_faced_bets = 0;
+    }
+
+    pub fn end_hand(&mut self) {
+        self.hands_played += 1.0;
+        let a = EMA_ALPHA;
+        self.vpip = self.vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
+        self.pfr = self.pfr * (1.0 - a) + if self.hand_pfr { a } else { 0.0 };
+        // Aggression: ratio of raises to (raises + calls) this hand
+        let total_rc = (self.hand_raises + self.hand_calls) as f64;
+        if total_rc > 0.0 {
+            let hand_agg = self.hand_raises as f64 / total_rc;
+            self.aggression = self.aggression * (1.0 - a) + hand_agg * a;
+        }
+        // Fold to bet
+        if self.hand_faced_bets > 0 {
+            let hand_ftb = self.hand_folds_to_bet as f64 / self.hand_faced_bets as f64;
+            self.fold_to_bet = self.fold_to_bet * (1.0 - a) + hand_ftb * a;
+        }
+    }
+
+    pub fn record_action(&mut self, action: &Action, is_preflop: bool, facing_bet: bool) {
+        match action {
+            Action::Fold => {
+                if facing_bet {
+                    self.hand_folds_to_bet += 1;
+                    self.hand_faced_bets += 1;
+                }
+            }
+            Action::CheckCall => {
+                if facing_bet {
+                    self.hand_calls += 1;
+                    self.hand_faced_bets += 1;
+                    if is_preflop { self.hand_vpip = true; }
+                }
+            }
+            Action::Raise(_) | Action::AllIn => {
+                self.hand_raises += 1;
+                if facing_bet { self.hand_faced_bets += 1; }
+                if is_preflop {
+                    self.hand_vpip = true;
+                    self.hand_pfr = true;
+                }
+            }
+        }
+    }
+
+    /// Sample size indicator (saturates at 100 hands).
+    pub fn sample_size(&self) -> f32 {
+        (self.hands_played as f32 / 100.0).min(1.0)
+    }
+
+    /// Encode as 5 floats: [vpip, pfr, aggression, fold_to_bet, sample_size]
+    pub fn encode(&self) -> [f32; 5] {
+        [self.vpip as f32, self.pfr as f32, self.aggression as f32,
+         self.fold_to_bet as f32, self.sample_size()]
+    }
+}
+
 /// Game phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -55,6 +151,7 @@ pub struct SimTable {
     pub initial_stacks: Vec<i64>,
     pub street_action_count: usize,
     pub street_raise_count: usize,
+    pub player_stats: Vec<PlayerStats>,
 }
 
 impl SimTable {
@@ -86,6 +183,7 @@ impl SimTable {
             initial_stacks: vec![starting_stack; num_players],
             street_action_count: 0,
             street_raise_count: 0,
+            player_stats: (0..num_players).map(|_| PlayerStats::new()).collect(),
         }
     }
 
@@ -116,6 +214,11 @@ impl SimTable {
         self.initial_stacks = self.stacks.clone();
         self.street_action_count = 0;
         self.street_raise_count = 0;
+
+        // Reset per-hand stat flags
+        for s in &mut self.player_stats {
+            s.start_hand();
+        }
 
         // Mark busted players as folded
         for i in 0..self.num_players {
@@ -249,6 +352,11 @@ impl SimTable {
             bet_ratio,
         });
         self.street_action_count += 1;
+
+        // Record stats for cross-hand opponent modeling
+        let is_preflop = self.phase == Phase::Preflop;
+        let facing_bet = self.current_bet > self.player_bets[seat];
+        self.player_stats[seat].record_action(&action, is_preflop, facing_bet);
 
         match action {
             Action::Fold => {
@@ -441,6 +549,11 @@ impl SimTable {
     fn resolve_hand(&mut self) {
         self.phase = Phase::HandOver;
 
+        // Commit per-hand stats for all players
+        for s in &mut self.player_stats {
+            s.end_hand();
+        }
+
         let active: Vec<usize> = (0..self.num_players)
             .filter(|&i| !self.folded[i])
             .collect();
@@ -535,10 +648,10 @@ impl SimTable {
     }
 
     /// Encode observation for the given player as a feature vector.
-    /// Returns 590 floats total:
-    ///   364 (cards) + 46 (game state) + 128 (history placeholder) + 52 (hand strength)
+    /// Returns 630 floats total:
+    ///   364 (cards) + 86 (game state) + 128 (history placeholder) + 52 (hand strength)
     pub fn encode_observation(&self, seat: usize) -> Vec<f32> {
-        let mut features = Vec::with_capacity(590);
+        let mut features = Vec::with_capacity(630);
 
         // --- Card encoding (364 floats) ---
         // Hole cards: 2 x 52 one-hot
@@ -683,12 +796,23 @@ impl SimTable {
                 features.extend_from_slice(&[0.0, 0.0, 0.0]);
             }
         }
-        // Game state: 6 phase + 8 scalars + 8 new + 24 opponents = 46
-        debug_assert_eq!(features.len(), 364 + 46,
-            "game state mismatch: got {} floats, expected 46", features.len() - 364);
+
+        // Per-opponent running stats: vpip, pfr, aggression, fold_to_bet, sample_size (up to 8 = 40)
+        for i in 0..8 {
+            let opp = (seat + 1 + i) % self.num_players;
+            if i < self.num_players - 1 {
+                let stats = &self.player_stats[opp];
+                features.extend_from_slice(&stats.encode());
+            } else {
+                features.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+            }
+        }
+        // Game state: 6 phase + 8 scalars + 8 new + 24 opponents + 40 opp_stats = 86
+        debug_assert_eq!(features.len(), 364 + 86,
+            "game state mismatch: got {} floats, expected 86", features.len() - 364);
 
         // --- Placeholder for history hidden state (128 floats) - filled by Python ---
-        features.resize(364 + 46 + 128, 0.0);
+        features.resize(364 + 86 + 128, 0.0);
 
         // --- Hand strength features (52 floats) ---
         if seat < self.hole_cards.len() && !self.hole_cards.is_empty() {
@@ -707,9 +831,9 @@ impl SimTable {
             ));
 
             // Pad remaining hand strength features
-            features.resize(590, 0.0);
+            features.resize(630, 0.0);
         } else {
-            features.resize(590, 0.0);
+            features.resize(630, 0.0);
         }
 
         features

@@ -17,7 +17,7 @@ from poker_ai.config.hyperparams import NFSPConfig
 
 # Pre-compute slice indices
 _CARD_SLICE = slice(HOLE_CARDS_START, COMMUNITY_END)          # 364
-_GAME_SLICE = slice(GAME_STATE_START, GAME_STATE_END)          # 25
+_GAME_SLICE = slice(GAME_STATE_START, GAME_STATE_END)          # 86
 _HAND_SLICE = slice(HAND_STRENGTH_START, HAND_STRENGTH_END)    # 52
 # Column indices for vectorized extraction
 _STATIC_COLS = np.concatenate([
@@ -28,7 +28,7 @@ _STATIC_COLS = np.concatenate([
 
 
 def extract_static_features_batch(obs_batch: np.ndarray) -> np.ndarray:
-    """Vectorized: extract static features from (n, 579) -> (n, 451)."""
+    """Vectorized: extract static features from (n, 630) -> (n, 502)."""
     return obs_batch[:, _STATIC_COLS]
 
 

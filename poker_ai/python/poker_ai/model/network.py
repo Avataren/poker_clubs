@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from poker_ai.config.hyperparams import NFSPConfig
+from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
 
 
 class ActionHistoryTransformer(nn.Module):
@@ -131,8 +132,8 @@ class PokerNet(nn.Module):
         self.config = config
 
         # Static features: observation without history placeholder
-        # 364 (cards) + 46 (game state) + 52 (hand strength) = 462
-        static_input = 462
+        # 364 (cards) + 86 (game state) + 52 (hand strength) = 502
+        static_input = STATIC_FEATURE_SIZE
 
         # Input layer combines static features + history encoding
         total_input = static_input + config.history_hidden_dim
@@ -182,7 +183,7 @@ class PokerNet(nn.Module):
         """Forward pass.
 
         Args:
-            obs: (batch, 462) static features (cards + game state + hand strength)
+            obs: (batch, 502) static features (cards + game state + hand strength)
             history_hidden: (batch, 256) history encoding
             legal_mask: (batch, 9) boolean mask of legal actions
 

@@ -7,6 +7,9 @@ use std::slice;
 
 use crate::game_state::SimTable;
 
+/// Observation vector size: 364 (cards) + 86 (game state) + 128 (history placeholder) + 52 (hand strength)
+const OBS_SIZE: usize = 630;
+
 fn f32_as_pybytes<'py>(py: Python<'py>, data: &[f32]) -> Bound<'py, PyBytes> {
     let bytes = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, size_of_val(data)) };
     PyBytes::new(py, bytes)
@@ -60,7 +63,7 @@ impl PokerEnv {
         let (done, next_player) = self.table.apply_action(action_idx);
 
         let obs = if done {
-            vec![0.0f32; 590]
+            vec![0.0f32; OBS_SIZE]
         } else {
             self.table.encode_observation(next_player)
         };
@@ -195,7 +198,7 @@ impl BatchPokerEnv {
         let (done, next_player) = table.apply_action(action_idx);
 
         let obs = if done {
-            vec![0.0f32; 590]
+            vec![0.0f32; OBS_SIZE]
         } else {
             table.encode_observation(next_player)
         };
@@ -232,7 +235,7 @@ impl BatchPokerEnv {
 
     /// Step multiple environments at once. Takes list of (env_idx, action_idx) pairs.
     /// Returns (players, obs_flat, masks_flat, rewards_flat, dones) as flat arrays.
-    /// obs_flat shape: (n, 590), masks_flat: (n, 9), rewards_flat: (n, num_players), dones: (n,)
+    /// obs_flat shape: (n, OBS_SIZE), masks_flat: (n, 9), rewards_flat: (n, num_players), dones: (n,)
     fn step_batch(
         &mut self,
         actions: Vec<(usize, usize)>,
@@ -241,7 +244,7 @@ impl BatchPokerEnv {
         let num_players = if self.envs.is_empty() { 0 } else { self.envs[0].0.num_players };
 
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut obs_flat = Vec::with_capacity(n * OBS_SIZE);
         let mut masks_flat = Vec::with_capacity(n * 9);
         let mut rewards_flat = Vec::with_capacity(n * num_players);
         let mut dones = Vec::with_capacity(n);
@@ -254,7 +257,7 @@ impl BatchPokerEnv {
             dones.push(done);
 
             if done {
-                obs_flat.extend(std::iter::repeat(0.0f32).take(590));
+                obs_flat.extend(std::iter::repeat(0.0f32).take(OBS_SIZE));
                 masks_flat.extend(std::iter::repeat(false).take(9));
                 let rewards: Vec<f64> = table
                     .rewards
@@ -298,7 +301,7 @@ impl BatchPokerEnv {
         let num_players = if self.envs.is_empty() { 0 } else { self.envs[0].0.num_players };
 
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut obs_flat = Vec::with_capacity(n * OBS_SIZE);
         let mut masks_flat = Vec::with_capacity(n * 9);
         let mut rewards_flat = Vec::with_capacity(n * num_players);
         let mut dones = Vec::with_capacity(n);
@@ -311,7 +314,7 @@ impl BatchPokerEnv {
             dones.push(u8::from(done));
 
             if done {
-                obs_flat.extend(std::iter::repeat(0.0f32).take(590));
+                obs_flat.extend(std::iter::repeat(0.0f32).take(OBS_SIZE));
                 masks_flat.extend(std::iter::repeat(0u8).take(9));
                 rewards_flat.extend(
                     table
@@ -344,7 +347,7 @@ impl BatchPokerEnv {
     ) -> PyResult<(Vec<usize>, Vec<f32>, Vec<bool>)> {
         let n = env_indices.len();
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut obs_flat = Vec::with_capacity(n * OBS_SIZE);
         let mut masks_flat = Vec::with_capacity(n * 9);
 
         for env_idx in env_indices {
@@ -371,7 +374,7 @@ impl BatchPokerEnv {
     ) -> PyResult<(Vec<usize>, Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
         let n = env_indices.len();
         let mut players = Vec::with_capacity(n);
-        let mut obs_flat = Vec::with_capacity(n * 590);
+        let mut obs_flat = Vec::with_capacity(n * OBS_SIZE);
         let mut masks_flat = Vec::with_capacity(n * 9);
 
         for env_idx in env_indices {

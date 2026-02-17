@@ -591,7 +591,7 @@ class NFSPTrainer:
         with torch.no_grad():
             rng = torch.Generator()
             rng.manual_seed(42)
-            probe_obs = torch.randn(1, 462, dtype=torch.float32, generator=rng) * 0.01
+            probe_obs = torch.randn(1, STATIC_FEATURE_SIZE, dtype=torch.float32, generator=rng) * 0.01
             probe_ah = torch.zeros(1, self.config.max_history_len, 11, dtype=torch.float32)
             probe_len = torch.zeros(1, dtype=torch.long)
             probe_mask = torch.ones(1, 9, dtype=torch.bool)

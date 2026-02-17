@@ -13,12 +13,161 @@ use std::path::Path;
 use std::sync::Mutex;
 use tract_onnx::prelude::*;
 
-const OBS_DIM: usize = 462;
+const OBS_DIM: usize = 502;
 const HISTORY_DIM: usize = 11;
 const MAX_HISTORY_LEN: usize = 30;
 const NUM_ACTIONS: usize = 9;
+const EMA_ALPHA: f64 = 0.02;
 
 type OnnxPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, TypedModel>;
+
+/// Per-opponent EMA stats, tracked by the bot from observed table actions.
+#[derive(Debug, Clone)]
+struct SeatStats {
+    vpip: f64,
+    pfr: f64,
+    aggression: f64,
+    fold_to_bet: f64,
+    hands_played: f64,
+    // Per-hand accumulators
+    hand_vpip: bool,
+    hand_pfr: bool,
+    hand_raises: u32,
+    hand_calls: u32,
+    hand_folds_to_bet: u32,
+    hand_faced_bets: u32,
+}
+
+impl SeatStats {
+    fn new() -> Self {
+        Self {
+            vpip: 0.5, pfr: 0.5, aggression: 0.5, fold_to_bet: 0.5,
+            hands_played: 0.0,
+            hand_vpip: false, hand_pfr: false,
+            hand_raises: 0, hand_calls: 0,
+            hand_folds_to_bet: 0, hand_faced_bets: 0,
+        }
+    }
+    fn start_hand(&mut self) {
+        self.hand_vpip = false;
+        self.hand_pfr = false;
+        self.hand_raises = 0;
+        self.hand_calls = 0;
+        self.hand_folds_to_bet = 0;
+        self.hand_faced_bets = 0;
+    }
+    fn end_hand(&mut self) {
+        self.hands_played += 1.0;
+        let a = EMA_ALPHA;
+        self.vpip = self.vpip * (1.0 - a) + if self.hand_vpip { a } else { 0.0 };
+        self.pfr = self.pfr * (1.0 - a) + if self.hand_pfr { a } else { 0.0 };
+        let total_rc = (self.hand_raises + self.hand_calls) as f64;
+        if total_rc > 0.0 {
+            let hand_agg = self.hand_raises as f64 / total_rc;
+            self.aggression = self.aggression * (1.0 - a) + hand_agg * a;
+        }
+        if self.hand_faced_bets > 0 {
+            let hand_ftb = self.hand_folds_to_bet as f64 / self.hand_faced_bets as f64;
+            self.fold_to_bet = self.fold_to_bet * (1.0 - a) + hand_ftb * a;
+        }
+    }
+    fn encode(&self) -> [f32; 5] {
+        let sample_size = (self.hands_played as f32 / 100.0).min(1.0);
+        [self.vpip as f32, self.pfr as f32, self.aggression as f32,
+         self.fold_to_bet as f32, sample_size]
+    }
+}
+
+/// Tracks opponent statistics from observed table actions.
+/// Each bot instance owns one of these — stats are built incrementally.
+struct OpponentTracker {
+    seats: Vec<SeatStats>,
+    /// How many actions we've already processed from the current hand.
+    actions_seen: usize,
+    /// Last known phase to detect hand boundaries.
+    last_hand_action_count: usize,
+}
+
+impl OpponentTracker {
+    fn new() -> Self {
+        Self { seats: Vec::new(), actions_seen: 0, last_hand_action_count: 0 }
+    }
+
+    /// Observe the table and update stats from any new actions since last call.
+    fn observe(&mut self, table: &PokerTable) {
+        let num_seats = table.players.len();
+        // Grow seat stats if players joined
+        while self.seats.len() < num_seats {
+            self.seats.push(SeatStats::new());
+        }
+
+        let history = &table.hand_action_history;
+
+        // Detect new hand: if action history got shorter, a new hand started
+        if history.len() < self.last_hand_action_count {
+            // End previous hand stats
+            for s in &mut self.seats[..num_seats] {
+                s.end_hand();
+                s.start_hand();
+            }
+            self.actions_seen = 0;
+        }
+        self.last_hand_action_count = history.len();
+
+        // Process new actions
+        let is_preflop = matches!(table.phase, GamePhase::PreFlop);
+        for i in self.actions_seen..history.len() {
+            let rec = &history[i];
+            // Decode actor from normalized seat: rec[0] = seat / (num_players - 1)
+            let actor = if num_seats > 1 {
+                (rec[0] * (num_seats - 1) as f32).round() as usize
+            } else {
+                0
+            };
+            if actor >= num_seats { continue; }
+
+            // Decode action from one-hot (rec[1..10])
+            let action_idx = (1..10).max_by(|&a, &b| rec[a].partial_cmp(&rec[b]).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1) - 1;
+            let is_fold = action_idx == 0;
+            let is_call = action_idx == 1;
+            let is_raise = action_idx >= 2;
+            // Approximate facing_bet from whether call/fold/raise makes sense
+            // A fold or call implies facing a bet; a raise may or may not
+            let facing_bet = is_fold || is_call || (is_raise && table.current_bet > 0);
+
+            let stats = &mut self.seats[actor];
+            if is_fold && facing_bet {
+                stats.hand_folds_to_bet += 1;
+                stats.hand_faced_bets += 1;
+            } else if is_call && facing_bet {
+                stats.hand_calls += 1;
+                stats.hand_faced_bets += 1;
+                if is_preflop { stats.hand_vpip = true; }
+            } else if is_raise {
+                stats.hand_raises += 1;
+                if facing_bet { stats.hand_faced_bets += 1; }
+                if is_preflop { stats.hand_vpip = true; stats.hand_pfr = true; }
+            }
+        }
+        self.actions_seen = history.len();
+    }
+
+    /// Encode opponent stats for a given hero seat (5 floats per opponent slot, 8 slots = 40).
+    fn encode_for_seat(&self, hero_seat: usize, num_players: usize, out: &mut Vec<f32>) {
+        for i in 0..8 {
+            if i < num_players.saturating_sub(1) {
+                let opp = (hero_seat + 1 + i) % num_players;
+                if opp < self.seats.len() {
+                    out.extend_from_slice(&self.seats[opp].encode());
+                } else {
+                    out.extend_from_slice(&[0.5, 0.5, 0.5, 0.5, 0.0]);
+                }
+            } else {
+                out.extend_from_slice(&[0.0; 5]);
+            }
+        }
+    }
+}
 
 /// Personality configuration for ONNX model inference.
 #[derive(Debug, Clone)]
@@ -210,6 +359,7 @@ impl ModelRuntime {
 /// Strategy that selects actions using the exported average-strategy ONNX model.
 pub struct ModelStrategy {
     runtime: Mutex<ModelRuntime>,
+    tracker: Mutex<OpponentTracker>,
     fallback: SimpleStrategy,
     personality: Personality,
 }
@@ -223,6 +373,7 @@ impl ModelStrategy {
         let runtime = ModelRuntime::load(path)?;
         Ok(Self {
             runtime: Mutex::new(runtime),
+            tracker: Mutex::new(OpponentTracker::new()),
             fallback: SimpleStrategy::balanced(),
             personality,
         })
@@ -325,7 +476,16 @@ impl BotStrategy for ModelStrategy {
             return self.fallback.decide(view);
         }
 
-        let obs = encode_static_observation(table, player_idx);
+        let mut obs = encode_static_observation(table, player_idx);
+
+        // Observe table actions and append opponent stats to observation
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.observe(table);
+            tracker.encode_for_seat(player_idx, table.players.len(), &mut obs);
+        } else {
+            // Mutex poisoned — append neutral defaults
+            obs.extend_from_slice(&[0.0; 40]);
+        }
         
         // Debug: log hand strength for strong hands
         if tracing::enabled!(tracing::Level::DEBUG) {
@@ -767,7 +927,7 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
             out.extend_from_slice(&[0.0, 0.0, 0.0]);
         }
     }
-    // Total: 6 + 8 + 8 + 24 = 46
+    // Total: 6 + 8 + 8 + 24 = 46 (opponent stats appended separately by OpponentTracker)
 }
 
 fn encode_hand_strength(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) {
@@ -867,7 +1027,9 @@ mod tests {
     fn test_encode_static_observation_shape() {
         let table = make_table();
         let obs = encode_static_observation(&table, 0);
-        assert_eq!(obs.len(), OBS_DIM);
+        // Static obs = 364 (cards) + 46 (game state) + 52 (hand strength) = 462
+        // Opponent stats (40) appended separately by OpponentTracker in decide_with_table
+        assert_eq!(obs.len(), 462);
     }
 
     #[test]
