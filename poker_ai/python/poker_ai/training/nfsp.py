@@ -96,6 +96,49 @@ class CheckpointPool:
         idx = np.random.randint(len(self._pool))
         return self._pool[idx]
 
+    def load_from_directory(self, checkpoint_dir: str, max_load: int | None = None):
+        """Pre-populate pool from checkpoint files on disk.
+
+        Loads AS network weights from the most recent checkpoints found in
+        the directory, up to max_size (or max_load if specified).
+        """
+        from pathlib import Path
+        import re
+
+        ckpt_dir = Path(checkpoint_dir)
+        if not ckpt_dir.exists():
+            return
+
+        # Find numbered checkpoints (skip checkpoint_latest.pt)
+        pattern = re.compile(r"checkpoint_(\d+)\.pt$")
+        files = []
+        for f in ckpt_dir.iterdir():
+            m = pattern.match(f.name)
+            if m:
+                files.append((int(m.group(1)), f))
+
+        if not files:
+            return
+
+        # Sort by episode number, take the most recent ones
+        files.sort(key=lambda x: x[0])
+        limit = max_load if max_load is not None else self._pool.maxlen
+        selected = files[-limit:]
+
+        loaded = 0
+        for episode, fpath in selected:
+            try:
+                ckpt = torch.load(fpath, map_location="cpu", weights_only=True)
+                if "as_net" in ckpt:
+                    sd = {k: v.cpu() for k, v in ckpt["as_net"].items()}
+                    self._pool.append(sd)
+                    loaded += 1
+            except Exception:
+                continue  # skip corrupted checkpoints
+
+        if loaded > 0:
+            print(f"  Checkpoint pool: loaded {loaded} historical opponents from disk")
+
     def __len__(self) -> int:
         return len(self._pool)
 from poker_ai.env.poker_env import PokerEnv, BatchPokerEnv
@@ -1823,6 +1866,10 @@ class NFSPTrainer:
         self.as_updates = checkpoint.get("as_updates", 0)
         self._schedule_step_offset = checkpoint.get("schedule_step_offset", 0)
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
+
+        # Pre-populate checkpoint pool from historical checkpoints on disk
+        ckpt_dir = Path(path).parent
+        self.checkpoint_pool.load_from_directory(str(ckpt_dir))
 
         # Try to load saved buffers from the same checkpoint directory
         if load_buffers:
