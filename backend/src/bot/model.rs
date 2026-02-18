@@ -1351,4 +1351,495 @@ mod tests {
         // rec[10] = rough bet ratio: action_idx 1 / 8.0 = 0.125
         assert!((rec[10] - (1.0 / 8.0)).abs() < 1e-6);
     }
+
+    // ── Observation layout constants ────────────────────────────────────
+    const CARDS_LEN: usize = 364;
+    const GAME_BASE_LEN: usize = 46;  // 6 phase + 8 orig + 8 new + 24 per-opp
+    const OPP_STATS_LEN: usize = 120; // 8 slots × 15 stats
+    const HAND_STR_LEN: usize = 52;
+    const OPP_STATS_OFFSET: usize = CARDS_LEN + GAME_BASE_LEN;            // 410
+    const HAND_STR_OFFSET: usize = OPP_STATS_OFFSET + OPP_STATS_LEN;     // 530
+
+    /// Build a full 582-float observation the same way decide_with_table does.
+    fn build_full_obs(table: &PokerTable, player_idx: usize, tracker: &mut OpponentTracker) -> Vec<f32> {
+        let mut obs = encode_static_observation(table, player_idx);
+        tracker.observe(table);
+        tracker.encode_for_seat(player_idx, table.players.len(), &mut obs);
+        encode_hand_strength(table, player_idx, &mut obs);
+        obs
+    }
+
+    #[test]
+    fn test_full_observation_length_582() {
+        let table = make_table();
+        let mut tracker = OpponentTracker::new();
+        let obs = build_full_obs(&table, 0, &mut tracker);
+        assert_eq!(obs.len(), OBS_DIM, "full observation must be {OBS_DIM} floats");
+    }
+
+    #[test]
+    fn test_observation_layout_order() {
+        // Verify: cards(364) → game_base(46) → opp_stats(120) → hand_strength(52)
+        let table = make_table();
+        let mut tracker = OpponentTracker::new();
+        let obs = build_full_obs(&table, 0, &mut tracker);
+
+        // Cards region: should contain some 1.0 values (one-hot encoded)
+        let cards = &obs[..CARDS_LEN];
+        let card_ones: usize = cards.iter().filter(|&&v| v == 1.0).count();
+        // 2 hole cards + 0 community = 2 one-hot 1.0 values (preflop, no community)
+        assert_eq!(card_ones, 2, "preflop should have exactly 2 card one-hots");
+
+        // Opponent stats at [410..530) — initial EMA values (0.5 for most stats)
+        let stats = &obs[OPP_STATS_OFFSET..OPP_STATS_OFFSET + STATS_PER_OPPONENT];
+        // VPIP initial = 0.5
+        assert!((stats[0] - 0.5).abs() < 0.01, "initial VPIP should be ~0.5, got {}", stats[0]);
+        // sample_size = hands_played/100 = 0/100 = 0.0
+        assert!((stats[4] - 0.0).abs() < 0.01, "initial sample_size should be 0.0, got {}", stats[4]);
+
+        // Hand strength at [530..582) — slot [0] is hand rank (0 preflop), [1] is preflop strength
+        let hs = &obs[HAND_STR_OFFSET..HAND_STR_OFFSET + HAND_STR_LEN];
+        assert!((hs[0] - 0.0).abs() < 0.01, "hand rank should be 0.0 preflop");
+        // preflop_strength is > 0 for any real hand
+        assert!(hs[1] > 0.0, "preflop strength should be > 0, got {}", hs[1]);
+    }
+
+    #[test]
+    fn test_opp_stats_default_values_before_any_hands() {
+        let table = make_table();
+        let mut tracker = OpponentTracker::new();
+        let obs = build_full_obs(&table, 0, &mut tracker);
+
+        // Opponent 0 (player 1 from hero's perspective) stats at [410..425)
+        let stats = &obs[OPP_STATS_OFFSET..OPP_STATS_OFFSET + STATS_PER_OPPONENT];
+        let names = ["VPIP","PFR","AGG","FTB","SS","F-AGG","T-AGG","R-AGG",
+                     "WTSD","WSD","CBET","BET-SZ","PFR-SZ","EP-VPIP","LP-VPIP"];
+
+        // All EMA stats initialized to 0.5, sample_size to 0.0
+        for (i, &name) in names.iter().enumerate() {
+            let expected = if i == 4 { 0.0 }                          // sample_size
+                      else if i == 11 { (0.5_f32).min(5.0) / 5.0 }   // avg_bet_size normalized
+                      else if i == 12 { (0.5_f32).min(10.0) / 10.0 } // preflop_raise_size normalized
+                      else { 0.5 };
+            assert!(
+                (stats[i] - expected).abs() < 0.01,
+                "{name} (idx {i}): expected {expected}, got {}",
+                stats[i]
+            );
+        }
+
+        // Slots 1-7 should be zero (no opponents beyond the one in heads-up)
+        for slot in 1..8 {
+            let offset = OPP_STATS_OFFSET + slot * STATS_PER_OPPONENT;
+            let slot_stats = &obs[offset..offset + STATS_PER_OPPONENT];
+            assert!(
+                slot_stats.iter().all(|&v| v == 0.0),
+                "unused opponent slot {slot} should be all zeros"
+            );
+        }
+    }
+
+    #[test]
+    fn test_opp_stats_all_values_bounded_0_1() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        // Simulate several hands with various actions
+        for _ in 0..10 {
+            table.record_hand_action(0, 8); // p0 all-in
+            table.record_hand_action(1, 1); // p1 call
+            tracker.observe(&table);
+            table.hand_action_history.clear();
+            tracker.observe(&table); // trigger hand boundary
+        }
+
+        let obs = build_full_obs(&table, 0, &mut tracker);
+        let all_stats = &obs[OPP_STATS_OFFSET..OPP_STATS_OFFSET + OPP_STATS_LEN];
+
+        for (i, &v) in all_stats.iter().enumerate() {
+            assert!(
+                v >= 0.0 && v <= 1.001,
+                "stat at index {i} out of [0,1] range: {v}"
+            );
+        }
+    }
+
+    /// Helper: simulate a hand where p0 raises preflop and p1 calls.
+    fn simulate_preflop_raise_call(table: &mut PokerTable, tracker: &mut OpponentTracker) {
+        table.phase = GamePhase::PreFlop;
+        table.current_bet = 200;
+        // p0 raises (action_idx 4 = 0.6x pot raise)
+        table.record_hand_action(0, 4);
+        // p1 calls
+        table.record_hand_action(1, 1);
+        tracker.observe(table);
+        // End hand — clear then observe so tracker sees the boundary
+        table.hand_action_history.clear();
+        tracker.observe(table);
+    }
+
+    /// Helper: simulate a hand where p0 raises and p1 folds.
+    fn simulate_preflop_raise_fold(table: &mut PokerTable, tracker: &mut OpponentTracker) {
+        table.phase = GamePhase::PreFlop;
+        table.current_bet = 200;
+        // p0 raises
+        table.record_hand_action(0, 4);
+        // p1 folds
+        table.record_hand_action(1, 0);
+        tracker.observe(table);
+        // End hand — clear then observe so tracker sees the boundary
+        table.hand_action_history.clear();
+        tracker.observe(table);
+    }
+
+    #[test]
+    fn test_vpip_increases_when_opponent_calls() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        let obs_before = build_full_obs(&table, 0, &mut tracker);
+        let vpip_before = obs_before[OPP_STATS_OFFSET]; // opponent VPIP
+
+        // Opponent (p1) calls a raise — should increase VPIP
+        for _ in 0..5 {
+            simulate_preflop_raise_call(&mut table, &mut tracker);
+        }
+
+        let obs_after = build_full_obs(&table, 0, &mut tracker);
+        let vpip_after = obs_after[OPP_STATS_OFFSET];
+
+        // EMA with alpha=0.02: after 5 hands of VPIP=1, should be > initial 0.5
+        assert!(
+            vpip_after > vpip_before,
+            "VPIP should increase after opponent calls: before={vpip_before}, after={vpip_after}"
+        );
+    }
+
+    #[test]
+    fn test_fold_to_bet_increases_when_opponent_folds() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        let obs_before = build_full_obs(&table, 0, &mut tracker);
+        let ftb_before = obs_before[OPP_STATS_OFFSET + 3]; // FTB index
+
+        // Opponent (p1) folds to raises repeatedly
+        for _ in 0..5 {
+            simulate_preflop_raise_fold(&mut table, &mut tracker);
+        }
+
+        let obs_after = build_full_obs(&table, 0, &mut tracker);
+        let ftb_after = obs_after[OPP_STATS_OFFSET + 3];
+
+        assert!(
+            ftb_after > ftb_before,
+            "fold_to_bet should increase after opponent folds: before={ftb_before}, after={ftb_after}"
+        );
+    }
+
+    #[test]
+    fn test_pfr_increases_when_opponent_raises() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        let obs_before = build_full_obs(&table, 0, &mut tracker);
+        let pfr_before = obs_before[OPP_STATS_OFFSET + 1]; // PFR index
+
+        // Opponent (p1) raises preflop repeatedly
+        for _ in 0..5 {
+            table.phase = GamePhase::PreFlop;
+            table.current_bet = 100;
+            table.record_hand_action(1, 6); // p1 pot-size raise
+            table.record_hand_action(0, 1); // p0 calls
+            tracker.observe(&table);
+            table.hand_action_history.clear();
+        }
+
+        let obs_after = build_full_obs(&table, 0, &mut tracker);
+        let pfr_after = obs_after[OPP_STATS_OFFSET + 1];
+
+        assert!(
+            pfr_after > pfr_before,
+            "PFR should increase after opponent raises preflop: before={pfr_before}, after={pfr_after}"
+        );
+    }
+
+    #[test]
+    fn test_sample_size_grows_with_hands() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        let obs0 = build_full_obs(&table, 0, &mut tracker);
+        assert!((obs0[OPP_STATS_OFFSET + 4] - 0.0).abs() < 0.01,
+            "sample_size should start at 0.0");
+
+        // Play 10 hands
+        for _ in 0..10 {
+            simulate_preflop_raise_call(&mut table, &mut tracker);
+        }
+
+        let obs10 = build_full_obs(&table, 0, &mut tracker);
+        let ss_10 = obs10[OPP_STATS_OFFSET + 4];
+        // hands_played=10, sample_size = (10/100).min(1.0) = 0.1
+        assert!(
+            (ss_10 - 0.1).abs() < 0.02,
+            "sample_size after 10 hands should be ~0.1, got {ss_10}"
+        );
+
+        // Play 90 more hands (total 100)
+        for _ in 0..90 {
+            simulate_preflop_raise_call(&mut table, &mut tracker);
+        }
+
+        let obs100 = build_full_obs(&table, 0, &mut tracker);
+        let ss_100 = obs100[OPP_STATS_OFFSET + 4];
+        // hands_played=100, sample_size = (100/100).min(1.0) = 1.0
+        assert!(
+            (ss_100 - 1.0).abs() < 0.02,
+            "sample_size after 100 hands should be ~1.0, got {ss_100}"
+        );
+    }
+
+    #[test]
+    fn test_aggression_tracks_raise_vs_call_ratio() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        // Opponent always raises → aggression should increase toward 1.0
+        for _ in 0..20 {
+            table.phase = GamePhase::PreFlop;
+            table.current_bet = 100;
+            table.record_hand_action(1, 6); // p1 raises
+            table.record_hand_action(0, 1); // p0 calls
+            tracker.observe(&table);
+            table.hand_action_history.clear();
+            tracker.observe(&table);
+        }
+
+        let obs_raise = build_full_obs(&table, 0, &mut tracker);
+        let agg_raise = obs_raise[OPP_STATS_OFFSET + 2]; // AGG index
+
+        // Opponent always calls → aggression should decrease toward 0.0
+        let mut tracker2 = OpponentTracker::new();
+        for _ in 0..20 {
+            table.phase = GamePhase::PreFlop;
+            table.current_bet = 200;
+            table.record_hand_action(0, 4); // p0 raises
+            table.record_hand_action(1, 1); // p1 calls
+            tracker2.observe(&table);
+            table.hand_action_history.clear();
+            tracker2.observe(&table);
+        }
+
+        let obs_call = build_full_obs(&table, 0, &mut tracker2);
+        let agg_call = obs_call[OPP_STATS_OFFSET + 2];
+
+        assert!(
+            agg_raise > agg_call,
+            "aggression should be higher for raising opp ({agg_raise}) vs calling opp ({agg_call})"
+        );
+    }
+
+    #[test]
+    fn test_bet_size_normalized_in_range() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        // Opponent makes various raises
+        for action_idx in [2, 3, 4, 5, 6, 7, 8] {
+            table.phase = GamePhase::PreFlop;
+            table.current_bet = 100;
+            table.record_hand_action(1, action_idx); // p1 raises with different sizes
+            table.record_hand_action(0, 1);
+            tracker.observe(&table);
+            table.hand_action_history.clear();
+            tracker.observe(&table);
+        }
+
+        let obs = build_full_obs(&table, 0, &mut tracker);
+        let bet_sz = obs[OPP_STATS_OFFSET + 11]; // BET-SZ
+        let pfr_sz = obs[OPP_STATS_OFFSET + 12]; // PFR-SZ
+
+        assert!(bet_sz >= 0.0 && bet_sz <= 1.0,
+            "normalized avg_bet_size should be in [0,1], got {bet_sz}");
+        assert!(pfr_sz >= 0.0 && pfr_sz <= 1.0,
+            "normalized preflop_raise_size should be in [0,1], got {pfr_sz}");
+    }
+
+    #[test]
+    fn test_ema_convergence_direction() {
+        // After many hands of the same action, EMA should converge toward that value.
+        let mut stats = SeatStats::new();
+
+        // Simulate 50 hands where player always raises (VPIP=1, PFR=1, AGG=1)
+        for _ in 0..50 {
+            stats.start_hand();
+            stats.hand_vpip = true;
+            stats.hand_pfr = true;
+            stats.hand_raises = 1;
+            stats.hand_calls = 0;
+            stats.end_hand();
+        }
+
+        assert!(stats.vpip > 0.8, "VPIP should converge toward 1.0 after 50 all-raise hands, got {}", stats.vpip);
+        assert!(stats.pfr > 0.8, "PFR should converge toward 1.0 after 50 all-raise hands, got {}", stats.pfr);
+        assert!(stats.aggression > 0.8, "AGG should converge toward 1.0 after 50 all-raise hands, got {}", stats.aggression);
+
+        // Now simulate 50 hands of always folding to bet
+        for _ in 0..50 {
+            stats.start_hand();
+            stats.hand_folds_to_bet = 1;
+            stats.hand_faced_bets = 1;
+            stats.end_hand();
+        }
+
+        assert!(stats.fold_to_bet > 0.8,
+            "FTB should converge toward 1.0 after 50 all-fold hands, got {}", stats.fold_to_bet);
+        assert!(stats.vpip < 0.5,
+            "VPIP should decay toward 0 after 50 passive hands, got {}", stats.vpip);
+    }
+
+    #[test]
+    fn test_flop_aggression_only_updates_on_flop_actions() {
+        let mut stats = SeatStats::new();
+        let initial_flop_agg = stats.flop_aggression;
+
+        // Hand with no flop actions — flop_aggression should not change
+        stats.start_hand();
+        stats.hand_raises = 1;
+        stats.hand_calls = 0;
+        // No flop actions recorded
+        stats.end_hand();
+
+        assert!(
+            (stats.flop_aggression - initial_flop_agg).abs() < 1e-10,
+            "flop_aggression should not change without flop actions"
+        );
+
+        // Hand with flop raise — flop_aggression should increase
+        stats.start_hand();
+        stats.hand_flop_raises = 1;
+        stats.hand_flop_actions = 1;
+        stats.end_hand();
+
+        assert!(
+            stats.flop_aggression > initial_flop_agg,
+            "flop_aggression should increase after flop raise"
+        );
+    }
+
+    #[test]
+    fn test_cbet_tracks_flop_raise_after_pfr() {
+        let mut stats = SeatStats::new();
+        let initial_cbet = stats.cbet;
+
+        // Hand: raised preflop, then bet on flop (c-bet)
+        stats.start_hand();
+        stats.hand_pfr = true;
+        stats.hand_saw_flop = true;
+        stats.hand_cbet_opportunity = true;
+        stats.hand_cbet_taken = true;
+        stats.end_hand();
+
+        assert!(
+            stats.cbet > initial_cbet,
+            "cbet should increase after successful c-bet: before={initial_cbet}, after={}", stats.cbet
+        );
+
+        // Hand: raised preflop, checked flop (missed c-bet)
+        let after_cbet = stats.cbet;
+        stats.start_hand();
+        stats.hand_pfr = true;
+        stats.hand_saw_flop = true;
+        stats.hand_cbet_opportunity = true;
+        stats.hand_cbet_taken = false;
+        stats.end_hand();
+
+        assert!(
+            stats.cbet < after_cbet,
+            "cbet should decrease after missed c-bet: before={after_cbet}, after={}", stats.cbet
+        );
+    }
+
+    #[test]
+    fn test_wtsd_and_wsd_track_showdown() {
+        let mut stats = SeatStats::new();
+
+        // Went to showdown and won
+        stats.start_hand();
+        stats.hand_saw_flop = true;
+        stats.record_showdown(true);
+        stats.end_hand();
+
+        let wtsd_after_win = stats.wtsd;
+        let wsd_after_win = stats.wsd;
+
+        assert!(wtsd_after_win > 0.5, "WTSD should increase after showdown");
+        assert!(wsd_after_win > 0.5, "WSD should increase after winning showdown");
+
+        // Went to showdown and lost
+        stats.start_hand();
+        stats.hand_saw_flop = true;
+        stats.record_showdown(false);
+        stats.end_hand();
+
+        assert!(stats.wsd < wsd_after_win, "WSD should decrease after losing showdown");
+    }
+
+    #[test]
+    fn test_bet_ratio_clamped_in_tracker() {
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        // All-in action (action_idx=8) → bet_ratio = 8/8 = 1.0, clamped to min(1.0, 10.0) = 1.0
+        // The bet_ratio from record_hand_action is action_idx/8.0 capped at 1.0,
+        // then the tracker clamps to 10.0 — both are fine for this input.
+        table.phase = GamePhase::PreFlop;
+        table.record_hand_action(1, 8); // all-in
+        table.record_hand_action(0, 1); // call
+        tracker.observe(&table);
+        table.hand_action_history.clear();
+
+        let obs = build_full_obs(&table, 0, &mut tracker);
+        let bet_sz = obs[OPP_STATS_OFFSET + 11];
+        let pfr_sz = obs[OPP_STATS_OFFSET + 12];
+
+        assert!(bet_sz <= 1.0, "bet_size must be <= 1.0 after normalization, got {bet_sz}");
+        assert!(pfr_sz <= 1.0, "pfr_size must be <= 1.0 after normalization, got {pfr_sz}");
+    }
+
+    #[test]
+    fn test_encode_order_matches_training_layout() {
+        // Verify the critical invariant: the 582 features follow training order
+        // cards(364) | game_base(46) | opp_stats(120) | hand_strength(52)
+        let mut table = make_table();
+        let mut tracker = OpponentTracker::new();
+
+        // Play a hand so stats diverge from defaults
+        for _ in 0..3 {
+            simulate_preflop_raise_call(&mut table, &mut tracker);
+        }
+
+        let obs = build_full_obs(&table, 0, &mut tracker);
+        assert_eq!(obs.len(), OBS_DIM);
+
+        // Verify cards section has exactly 2 one-hot card bits (preflop)
+        let cards_sum: f32 = obs[..CARDS_LEN].iter().sum();
+        assert!((cards_sum - 2.0).abs() < 0.01, "card section should sum to ~2.0 (2 hole cards)");
+
+        // Verify opp_stats section has non-default values (we played 3 hands)
+        let ss = obs[OPP_STATS_OFFSET + 4]; // sample_size
+        assert!(ss > 0.0, "sample_size should be > 0 after playing hands, got {ss}");
+
+        // Verify hand_strength section: preflop_strength should be at [HAND_STR_OFFSET + 1]
+        let preflop_str = obs[HAND_STR_OFFSET + 1];
+        assert!(preflop_str > 0.0 && preflop_str < 1.0,
+            "preflop_strength at offset {} should be in (0,1), got {preflop_str}", HAND_STR_OFFSET + 1);
+
+        // Verify the value at HAND_STR_OFFSET is NOT an opp stat (should be 0.0 = no hand rank preflop)
+        let hand_rank = obs[HAND_STR_OFFSET];
+        assert!((hand_rank - 0.0).abs() < 0.01,
+            "hand_rank at offset {} should be 0.0 preflop (not an opp stat), got {hand_rank}",
+            HAND_STR_OFFSET);
+    }
 }
