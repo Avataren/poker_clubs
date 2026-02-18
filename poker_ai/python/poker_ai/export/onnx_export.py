@@ -135,7 +135,12 @@ class BestResponseONNXWrapper(nn.Module):
 
 
 def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> NFSPConfig:
-    """Infer architecture fields from checkpoint weights, preserving other config values."""
+    """Infer architecture fields from checkpoint weights, preserving other config values.
+
+    Returns (config, static_feature_size) where static_feature_size is the obs
+    dimension the checkpoint was trained with (may differ from the current
+    STATIC_FEATURE_SIZE if features were added/removed since training).
+    """
     config = copy.deepcopy(base_config)
     # Both AS and BR use the same PokerNet architecture; prefer AS, fall back to BR
     state = checkpoint.get("as_net")
@@ -144,21 +149,22 @@ def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> N
     if not isinstance(state, dict):
         return config
 
-    hist_w = state.get("history_encoder.net.0.weight")
-    if isinstance(hist_w, torch.Tensor) and hist_w.ndim == 2:
-        config.history_hidden_dim = int(hist_w.shape[0])
-        flat_input = int(hist_w.shape[1])
-        if config.history_input_dim > 0 and flat_input % config.history_input_dim == 0:
-            config.max_history_len = flat_input // config.history_input_dim
+    # Infer history_hidden_dim from output_proj (works for both MLP and Transformer)
+    output_proj_w = state.get("history_encoder.output_proj.0.weight")
+    if isinstance(output_proj_w, torch.Tensor) and output_proj_w.ndim == 2:
+        config.history_hidden_dim = int(output_proj_w.shape[0])
+    else:
+        # Legacy MLP-based history encoder
+        hist_w = state.get("history_encoder.net.0.weight")
+        if isinstance(hist_w, torch.Tensor) and hist_w.ndim == 2:
+            config.history_hidden_dim = int(hist_w.shape[0])
+            flat_input = int(hist_w.shape[1])
+            if config.history_input_dim > 0 and flat_input % config.history_input_dim == 0:
+                config.max_history_len = flat_input // config.history_input_dim
 
     trunk0_w = state.get("net.trunk.0.weight")
     if isinstance(trunk0_w, torch.Tensor) and trunk0_w.ndim == 2:
         config.hidden_dim = int(trunk0_w.shape[0])
-        total_in = int(trunk0_w.shape[1])
-        from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
-        inferred_hist_hidden = total_in - STATIC_FEATURE_SIZE
-        if inferred_hist_hidden > 0:
-            config.history_hidden_dim = inferred_hist_hidden
 
     trunk4_w = state.get("net.trunk.4.weight")
     if isinstance(trunk4_w, torch.Tensor) and trunk4_w.ndim == 2:
@@ -169,6 +175,24 @@ def infer_config_from_checkpoint(checkpoint: dict, base_config: NFSPConfig) -> N
         config.num_actions = int(policy_out_w.shape[0])
 
     return config
+
+
+def _infer_static_feature_size(checkpoint: dict, config: NFSPConfig) -> int:
+    """Infer the static feature size the checkpoint was trained with."""
+    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
+
+    state = checkpoint.get("as_net")
+    if not isinstance(state, dict):
+        state = checkpoint.get("br_net")
+    if not isinstance(state, dict):
+        return STATIC_FEATURE_SIZE
+
+    trunk0_w = state.get("net.trunk.0.weight")
+    if isinstance(trunk0_w, torch.Tensor) and trunk0_w.ndim == 2:
+        total_in = int(trunk0_w.shape[1])
+        return total_in - config.history_hidden_dim
+
+    return STATIC_FEATURE_SIZE
 
 
 def _resolve_checkpoint_path(checkpoint_path: str) -> Path:
@@ -231,6 +255,8 @@ def export_to_onnx(
     checkpoint_file = _resolve_checkpoint_path(checkpoint_path)
     checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
     config = infer_config_from_checkpoint(checkpoint, config)
+    static_feat_size = _infer_static_feature_size(checkpoint, config)
+    config.static_feature_size = static_feat_size
 
     # Load model
     as_net = AverageStrategyNet(config)
@@ -241,10 +267,9 @@ def export_to_onnx(
     wrapper.eval()
 
     # Create dummy inputs
-    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
     batch_size = 1
     max_seq_len = config.max_history_len
-    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    obs = torch.randn(batch_size, static_feat_size)
     action_history = torch.randn(batch_size, max_seq_len, config.history_input_dim)
     history_lengths = torch.tensor([max_seq_len], dtype=torch.long)
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
@@ -313,6 +338,8 @@ def export_br_to_onnx(
     checkpoint_file = _resolve_checkpoint_path(checkpoint_path)
     checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
     config = infer_config_from_checkpoint(checkpoint, config)
+    static_feat_size = _infer_static_feature_size(checkpoint, config)
+    config.static_feature_size = static_feat_size
 
     br_net = BestResponseNet(config)
     br_net.load_state_dict(checkpoint["br_net"])
@@ -323,10 +350,9 @@ def export_br_to_onnx(
     )
     wrapper.eval()
 
-    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
     batch_size = 1
     max_seq_len = config.max_history_len
-    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    obs = torch.randn(batch_size, static_feat_size)
     action_history = torch.randn(batch_size, max_seq_len, config.history_input_dim)
     history_lengths = torch.tensor([max_seq_len], dtype=torch.long)
     legal_mask = torch.ones(batch_size, config.num_actions, dtype=torch.bool)
@@ -379,6 +405,8 @@ def verify_onnx(
     checkpoint_file = _resolve_checkpoint_path(checkpoint_path)
     checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
     config = infer_config_from_checkpoint(checkpoint, config)
+    static_feat_size = _infer_static_feature_size(checkpoint, config)
+    config.static_feature_size = static_feat_size
 
     # Load PyTorch model
     as_net = AverageStrategyNet(config)
@@ -386,10 +414,9 @@ def verify_onnx(
     as_net.eval()
 
     # Create test inputs
-    from poker_ai.model.state_encoder import STATIC_FEATURE_SIZE
     batch_size = 4
     max_seq_len = config.max_history_len
-    obs = torch.randn(batch_size, STATIC_FEATURE_SIZE)
+    obs = torch.randn(batch_size, static_feat_size)
     action_history = torch.randn(batch_size, max_seq_len, config.history_input_dim)
     history_lengths = torch.tensor(
         [

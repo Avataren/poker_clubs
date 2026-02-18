@@ -25,6 +25,7 @@ class NFSPConfig:
     history_num_heads: int = 4     # transformer attention heads
     history_num_layers: int = 2    # transformer encoder layers
     history_ffn_dim: int = 128     # transformer feedforward dimension
+    static_feature_size: Optional[int] = None  # override obs dim for loading older checkpoints
 
     # NFSP parameters (eta is now scheduled, see eta_start/eta_end below)
 

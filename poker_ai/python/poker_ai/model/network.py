@@ -133,7 +133,7 @@ class PokerNet(nn.Module):
 
         # Static features: observation without history placeholder
         # 364 (cards) + 166 (game state) + 52 (hand strength) = 582
-        static_input = STATIC_FEATURE_SIZE
+        static_input = config.static_feature_size or STATIC_FEATURE_SIZE
 
         # Input layer combines static features + history encoding
         total_input = static_input + config.history_hidden_dim
