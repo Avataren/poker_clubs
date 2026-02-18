@@ -206,7 +206,8 @@ impl SeatStats {
             self.river_aggression as f32,
             self.wtsd as f32, self.wsd as f32,
             self.cbet as f32,
-            self.avg_bet_size as f32, self.preflop_raise_size as f32,
+            (self.avg_bet_size as f32).min(5.0) / 5.0,
+            (self.preflop_raise_size as f32).min(10.0) / 10.0,
             self.ep_vpip as f32, self.lp_vpip as f32,
         ]
     }
@@ -300,7 +301,7 @@ impl OpponentTracker {
             let is_call = action_idx == 1;
             let is_raise = action_idx >= 2;
             let facing_bet = is_fold || is_call || (is_raise && table.current_bet > 0);
-            let bet_ratio = rec[10] as f64;
+            let bet_ratio = (rec[10] as f64).min(10.0);
 
             let stats = &mut self.seats[actor];
             let is_preflop = matches!(phase, GamePhase::PreFlop);
