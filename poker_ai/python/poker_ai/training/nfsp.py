@@ -132,6 +132,11 @@ _OPP_STATS_END = _OPP_STATS_START + _NUM_OPP_SLOTS * _STATS_PER_OPP  # 530
 _SAMPLE_SIZE_OFFSET = 4      # index within each 15-stat block
 
 
+# Pre-compute sample_size column indices for all 8 opponent slots
+_SAMPLE_SIZE_COLS = [_OPP_STATS_START + i * _STATS_PER_OPP + _SAMPLE_SIZE_OFFSET
+                     for i in range(_NUM_OPP_SLOTS)]
+
+
 def apply_opponent_stats_augmentation(
     obs: torch.Tensor,
     prob: float = 0.15,
@@ -150,30 +155,30 @@ def apply_opponent_stats_augmentation(
     if n_aug == 0:
         return obs
 
-    aug = obs.clone()
-    aug_rows = aug[mask]
+    aug = obs  # in-place: buffer samples are not reused after training
+    stats_block = aug[mask, _OPP_STATS_START:_OPP_STATS_END]  # (n_aug, 120)
 
-    for slot in range(_NUM_OPP_SLOTS):
-        base = _OPP_STATS_START + slot * _STATS_PER_OPP
-        slot_stats = aug_rows[:, base:base + _STATS_PER_OPP]
+    # Mask out empty slots (all zeros = no opponent)
+    slot_view = stats_block.view(n_aug, _NUM_OPP_SLOTS, _STATS_PER_OPP)
+    active = slot_view.abs().sum(dim=2) > 0.01  # (n_aug, 8)
+    active_expanded = active.unsqueeze(2).expand_as(slot_view)  # (n_aug, 8, 15)
 
-        # Skip empty slots (all zeros = no opponent in that seat)
-        active = slot_stats.abs().sum(dim=1) > 0.01
-        if not active.any():
-            continue
+    # Randomize sample_size uniformly [0, 1] for active slots
+    slot_view[:, :, _SAMPLE_SIZE_OFFSET] = torch.where(
+        active,
+        torch.rand(n_aug, _NUM_OPP_SLOTS, device=obs.device),
+        slot_view[:, :, _SAMPLE_SIZE_OFFSET],
+    )
 
-        # Randomize sample_size uniformly [0, 1]
-        slot_stats[active, _SAMPLE_SIZE_OFFSET] = torch.rand(
-            active.sum().item(), device=obs.device
-        )
+    # Add noise to all active stats, clamped to [0, 1]
+    noise = torch.randn_like(slot_view) * noise_std
+    slot_view = torch.where(
+        active_expanded,
+        (slot_view + noise).clamp(0.0, 1.0),
+        slot_view,
+    )
 
-        # Add noise to all stats (including sample_size for extra variance)
-        noise = torch.randn_like(slot_stats[active]) * noise_std
-        slot_stats[active] = (slot_stats[active] + noise).clamp(0.0, 1.0)
-
-        aug_rows[:, base:base + _STATS_PER_OPP] = slot_stats
-
-    aug[mask] = aug_rows
+    aug[mask, _OPP_STATS_START:_OPP_STATS_END] = slot_view.view(n_aug, -1)
     return aug
 
 
