@@ -3,6 +3,8 @@
 import copy
 import math
 import os
+import queue
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -19,6 +21,55 @@ from poker_ai.model.network import BestResponseNet, AverageStrategyNet
 from poker_ai.training.circular_buffer import CircularBuffer
 from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record, _STATIC_COLS
+
+
+class BatchPrefetcher:
+    """Pre-samples batches in a background thread to overlap CPU/GPU work.
+
+    While the GPU trains on batch N, the CPU thread samples batch N+1
+    from the replay buffer and pins it in memory, keeping the GPU fed.
+    """
+
+    def __init__(self, sample_fn, use_pinned: bool, queue_size: int = 2):
+        self._sample_fn = sample_fn
+        self._use_pinned = use_pinned
+        self._queue: queue.Queue = queue.Queue(maxsize=queue_size)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                arrays = self._sample_fn()
+            except Exception:
+                if self._stop.is_set():
+                    return
+                raise
+            pinned = tuple(
+                torch.from_numpy(a).pin_memory() if self._use_pinned
+                else torch.from_numpy(a)
+                for a in arrays
+            )
+            try:
+                self._queue.put(pinned, timeout=0.5)
+            except queue.Full:
+                continue
+
+    def get(self, device) -> tuple:
+        """Get next pre-prepared batch, transferred to device."""
+        batch = self._queue.get()
+        non_blocking = self._use_pinned
+        return tuple(t.to(device, non_blocking=non_blocking) for t in batch)
+
+    def stop(self):
+        self._stop.set()
+        # Drain to unblock worker
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
 
 
 class CheckpointPool:
@@ -380,6 +431,10 @@ class NFSPTrainer:
         self._last_br_grad_norm = 0.0
         self._last_as_grad_norm = 0.0
 
+        # Batch prefetchers (overlap CPU sampling with GPU training)
+        self._br_prefetcher: BatchPrefetcher | None = None
+        self._as_prefetcher: BatchPrefetcher | None = None
+
     def is_as_frozen(self) -> bool:
         """Check if AS training is currently frozen."""
         if self.config.freeze_as:
@@ -493,22 +548,26 @@ class NFSPTrainer:
         if len(self.br_buffer) < min_samples:
             return 0.0
 
-        # Sample directly as numpy arrays, convert to tensors (no Python loop)
-        (obs_np, ah_np, ah_len_np, actions_np, rewards_np, next_obs_np,
-         next_ah_np, next_ah_len_np, next_mask_np, dones_np, masks_np
-        ) = self.br_buffer.sample_arrays(self.config.batch_size)
-
-        obs = self._to_device(obs_np)
-        ah = self._to_device(ah_np)
-        ah_len = self._to_device(ah_len_np)
-        actions = self._to_device(actions_np)
-        rewards = self._to_device(rewards_np)
-        next_obs = self._to_device(next_obs_np)
-        next_ah = self._to_device(next_ah_np)
-        next_ah_len = self._to_device(next_ah_len_np)
-        next_mask = self._to_device(next_mask_np)
-        dones = self._to_device(dones_np)
-        masks = self._to_device(masks_np)
+        # Use prefetcher if available (overlaps CPU sampling with GPU training)
+        if self._br_prefetcher is not None:
+            (obs, ah, ah_len, actions, rewards, next_obs,
+             next_ah, next_ah_len, next_mask, dones, masks
+            ) = self._br_prefetcher.get(self.device)
+        else:
+            (obs_np, ah_np, ah_len_np, actions_np, rewards_np, next_obs_np,
+             next_ah_np, next_ah_len_np, next_mask_np, dones_np, masks_np
+            ) = self.br_buffer.sample_arrays(self.config.batch_size)
+            obs = self._to_device(obs_np)
+            ah = self._to_device(ah_np)
+            ah_len = self._to_device(ah_len_np)
+            actions = self._to_device(actions_np)
+            rewards = self._to_device(rewards_np)
+            next_obs = self._to_device(next_obs_np)
+            next_ah = self._to_device(next_ah_np)
+            next_ah_len = self._to_device(next_ah_len_np)
+            next_mask = self._to_device(next_mask_np)
+            dones = self._to_device(dones_np)
+            masks = self._to_device(masks_np)
 
         # Suit permutation augmentation — same permutation for obs and next_obs
         # to preserve temporal consistency within each DQN transition.
@@ -585,14 +644,16 @@ class NFSPTrainer:
         if len(self.as_buffer) < min_samples:
             return 0.0
 
-        # Sample directly as numpy arrays
-        obs_np, ah_np, ah_len_np, actions_np, masks_np = self.as_buffer.sample_arrays(self.config.batch_size)
-
-        obs = self._to_device(obs_np)
-        ah = self._to_device(ah_np)
-        ah_len = self._to_device(ah_len_np)
-        actions = self._to_device(actions_np)
-        masks = self._to_device(masks_np)
+        # Use prefetcher if available (overlaps CPU sampling with GPU training)
+        if self._as_prefetcher is not None:
+            obs, ah, ah_len, actions, masks = self._as_prefetcher.get(self.device)
+        else:
+            obs_np, ah_np, ah_len_np, actions_np, masks_np = self.as_buffer.sample_arrays(self.config.batch_size)
+            obs = self._to_device(obs_np)
+            ah = self._to_device(ah_np)
+            ah_len = self._to_device(ah_len_np)
+            actions = self._to_device(actions_np)
+            masks = self._to_device(masks_np)
 
         # Suit permutation augmentation
         obs = apply_card_augmentation(obs)
@@ -671,6 +732,18 @@ class NFSPTrainer:
             self.total_steps += steps
             episode_count += self.config.num_envs
             self.total_episodes = episode_count
+
+            # Start prefetchers once buffers have data (lazy init)
+            if self._br_prefetcher is None and self.use_cuda_transfer and len(self.br_buffer) > self.config.batch_size:
+                self._br_prefetcher = BatchPrefetcher(
+                    lambda: self.br_buffer.sample_arrays(self.config.batch_size),
+                    use_pinned=True,
+                )
+            if self._as_prefetcher is None and self.use_cuda_transfer and len(self.as_buffer) > self.config.batch_size:
+                self._as_prefetcher = BatchPrefetcher(
+                    lambda: self.as_buffer.sample_arrays(self.config.batch_size),
+                    use_pinned=True,
+                )
 
             # Update learning rates
             self._update_lr()

@@ -374,6 +374,20 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 # Update learning rates
                 self._update_lr()
 
+                # Start prefetchers once buffers have data (lazy init)
+                if self._br_prefetcher is None and self.use_cuda_transfer and len(self.br_buffer) > self.config.batch_size:
+                    from poker_ai.training.nfsp import BatchPrefetcher
+                    self._br_prefetcher = BatchPrefetcher(
+                        lambda: self.br_buffer.sample_arrays(self.config.batch_size),
+                        use_pinned=True,
+                    )
+                if self._as_prefetcher is None and self.use_cuda_transfer and len(self.as_buffer) > self.config.batch_size:
+                    from poker_ai.training.nfsp import BatchPrefetcher
+                    self._as_prefetcher = BatchPrefetcher(
+                        lambda: self.as_buffer.sample_arrays(self.config.batch_size),
+                        use_pinned=True,
+                    )
+
                 # Train BR (DQN)
                 br_loss = 0.0
                 for _ in range(self.config.br_train_steps):
