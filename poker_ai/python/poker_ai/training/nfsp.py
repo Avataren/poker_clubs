@@ -122,6 +122,61 @@ def apply_card_augmentation(obs: torch.Tensor, aug_idx: int | None = None) -> to
     return aug
 
 
+# --- Opponent stats augmentation ---
+# Teaches the model to handle varying sample_size and stat values,
+# preventing the degenerate behavior when backend starts with unknown opponents.
+_OPP_STATS_START = 410       # first opponent stat in 582-dim static obs
+_STATS_PER_OPP = 15
+_NUM_OPP_SLOTS = 8
+_OPP_STATS_END = _OPP_STATS_START + _NUM_OPP_SLOTS * _STATS_PER_OPP  # 530
+_SAMPLE_SIZE_OFFSET = 4      # index within each 15-stat block
+
+
+def apply_opponent_stats_augmentation(
+    obs: torch.Tensor,
+    prob: float = 0.15,
+    noise_std: float = 0.12,
+) -> torch.Tensor:
+    """Randomly perturb opponent stats for a fraction of the batch.
+
+    For selected rows:
+      - sample_size is drawn uniformly from [0, 1]
+      - all other stats get Gaussian noise (std=noise_std), clamped to [0, 1]
+    This ensures the model sees low-sample_size observations during training.
+    """
+    batch_size = obs.shape[0]
+    mask = torch.rand(batch_size, device=obs.device) < prob
+    n_aug = mask.sum().item()
+    if n_aug == 0:
+        return obs
+
+    aug = obs.clone()
+    aug_rows = aug[mask]
+
+    for slot in range(_NUM_OPP_SLOTS):
+        base = _OPP_STATS_START + slot * _STATS_PER_OPP
+        slot_stats = aug_rows[:, base:base + _STATS_PER_OPP]
+
+        # Skip empty slots (all zeros = no opponent in that seat)
+        active = slot_stats.abs().sum(dim=1) > 0.01
+        if not active.any():
+            continue
+
+        # Randomize sample_size uniformly [0, 1]
+        slot_stats[active, _SAMPLE_SIZE_OFFSET] = torch.rand(
+            active.sum().item(), device=obs.device
+        )
+
+        # Add noise to all stats (including sample_size for extra variance)
+        noise = torch.randn_like(slot_stats[active]) * noise_std
+        slot_stats[active] = (slot_stats[active] + noise).clamp(0.0, 1.0)
+
+        aug_rows[:, base:base + _STATS_PER_OPP] = slot_stats
+
+    aug[mask] = aug_rows
+    return aug
+
+
 @dataclass
 class EvalStats:
     """Summary statistics for heads-up evaluation."""
@@ -536,6 +591,9 @@ class NFSPTrainer:
 
         # Suit permutation augmentation
         obs = apply_card_augmentation(obs)
+
+        # Opponent stats augmentation (robustness to unknown opponents)
+        obs = apply_opponent_stats_augmentation(obs)
 
         # Forward pass in float32
         logits = self.as_net.forward_logits(obs, ah, ah_len, masks)
