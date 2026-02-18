@@ -7,6 +7,7 @@ Use --both to export both models at once.
 """
 
 import argparse
+import os
 
 from poker_ai.config.hyperparams import NFSPConfig
 from poker_ai.export.onnx_export import export_to_onnx, export_br_to_onnx, verify_onnx
@@ -33,6 +34,10 @@ def main():
     args = parser.parse_args()
 
     config = NFSPConfig()
+
+    # If output is a directory, append default filenames
+    if args.output and os.path.isdir(args.output):
+        args.output = os.path.join(args.output, "poker_as_net.onnx")
 
     if args.both:
         as_out = args.output or "poker_as_net.onnx"
