@@ -728,7 +728,7 @@ impl BotStrategy for ModelStrategy {
 
         let mut obs = encode_static_observation(table, player_idx);
 
-        // Observe table actions and append opponent stats to observation
+        // Append opponent stats (120 floats)
         if let Ok(mut tracker) = self.tracker.lock() {
             tracker.observe(table);
             tracker.encode_for_seat(player_idx, table.players.len(), &mut obs);
@@ -736,6 +736,10 @@ impl BotStrategy for ModelStrategy {
             // Mutex poisoned — append neutral defaults
             obs.extend_from_slice(&[0.0; STATS_PER_OPPONENT * 8]);
         }
+
+        // Hand strength AFTER opponent stats to match training layout:
+        //   cards(364) → game_state_base(46) → opp_stats(120) → hand_strength(52) = 582
+        encode_hand_strength(table, player_idx, &mut obs);
         
         // Debug: log hand strength for strong hands
         if tracing::enabled!(tracing::Level::DEBUG) {
@@ -975,7 +979,9 @@ fn encode_static_observation(table: &PokerTable, player_idx: usize) -> Vec<f32> 
     let mut obs = Vec::with_capacity(OBS_DIM);
     encode_cards(table, player_idx, &mut obs);
     encode_game_state(table, player_idx, &mut obs);
-    encode_hand_strength(table, player_idx, &mut obs);
+    // Opponent stats slot (120 floats) — filled by OpponentTracker in decide_with_table
+    // Hand strength appended AFTER opponent stats to match training layout:
+    //   cards(364) → game_state_base(46) → opp_stats(120) → hand_strength(52)
     obs
 }
 
@@ -1277,9 +1283,9 @@ mod tests {
     fn test_encode_static_observation_shape() {
         let table = make_table();
         let obs = encode_static_observation(&table, 0);
-        // Static obs = 364 (cards) + 46 (game state) + 52 (hand strength) = 462
-        // Opponent stats (120) appended separately by OpponentTracker in decide_with_table
-        assert_eq!(obs.len(), 462);
+        // Static obs = 364 (cards) + 46 (game state) = 410
+        // Opponent stats (120) and hand strength (52) appended in decide_with_table
+        assert_eq!(obs.len(), 410);
     }
 
     #[test]
