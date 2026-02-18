@@ -939,192 +939,185 @@ impl SimTable {
     /// Returns 710 floats total:
     ///   364 (cards) + 166 (game state) + 128 (history placeholder) + 52 (hand strength)
     pub fn encode_observation(&self, seat: usize) -> Vec<f32> {
-        let mut features = Vec::with_capacity(710);
+        let mut buf = vec![0.0f32; 710];
+        self.encode_observation_into(seat, &mut buf);
+        buf
+    }
+
+    /// Encode observation into a pre-allocated buffer (must be >= 710 floats).
+    pub fn encode_observation_into(&self, seat: usize, features: &mut [f32]) {
+        debug_assert!(features.len() >= 710);
+        // Zero the buffer
+        features[..710].fill(0.0);
 
         // --- Card encoding (364 floats) ---
         // Hole cards: 2 x 52 one-hot
         for i in 0..2 {
-            let mut onehot = [0.0f32; 52];
             if seat < self.hole_cards.len() {
-                onehot[self.hole_cards[seat][i].index()] = 1.0;
+                features[i * 52 + self.hole_cards[seat][i].index()] = 1.0;
             }
-            features.extend_from_slice(&onehot);
         }
         // Community cards: 5 x 52 one-hot (zero-padded)
-        for i in 0..5 {
-            let mut onehot = [0.0f32; 52];
-            if i < self.community_cards.len() {
-                onehot[self.community_cards[i].index()] = 1.0;
-            }
-            features.extend_from_slice(&onehot);
+        for i in 0..self.community_cards.len() {
+            features[104 + i * 52 + self.community_cards[i].index()] = 1.0;
         }
 
-        // --- Game state (35 floats) ---
+        // --- Game state (166 floats starting at offset 364) ---
+        let mut o = 364; // offset cursor
         let to_call_i64 = self.current_bet - self.player_bets.get(seat).copied().unwrap_or(0);
         let to_call = to_call_i64.max(0) as f32;
         let pot_f = self.pot.max(0) as f32;
         let stack = self.stacks[seat].max(0) as f32;
 
         // Phase one-hot (6)
-        let mut phase_oh = [0.0f32; 6];
-        phase_oh[self.phase.index()] = 1.0;
-        features.extend_from_slice(&phase_oh);
+        features[o + self.phase.index()] = 1.0;
+        o += 6;
 
         // Stack / initial stack ratio (1)
-        let stack_ratio = if self.initial_stacks[seat] > 0 {
+        features[o] = if self.initial_stacks[seat] > 0 {
             stack / self.initial_stacks[seat] as f32
         } else {
             0.0
         };
-        features.push(stack_ratio);
+        o += 1;
 
         // Pot / BB ratio (1)
         let pot_bb = pot_f / self.big_blind.max(1) as f32;
-        features.push(pot_bb.min(50.0) / 50.0);
+        features[o] = pot_bb.min(50.0) / 50.0;
+        o += 1;
 
         // Stack / pot ratio (SPR) (1)
-        let spr = if self.pot > 0 {
-            stack / pot_f
+        features[o] = if self.pot > 0 {
+            (stack / pot_f).min(20.0) / 20.0
         } else {
-            10.0
+            10.0 / 20.0
         };
-        features.push(spr.min(20.0) / 20.0);
+        o += 1;
 
         // Position: distance from dealer normalized (1)
-        let position = ((seat + self.num_players - self.dealer) % self.num_players) as f32
+        features[o] = ((seat + self.num_players - self.dealer) % self.num_players) as f32
             / (self.num_players - 1).max(1) as f32;
-        features.push(position);
+        o += 1;
 
         // Num opponents still in hand (1)
         let active = self.active_count();
-        let opponents = active.saturating_sub(1) as f32
+        features[o] = active.saturating_sub(1) as f32
             / (self.num_players - 1).max(1) as f32;
-        features.push(opponents);
+        o += 1;
 
         // Num players who can still act (1)
-        let can_act = self.can_act_count() as f32 / self.num_players.max(1) as f32;
-        features.push(can_act);
+        features[o] = self.can_act_count() as f32 / self.num_players.max(1) as f32;
+        o += 1;
 
         // To-call / pot ratio (1)
-        let to_call_ratio = if self.pot > 0 {
-            to_call / pot_f
+        features[o] = if self.pot > 0 {
+            (to_call / pot_f).min(5.0) / 5.0
         } else {
             0.0
         };
-        features.push(to_call_ratio.min(5.0) / 5.0);
+        o += 1;
 
         // Num players (normalized) (1)
-        features.push(self.num_players as f32 / 9.0);
+        features[o] = self.num_players as f32 / 9.0;
+        o += 1;
 
         // --- NEW features (10 floats) ---
 
         // Pot odds: to_call / (pot + to_call) (1)
-        let pot_odds = if pot_f + to_call > 0.0 {
+        features[o] = if pot_f + to_call > 0.0 {
             to_call / (pot_f + to_call)
         } else {
             0.0
         };
-        features.push(pot_odds);
+        o += 1;
 
-        // Effective stack / pot: min(hero_stack, max_opp_stack) / pot (1)
+        // Effective stack / pot (1)
         let max_opp_stack = (0..self.num_players)
             .filter(|&i| i != seat && !self.folded[i])
             .map(|i| self.stacks[i].max(0) as f32)
             .fold(0.0f32, f32::max);
         let eff_stack = stack.min(max_opp_stack);
-        let eff_stack_pot = if pot_f > 0.0 {
-            eff_stack / pot_f
+        features[o] = if pot_f > 0.0 {
+            (eff_stack / pot_f).min(20.0) / 20.0
         } else {
-            10.0
+            10.0 / 20.0
         };
-        features.push(eff_stack_pot.min(20.0) / 20.0);
+        o += 1;
 
-        // Street action count: num actions this street / 10 (1)
-        let street_action_count = self.count_street_actions();
-        features.push((street_action_count as f32 / 10.0).min(1.0));
+        // Street action count / 10 (1)
+        features[o] = (self.count_street_actions() as f32 / 10.0).min(1.0);
+        o += 1;
 
-        // Total action count: total actions this hand / 30 (1)
-        features.push((self.action_history.len() as f32 / 30.0).min(1.0));
+        // Total action count / 30 (1)
+        features[o] = (self.action_history.len() as f32 / 30.0).min(1.0);
+        o += 1;
 
         // Num raises this street / 4 (1)
-        let raises_this_street = self.count_street_raises();
-        features.push((raises_this_street as f32 / 4.0).min(1.0));
+        features[o] = (self.count_street_raises() as f32 / 4.0).min(1.0);
+        o += 1;
 
         // Last aggressor is hero (1)
-        let last_agg_hero = if self.last_raiser == Some(seat) { 1.0 } else { 0.0 };
-        features.push(last_agg_hero);
+        features[o] = if self.last_raiser == Some(seat) { 1.0 } else { 0.0 };
+        o += 1;
 
         // Hero's current bet / pot (1)
         let hero_bet = self.player_bets.get(seat).copied().unwrap_or(0).max(0) as f32;
-        let hero_bet_pot = if pot_f > 0.0 { hero_bet / pot_f } else { 0.0 };
-        features.push(hero_bet_pot.min(5.0) / 5.0);
+        features[o] = if pot_f > 0.0 { (hero_bet / pot_f).min(5.0) / 5.0 } else { 0.0 };
+        o += 1;
 
         // Hero invested / starting stack (1)
         let total_invested = self.total_bets.get(seat).copied().unwrap_or(0).max(0) as f32;
-        let hero_invested = if self.initial_stacks[seat] > 0 {
-            total_invested / self.initial_stacks[seat] as f32
+        features[o] = if self.initial_stacks[seat] > 0 {
+            (total_invested / self.initial_stacks[seat] as f32).min(1.0)
         } else {
             0.0
         };
-        features.push(hero_invested.min(1.0));
+        o += 1;
 
         // Per-opponent features: folded, all-in, stack ratio (up to 8 opponents = 24)
         for i in 0..8 {
-            let opp = (seat + 1 + i) % self.num_players;
             if i < self.num_players - 1 {
-                features.push(if self.folded[opp] { 1.0 } else { 0.0 });
-                features.push(if self.all_in[opp] { 1.0 } else { 0.0 });
-                let opp_stack_ratio = if self.initial_stacks[opp] > 0 {
-                    self.stacks[opp] as f32 / self.initial_stacks[opp] as f32
+                let opp = (seat + 1 + i) % self.num_players;
+                features[o] = if self.folded[opp] { 1.0 } else { 0.0 };
+                features[o + 1] = if self.all_in[opp] { 1.0 } else { 0.0 };
+                features[o + 2] = if self.initial_stacks[opp] > 0 {
+                    (self.stacks[opp] as f32 / self.initial_stacks[opp] as f32).min(3.0) / 3.0
                 } else {
                     0.0
                 };
-                features.push(opp_stack_ratio.min(3.0) / 3.0);
-            } else {
-                features.extend_from_slice(&[0.0, 0.0, 0.0]);
             }
+            o += 3;
         }
 
         // Per-opponent running stats (15 per opponent, up to 8 = 120)
         for i in 0..8 {
-            let opp = (seat + 1 + i) % self.num_players;
             if i < self.num_players - 1 {
-                let stats = &self.player_stats[opp];
-                features.extend_from_slice(&stats.encode());
-            } else {
-                features.extend_from_slice(&[0.0f32; STATS_PER_OPPONENT]);
+                let opp = (seat + 1 + i) % self.num_players;
+                let encoded = self.player_stats[opp].encode();
+                features[o..o + STATS_PER_OPPONENT].copy_from_slice(&encoded);
             }
+            o += STATS_PER_OPPONENT;
         }
-        // Game state: 6 phase + 8 scalars + 8 new + 24 opponents + 120 opp_stats = 166
-        debug_assert_eq!(features.len(), 364 + 166,
-            "game state mismatch: got {} floats, expected 166", features.len() - 364);
+        // Game state: 6 phase + 8 scalars + 10 new + 24 opponents + 120 opp_stats = 168
+        // Wait: original was 166. Let me verify.
+        debug_assert_eq!(o, 364 + 166,
+            "game state mismatch: wrote to offset {}, expected {}", o, 364 + 166);
 
-        // --- Placeholder for history hidden state (128 floats) - filled by Python ---
-        features.resize(364 + 166 + 128, 0.0);
+        // --- Placeholder for history hidden state (128 floats at [530..658)) - already zeroed ---
 
-        // --- Hand strength features (52 floats) ---
+        // --- Hand strength features (52 floats at [658..710)) ---
         if seat < self.hole_cards.len() && !self.hole_cards.is_empty() {
             let total_cards = 2 + self.community_cards.len();
             if total_cards >= 5 {
                 let hand_rank = evaluate_hand(&self.hole_cards[seat], &self.community_cards);
-                features.push(hand_rank.normalized());
-            } else {
-                features.push(0.0); // no hand rank available preflop
+                features[658] = hand_rank.normalized();
             }
-
             // Preflop strength
-            features.push(crate::hand_eval_features::preflop_strength(
+            features[659] = crate::hand_eval_features::preflop_strength(
                 self.hole_cards[seat][0],
                 self.hole_cards[seat][1],
-            ));
-
-            // Pad remaining hand strength features
-            features.resize(710, 0.0);
-        } else {
-            features.resize(710, 0.0);
+            );
         }
-
-        features
     }
 
     /// Get action history encoded for history MLP input.

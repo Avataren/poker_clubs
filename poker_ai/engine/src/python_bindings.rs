@@ -148,6 +148,7 @@ impl PokerEnv {
 #[pyclass]
 pub struct BatchPokerEnv {
     envs: Vec<(SimTable, ChaCha20Rng)>,
+    obs_buf: [f32; 710], // reusable observation buffer
 }
 
 #[pymethods]
@@ -172,7 +173,7 @@ impl BatchPokerEnv {
                 (table, rng)
             })
             .collect();
-        Self { envs }
+        Self { envs, obs_buf: [0.0f32; 710] }
     }
 
     /// Reset all environments. Returns list of (current_player, obs, mask) tuples.
@@ -323,8 +324,8 @@ impl BatchPokerEnv {
                         .map(|r| (*r as f32) / table.big_blind as f32),
                 );
             } else {
-                let obs = table.encode_observation(next_player);
-                obs_flat.extend(obs);
+                table.encode_observation_into(next_player, &mut self.obs_buf);
+                obs_flat.extend_from_slice(&self.obs_buf);
                 let mask = table.legal_actions_mask();
                 masks_flat.extend(mask.into_iter().map(u8::from));
                 rewards_flat.extend(std::iter::repeat(0.0f32).take(num_players));
@@ -382,10 +383,10 @@ impl BatchPokerEnv {
             table.advance_dealer();
             table.rebuy_busted_players();
             let current = table.start_hand(rng);
-            let obs = table.encode_observation(current);
+            table.encode_observation_into(current, &mut self.obs_buf);
             let mask = table.legal_actions_mask();
             players.push(current);
-            obs_flat.extend(obs);
+            obs_flat.extend_from_slice(&self.obs_buf);
             masks_flat.extend(mask.into_iter().map(u8::from));
         }
 
