@@ -208,3 +208,7 @@ class BatchPokerEnv:
 
         players, obs, masks = self.reset_batch(env_idx_arr.tolist())
         return np.asarray(players, dtype=np.intp), obs, masks
+
+    def reset_player_stats(self, env_indices: list[int], seat_indices: list[int]):
+        """Reset HUD stats for specified env/seat pairs."""
+        self.env.reset_player_stats(env_indices, seat_indices)
