@@ -44,11 +44,10 @@ impl HandRank {
 
     /// Normalized rank 0.0..1.0 for feature encoding.
     pub fn normalized(&self) -> f32 {
-        // rank_value 0-8, sub_rank is u32
-        // Use rank_value as primary, sub_rank as fractional
-        let base = self.rank_value as f32 / 8.0;
-        let frac = (self.sub_rank as f32).min(100000.0) / 100000.0 / 8.0;
-        (base + frac).min(1.0)
+        // Combine rank_value (0-8) and sub_rank into a single [0, 1) score.
+        // Each rank_value gets an equal band; sub_rank orders within band.
+        let sr = (self.sub_rank as f32).min(100_000.0);
+        (self.rank_value as f32 * 100_001.0 + sr) / (9.0 * 100_001.0)
     }
 }
 
@@ -200,5 +199,29 @@ mod tests {
         ];
         let winners = determine_winners(&hands);
         assert_eq!(winners.len(), 2);
+    }
+
+    #[test]
+    fn test_wheel_straight() {
+        let hole = vec![Card::new(14, 0), Card::new(2, 1)];
+        let community = vec![Card::new(3, 2), Card::new(4, 3), Card::new(5, 0)];
+        let rank = evaluate_hand(&hole, &community);
+        assert_eq!(rank.rank_value, 4, "A-2-3-4-5 should be a straight");
+    }
+
+    #[test]
+    fn test_normalized_no_clipping() {
+        // Straight flush (rank 8) must not clip to same value
+        let low = HandRank { rank_value: 8, sub_rank: 0 };
+        let high = HandRank { rank_value: 8, sub_rank: 100_000 };
+        assert!(high.normalized() > low.normalized(),
+            "different sub_ranks within rank 8 must produce different normalized values");
+        assert!(high.normalized() <= 1.0, "normalized must not exceed 1.0");
+
+        // High card (rank 0) must be less than any pair (rank 1)
+        let best_high = HandRank { rank_value: 0, sub_rank: 100_000 };
+        let worst_pair = HandRank { rank_value: 1, sub_rank: 0 };
+        assert!(worst_pair.normalized() > best_high.normalized(),
+            "worst pair must beat best high card");
     }
 }
