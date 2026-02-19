@@ -69,6 +69,9 @@ class WebSocketService {
   )?
   onTournamentInfo;
 
+  // Hand history callback
+  Function(List<dynamic> hands)? onHandHistory;
+
   bool get isConnected => _connectionStatus == ConnectionStatus.connected;
   ConnectionStatus get connectionStatus => _connectionStatus;
 
@@ -269,6 +272,11 @@ class WebSocketService {
           );
           break;
 
+        case 'HandHistory':
+          final payload = data['payload'];
+          onHandHistory?.call(payload['hands'] as List<dynamic>);
+          break;
+
         default:
           break;
       }
@@ -368,6 +376,13 @@ class WebSocketService {
     _send({
       'type': 'RemoveBot',
       'payload': {'table_id': tableId, 'bot_user_id': botUserId},
+    });
+  }
+
+  void getHandHistory(String tableId, {int limit = 20, int offset = 0}) {
+    _send({
+      'type': 'GetHandHistory',
+      'payload': {'table_id': tableId, 'limit': limit, 'offset': offset},
     });
   }
 

@@ -9,8 +9,10 @@ import '../models/tournament_info_state.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/sound_service.dart';
+import '../models/hand_history.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/hand_history_sheet.dart';
 import '../widgets/bet_action_panel.dart';
 import '../widgets/table_seat_widget.dart';
 
@@ -42,6 +44,7 @@ class _GameScreenState extends State<GameScreen> {
   bool _isSeated = false;
   bool _hasSeenPlayersAtTable = false;
   bool _isTableClosed = false;
+  List<HandHistorySummary> _handHistories = [];
   bool _showTournamentResultsOverlay = false;
   bool _loadingTournamentPlacements = false;
   bool _tournamentResultIsFinal = false;
@@ -126,6 +129,14 @@ class _GameScreenState extends State<GameScreen> {
       setState(() {
         _isTableClosed = false;
         _hasSeenPlayersAtTable = false;
+      });
+    };
+    _wsService.onHandHistory = (handsJson) {
+      setState(() {
+        _handHistories = handsJson
+            .map((h) =>
+                HandHistorySummary.fromJson(h as Map<String, dynamic>))
+            .toList();
       });
     };
     _wsService.onError = (error) {
@@ -472,6 +483,21 @@ class _GameScreenState extends State<GameScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  void _openHandHistorySheet() {
+    final tableId = _gameState?.tableId;
+    if (tableId != null) {
+      _wsService.getHandHistory(tableId);
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF121b2e),
+      isScrollControlled: true,
+      builder: (context) {
+        return HandHistorySheet(hands: _handHistories);
+      },
     );
   }
 
@@ -1109,6 +1135,11 @@ class _GameScreenState extends State<GameScreen> {
             onPressed: _openFeedSheet,
           ),
           IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Hand History',
+            onPressed: _openHandHistorySheet,
+          ),
+          IconButton(
             icon: const Icon(Icons.exit_to_app),
             onPressed: () {
               _wsService.leaveTable();
@@ -1430,6 +1461,7 @@ class _GameScreenState extends State<GameScreen> {
   void dispose() {
     _wsService.onTournamentFinished = null;
     _wsService.onTournamentTableChanged = null;
+    _wsService.onHandHistory = null;
     _wsService.disconnect();
     _buyinController.dispose();
     _topUpController.dispose();
