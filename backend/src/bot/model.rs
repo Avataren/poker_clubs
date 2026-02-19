@@ -72,15 +72,16 @@ struct SeatStats {
 
 impl SeatStats {
     fn new() -> Self {
-        // Priors calibrated to the mean opponent profile in the training buffer
-        // (180M-episode hu_v2 checkpoint, 8M AS samples with sample_size >= 0.5).
+        // Match training engine defaults: neutral 0.5 priors with hands_played=0.
+        // Stats ramp up naturally via EMA as hands are observed, and the network
+        // is trained on the full sample_size=0→1.0 trajectory.
         Self {
-            vpip: 0.63, pfr: 0.35, aggression: 0.67, fold_to_bet: 0.34,
-            hands_played: 100.0, // sample_size encodes as 1.0 (matching 99.8% of training data)
-            flop_aggression: 0.43, turn_aggression: 0.38, river_aggression: 0.30,
-            wtsd: 0.47, wsd: 0.52, cbet: 0.44,
-            avg_bet_size: 3.5, preflop_raise_size: 2.9, // encode to 0.70 and 0.29
-            ep_vpip: 0.81, lp_vpip: 0.45,
+            vpip: 0.5, pfr: 0.5, aggression: 0.5, fold_to_bet: 0.5,
+            hands_played: 0.0,
+            flop_aggression: 0.5, turn_aggression: 0.5, river_aggression: 0.5,
+            wtsd: 0.5, wsd: 0.5, cbet: 0.5,
+            avg_bet_size: 0.5, preflop_raise_size: 0.5,
+            ep_vpip: 0.5, lp_vpip: 0.5,
             hand_vpip: false, hand_pfr: false,
             hand_raises: 0, hand_calls: 0,
             hand_folds_to_bet: 0, hand_faced_bets: 0,
@@ -1395,12 +1396,12 @@ mod tests {
         // 2 hole cards + 0 community = 2 one-hot 1.0 values (preflop, no community)
         assert_eq!(card_ones, 2, "preflop should have exactly 2 card one-hots");
 
-        // Opponent stats at [410..530) — priors calibrated to training buffer means
+        // Opponent stats at [410..530) — neutral 0.5 priors with sample_size=0
         let stats = &obs[OPP_STATS_OFFSET..OPP_STATS_OFFSET + STATS_PER_OPPONENT];
-        // VPIP initial = 0.63 (training average)
-        assert!((stats[0] - 0.63).abs() < 0.01, "initial VPIP should be ~0.63, got {}", stats[0]);
-        // sample_size = hands_played/100 = 100/100 = 1.0 (prior)
-        assert!((stats[4] - 1.0).abs() < 0.01, "initial sample_size should be 1.0, got {}", stats[4]);
+        // VPIP initial = 0.5 (neutral prior)
+        assert!((stats[0] - 0.5).abs() < 0.01, "initial VPIP should be ~0.5, got {}", stats[0]);
+        // sample_size = hands_played/100 = 0/100 = 0.0 (new player)
+        assert!((stats[4] - 0.0).abs() < 0.01, "initial sample_size should be 0.0, got {}", stats[4]);
 
         // Hand strength at [530..582) — slot [0] is hand rank (0 preflop), [1] is preflop strength
         let hs = &obs[HAND_STR_OFFSET..HAND_STR_OFFSET + HAND_STR_LEN];
@@ -1420,13 +1421,13 @@ mod tests {
         let names = ["VPIP","PFR","AGG","FTB","SS","F-AGG","T-AGG","R-AGG",
                      "WTSD","WSD","CBET","BET-SZ","PFR-SZ","EP-VPIP","LP-VPIP"];
 
-        // Priors calibrated to training buffer means
+        // Priors: neutral 0.5 for all stats, sample_size=0.0
         let expected_vals: [f32; 15] = [
-            0.63, 0.35, 0.67, 0.34, 1.0,    // vpip, pfr, agg, ftb, sample_size
-            0.43, 0.38, 0.30,                // flop/turn/river aggression
-            0.47, 0.52, 0.44,                // wtsd, wsd, cbet
-            0.70, 0.29,                       // avg_bet_size, pfr_size (encoded)
-            0.81, 0.45,                       // ep_vpip, lp_vpip
+            0.50, 0.50, 0.50, 0.50, 0.0,    // vpip, pfr, agg, ftb, sample_size
+            0.50, 0.50, 0.50,                // flop/turn/river aggression
+            0.50, 0.50, 0.50,                // wtsd, wsd, cbet
+            0.10, 0.05,                       // avg_bet_size, pfr_size (encoded: 0.5/5, 0.5/10)
+            0.50, 0.50,                       // ep_vpip, lp_vpip
         ];
         for (i, &name) in names.iter().enumerate() {
             let expected = expected_vals[i];
@@ -1578,12 +1579,12 @@ mod tests {
         let mut table = make_table();
         let mut tracker = OpponentTracker::new();
 
-        // With 100-hand prior, sample_size starts at 1.0
+        // With 0-hand prior, sample_size starts at 0.0
         let obs0 = build_full_obs(&table, 0, &mut tracker);
-        assert!((obs0[OPP_STATS_OFFSET + 4] - 1.0).abs() < 0.01,
-            "sample_size should start at 1.0 (100-hand prior)");
+        assert!((obs0[OPP_STATS_OFFSET + 4] - 0.0).abs() < 0.01,
+            "sample_size should start at 0.0 (new player)");
 
-        // Play 10 hands — still saturated at 1.0
+        // Play 10 hands — sample_size should be 10/100 = 0.1
         for _ in 0..10 {
             simulate_preflop_raise_call(&mut table, &mut tracker);
         }
@@ -1591,8 +1592,8 @@ mod tests {
         let obs10 = build_full_obs(&table, 0, &mut tracker);
         let ss_10 = obs10[OPP_STATS_OFFSET + 4];
         assert!(
-            (ss_10 - 1.0).abs() < 0.02,
-            "sample_size after 10 more hands should still be ~1.0, got {ss_10}"
+            (ss_10 - 0.1).abs() < 0.02,
+            "sample_size after 10 hands should be ~0.1, got {ss_10}"
         );
     }
 
@@ -1770,8 +1771,8 @@ mod tests {
         let wtsd_after_win = stats.wtsd;
         let wsd_after_win = stats.wsd;
 
-        assert!(wtsd_after_win > 0.47, "WTSD should increase after showdown");
-        assert!(wsd_after_win > 0.52, "WSD should increase after winning showdown");
+        assert!(wtsd_after_win > 0.50, "WTSD should increase after showdown");
+        assert!(wsd_after_win > 0.50, "WSD should increase after winning showdown");
 
         // Went to showdown and lost
         stats.start_hand();
