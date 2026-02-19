@@ -12,7 +12,7 @@ PYO3_PYTHON="$(which python)" cargo build --release --manifest-path ../engine/Ca
 PYVER=$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")
 cp ../engine/target/release/libpoker_ai_engine.so \
    "poker_ai/engine.cpython-${PYVER}-x86_64-linux-gnu.so"
-python -c "from poker_ai.engine import BatchPokerEnv; print('Engine OK')"
+python -c "from poker_ai.engine import BatchPokerEnv; assert hasattr(BatchPokerEnv, 'reset_player_stats'), 'Engine .so is stale — rebuild failed'; print('Engine OK')"
 echo "=== Engine built ==="
 
 echo "=== Starting training ==="
