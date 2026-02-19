@@ -316,6 +316,8 @@ class EvalStats:
     fold_to_flop_bet: float = 0.0  # fold when facing flop bet (%)
     fold_to_turn_bet: float = 0.0
     fold_to_river_bet: float = 0.0
+    # Preflop all-in rate
+    preflop_allin_pct: float = 0.0  # all-in preflop (%)
 
 
 @dataclass
@@ -950,6 +952,7 @@ class NFSPTrainer:
         self.writer.add_scalar("hud/cbet", vs_tag.cbet, episode)
         self.writer.add_scalar("hud/showdown_pct", vs_tag.showdown_pct, episode)
         self.writer.add_scalar("hud/avg_bet_size", vs_tag.avg_bet_size, episode)
+        self.writer.add_scalar("hud/preflop_allin_pct", vs_tag.preflop_allin_pct, episode)
 
         # Per-street action distributions (vs TAG)
         self.writer.add_scalar("street/flop_fold", vs_tag.flop_fold_pct, episode)
@@ -1167,6 +1170,9 @@ class NFSPTrainer:
         # C-bet tracking
         cbet_opportunities = 0
         cbet_taken = 0
+        # Preflop all-in tracking
+        preflop_allin_count = 0
+        preflop_action_count = 0
 
         for hand_idx in range(num_hands):
             hero_seat = hand_idx % 2
@@ -1214,6 +1220,11 @@ class NFSPTrainer:
                     if phase == 0 and action >= 2:
                         hero_pfr = True
                         hero_raised_preflop = True
+                    # Preflop all-in tracking
+                    if phase == 0:
+                        preflop_action_count += 1
+                        if action == 8:
+                            preflop_allin_count += 1
 
                     # Action categorization
                     if action == 0:
@@ -1370,6 +1381,7 @@ class NFSPTrainer:
             fold_to_flop_bet=_ftb_pct(fold_to_bet["flop"]),
             fold_to_turn_bet=_ftb_pct(fold_to_bet["turn"]),
             fold_to_river_bet=_ftb_pct(fold_to_bet["river"]),
+            preflop_allin_pct=preflop_allin_count / max(preflop_action_count, 1) * 100,
         )
 
     def _eval_multiway(self, opponent: str, num_hands: int,
