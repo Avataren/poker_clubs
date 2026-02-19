@@ -425,8 +425,25 @@ pub(super) async fn handle_client_message(
                 if let Some(table) = tables.get_mut(table_id) {
                     match table.handle_action(user_id, action) {
                         Ok(_) => {
+                            // Check for completed hand log to persist
+                            let hand_log = if !table.hand_log.active && !table.hand_log.players.is_empty() {
+                                let log = table.hand_log.clone();
+                                table.hand_log.clear();
+                                Some(log)
+                            } else {
+                                None
+                            };
                             drop(tables); // Release lock before notifying
-                                          // Notify all players at table
+                            // Persist hand history async
+                            if let Some(log) = hand_log {
+                                let pool = game_server.pool.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = crate::db::hand_history::save_hand_history(&pool, &log).await {
+                                        tracing::warn!("Failed to save hand history: {}", e);
+                                    }
+                                });
+                            }
+                            // Notify all players at table
                             game_server.notify_table_update(table_id).await;
                             // Return success - table state will be sent via broadcast
                             ServerMessage::Connected
@@ -555,6 +572,29 @@ pub(super) async fn handle_client_message(
                     }
                 }
                 Err(e) => ServerMessage::Error { message: e },
+            }
+        }
+
+        ClientMessage::GetHandHistory {
+            table_id,
+            limit,
+            offset,
+        } => {
+            let limit = limit.unwrap_or(20).min(50);
+            let offset = offset.unwrap_or(0);
+            match crate::db::hand_history::get_hand_history(
+                &game_server.pool,
+                &table_id,
+                user_id,
+                limit,
+                offset,
+            )
+            .await
+            {
+                Ok(hands) => ServerMessage::HandHistory { hands },
+                Err(e) => ServerMessage::Error {
+                    message: format!("Failed to load hand history: {}", e),
+                },
             }
         }
     }

@@ -160,14 +160,30 @@ impl GameServer {
     pub async fn check_all_tables_auto_advance(&self) {
         let mut tables = self.tables.write().await;
         let mut tables_to_notify = Vec::new();
+        let mut hands_to_save = Vec::new();
 
         for (table_id, table) in tables.iter_mut() {
             if table.check_auto_advance() {
                 tables_to_notify.push(table_id.clone());
             }
+            // Check for completed hand logs to persist
+            if !table.hand_log.active && !table.hand_log.players.is_empty() {
+                hands_to_save.push(table.hand_log.clone());
+                table.hand_log.clear();
+            }
         }
 
         drop(tables);
+
+        // Persist hand histories async (non-blocking)
+        for log in hands_to_save {
+            let pool = self.pool.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::db::hand_history::save_hand_history(&pool, &log).await {
+                    tracing::warn!("Failed to save hand history: {}", e);
+                }
+            });
+        }
 
         // Notify after releasing the lock
         for table_id in tables_to_notify {

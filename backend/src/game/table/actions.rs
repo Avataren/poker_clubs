@@ -235,6 +235,25 @@ impl PokerTable {
         // Mark player as having acted
         self.players[self.current_player].has_acted_this_round = true;
 
+        // Record action in hand history log
+        {
+            let (action_str, amount) = match &action {
+                PlayerAction::Fold => ("fold", 0i64),
+                PlayerAction::Check => ("check", 0),
+                PlayerAction::Call => ("call", self.players[self.current_player].current_bet),
+                PlayerAction::Raise(amt) => ("raise", *amt),
+                PlayerAction::AllIn => ("allin", self.players[self.current_player].current_bet),
+                PlayerAction::ShowCards(_) => ("show", 0),
+            };
+            let seat = self.players[self.current_player].seat;
+            let name = self.players[self.current_player].username.clone();
+            let phase = self.phase.clone();
+            self.hand_log.record_action(&phase, seat, &name, action_str, amount);
+            if matches!(action, PlayerAction::Fold) {
+                self.hand_log.mark_folded(seat);
+            }
+        }
+
         tracing::info!(
             "Player {} acted, advancing. Current player before: {}",
             self.players[self.current_player].username,
@@ -301,6 +320,9 @@ impl PokerTable {
                 player.shown_cards[idx] = true;
             }
         }
+
+        // Record in hand history that player showed cards
+        self.hand_log.mark_showed_cards(player.seat);
 
         Ok(())
     }

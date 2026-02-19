@@ -85,6 +85,15 @@ impl PokerTable {
             ));
             // Pot reset happens in start_new_hand(), not here
             self.try_transition(GamePhase::Showdown);
+            // Finalize hand history for fold-win
+            let player_results: Vec<(usize, i64, i64, bool, Option<String>)> = self
+                .players
+                .iter()
+                .filter(|p| p.state != PlayerState::SittingOut && p.state != PlayerState::Eliminated)
+                .map(|p| (p.seat, p.stack, p.pot_won, p.is_winner, p.winning_hand.clone()))
+                .collect();
+            self.hand_log
+                .finalize(total, &self.community_cards, &player_results);
             tracing::info!(
                 "Hand over: {} wins ${} (all others folded)",
                 self.players[winner_idx].username,
@@ -99,6 +108,7 @@ impl PokerTable {
                 self.deck.deal();
                 // Deal flop
                 self.community_cards = self.deck.deal_multiple(3);
+                self.hand_log.set_community_cards(&self.community_cards);
                 self.try_transition(GamePhase::Flop);
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
@@ -111,6 +121,7 @@ impl PokerTable {
                 } else {
                     tracing::error!("Deck exhausted when dealing turn card");
                 }
+                self.hand_log.set_community_cards(&self.community_cards);
                 self.try_transition(GamePhase::Turn);
                 self.current_player = self.next_active_player(self.dealer_seat);
             }
@@ -123,6 +134,7 @@ impl PokerTable {
                 } else {
                     tracing::error!("Deck exhausted when dealing river card");
                 }
+                self.hand_log.set_community_cards(&self.community_cards);
                 self.try_transition(GamePhase::River);
                 self.current_player = self.next_active_player(self.dealer_seat);
             }

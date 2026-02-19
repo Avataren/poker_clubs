@@ -63,6 +63,31 @@ impl PokerTable {
         // Deal hole cards
         self.deal_hole_cards();
 
+        // Begin hand history recording
+        self.hand_counter += 1;
+        let player_info: Vec<(usize, String, String, i64)> = self
+            .players
+            .iter()
+            .filter(|p| p.can_act())
+            .map(|p| (p.seat, p.user_id.clone(), p.username.clone(), p.stack + p.current_bet))
+            .collect();
+        self.hand_log.begin_hand(
+            &self.table_id,
+            self.tournament_id.as_deref(),
+            self.hand_counter,
+            self.small_blind,
+            self.big_blind,
+            self.ante,
+            self.dealer_seat,
+            &player_info,
+        );
+        // Record hole cards for all players
+        for p in &self.players {
+            if !p.hole_cards.is_empty() {
+                self.hand_log.set_hole_cards(p.seat, p.hole_cards.clone());
+            }
+        }
+
         // Set phase - current_player was already set by post_blinds
         self.try_transition(GamePhase::PreFlop);
         self.last_phase_change_time = Some(current_timestamp_ms());

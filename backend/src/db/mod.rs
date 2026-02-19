@@ -1,3 +1,4 @@
+pub mod hand_history;
 pub mod models;
 
 use sqlx::{
@@ -109,6 +110,11 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), sqlx::Error> {
             10,
             "add_user_settings",
             include_str!("migrations/010_add_user_settings.sql"),
+        ),
+        (
+            11,
+            "hand_history",
+            include_str!("migrations/011_hand_history.sql"),
         ),
     ];
 

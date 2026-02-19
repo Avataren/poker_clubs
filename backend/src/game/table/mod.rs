@@ -1,6 +1,7 @@
 mod actions;
 mod blinds;
 mod dealing;
+pub mod hand_history;
 mod phase;
 mod player_mgmt;
 mod showdown;
@@ -120,6 +121,12 @@ pub struct PokerTable {
     #[serde(skip, default)]
     pub(crate) hand_action_history: Vec<[f32; 11]>,
     pub won_without_showdown: bool,
+    /// In-memory hand history log, flushed to DB at hand end.
+    #[serde(skip, default)]
+    pub(crate) hand_log: hand_history::HandHistoryLog,
+    /// Running hand counter for this table session.
+    #[serde(skip, default)]
+    pub(crate) hand_counter: i64,
     #[serde(skip, default = "default_variant")]
     variant: Box<dyn PokerVariant>,
     #[serde(skip, default = "default_format")]
@@ -164,6 +171,8 @@ impl Clone for PokerTable {
             pending_eliminations: self.pending_eliminations.clone(),
             hand_action_history: self.hand_action_history.clone(),
             won_without_showdown: self.won_without_showdown,
+            hand_log: self.hand_log.clone(),
+            hand_counter: self.hand_counter,
             variant: self.variant.clone_box(),
             format: self.format.clone_box(),
         }
@@ -261,6 +270,8 @@ impl PokerTable {
             pending_eliminations: Vec::new(),
             hand_action_history: Vec::new(),
             won_without_showdown: false,
+            hand_log: hand_history::HandHistoryLog::new(),
+            hand_counter: 0,
             variant,
             format,
         }

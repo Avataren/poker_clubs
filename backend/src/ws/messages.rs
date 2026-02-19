@@ -47,6 +47,13 @@ pub enum ClientMessage {
         table_id: String,
         bot_user_id: String,
     },
+
+    // Hand history
+    GetHandHistory {
+        table_id: String,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +126,11 @@ pub enum ServerMessage {
         level_time_remaining_secs: i64, // Server-calculated remaining time
         next_small_blind: Option<i64>,
         next_big_blind: Option<i64>,
+    },
+
+    // Hand history
+    HandHistory {
+        hands: Vec<crate::db::hand_history::HandHistorySummary>,
     },
 }
 

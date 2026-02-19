@@ -180,5 +180,23 @@ impl PokerTable {
             if is_hilo { " (Hi-Lo)" } else { "" },
             winner_names.join(", ")
         );
+
+        // Finalize hand history log
+        let player_results: Vec<(usize, i64, i64, bool, Option<String>)> = self
+            .players
+            .iter()
+            .filter(|p| p.state != PlayerState::SittingOut && p.state != PlayerState::Eliminated)
+            .map(|p| {
+                (
+                    p.seat,
+                    p.stack,
+                    p.pot_won,
+                    p.is_winner,
+                    p.winning_hand.clone(),
+                )
+            })
+            .collect();
+        self.hand_log
+            .finalize(self.pot.total(), &self.community_cards, &player_results);
     }
 }
