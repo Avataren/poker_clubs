@@ -127,6 +127,7 @@ class SelfPlayWorker:
         # Reusable scratch buffers for the hot self-play loop.
         static_dim = len(_STATIC_COLS)
         self.env_idx = np.arange(self.num_envs, dtype=np.intp)
+        self.player_idx = np.arange(self.num_players, dtype=np.intp)
         self.hist_offsets = np.arange(self.max_hist, dtype=np.int64)
         self.static_obs = np.empty((self.num_envs, static_dim), dtype=np.float32)
         self.hist_dim = config.history_input_dim
@@ -150,13 +151,15 @@ class SelfPlayWorker:
         self.pending_action = np.zeros((config.num_envs, config.num_players), dtype=np.int64)
         self.pending_valid = np.zeros((config.num_envs, config.num_players), dtype=bool)
         self.pending_is_br = np.zeros((config.num_envs, config.num_players), dtype=bool)
-        # Pre-allocated zero buffers for terminal BR flushes (avoids per-flush alloc)
-        self._term_zero_obs = np.zeros((config.num_envs, static_dim), dtype=np.float32)
+        # Pre-allocated zero buffers for terminal BR flushes (avoids per-flush alloc).
+        # Size = num_envs * num_players: worst case every env finishes and all players flush.
+        _term_max = config.num_envs * config.num_players
+        self._term_zero_obs = np.zeros((_term_max, static_dim), dtype=np.float32)
         self._term_zero_ah = np.zeros(
-            (config.num_envs, config.max_history_len, config.history_input_dim), dtype=np.float32
+            (_term_max, config.max_history_len, config.history_input_dim), dtype=np.float32
         )
-        self._term_zero_ah_len = np.zeros(config.num_envs, dtype=np.int64)
-        self._term_zero_mask = np.zeros((config.num_envs, config.num_actions), dtype=bool)
+        self._term_zero_ah_len = np.zeros(_term_max, dtype=np.int64)
+        self._term_zero_mask = np.zeros((_term_max, config.num_actions), dtype=bool)
 
         # Diverse opponent tracking: which seats use fixed exploit strategies
         self.exploit_prob = config.exploit_opponent_prob
@@ -228,16 +231,17 @@ class SelfPlayWorker:
         out[valid] = gathered[valid]
 
     def _append_actions_all(self, action_records: np.ndarray):
-        """Append action records for all envs in vectorized O(players * envs) time."""
+        """Append action records for all envs in a single vectorized operation."""
         n = len(action_records)
-        max_hist = self.max_hist
-        num_players = self.num_players
         env_idx = self.env_idx[:n]
-        for p in range(num_players):
-            pos = self.ah_pos[env_idx, p]
-            self.ah_arrays[env_idx, p, pos] = action_records
-            self.ah_lens[env_idx, p] = np.minimum(self.ah_lens[env_idx, p] + 1, max_hist)
-            self.ah_pos[env_idx, p] = (pos + 1) % max_hist
+        all_pos = self.ah_pos[env_idx]  # (n, num_players)
+        # Write the same record to all players for each env.
+        # ah_arrays[env, p, pos[env,p]] = action_records[env]
+        self.ah_arrays[env_idx[:, None], self.player_idx[None, :], all_pos] = (
+            action_records[:, None, :]
+        )
+        self.ah_lens[env_idx] = np.minimum(self.ah_lens[env_idx] + 1, self.max_hist)
+        self.ah_pos[env_idx] = (all_pos + 1) % self.max_hist
 
     def _reset_history(self, env: int):
         """Reset action histories for an env."""
@@ -360,7 +364,17 @@ class SelfPlayWorker:
         if self._historical_net is None:
             self._historical_net = AverageStrategyNet(self.config).to(self.device)
             self._historical_net.eval()
-        self._historical_net.load_state_dict(sd)
+        try:
+            self._historical_net.load_state_dict(sd)
+        except RuntimeError:
+            # Architecture mismatch (e.g. obs size changed) — purge stale pool.
+            import warnings
+            warnings.warn(
+                "Historical checkpoint pool has incompatible architecture; "
+                "purging all stale entries.",
+                stacklevel=2,
+            )
+            self._checkpoint_pool.purge_incompatible(sd)
 
     def _exploit_action(self, exploit_type: int, mask: np.ndarray, obs: np.ndarray | None = None) -> int:
         """Pick action for a fixed exploit strategy.
@@ -946,30 +960,32 @@ class SelfPlayWorker:
             done_indices = np.where(dones_arr)[0]
             if len(done_indices) > 0:
                 completed_episodes += len(done_indices)
-                for p in range(num_players):
-                    # Skip exploit bot seats for buffer pushes
-                    is_exploit_p = self.exploit_type[done_indices, p] > 0
-                    has_p = (
-                        self.pending_valid[done_indices, p]
-                        & self.pending_is_br[done_indices, p]
-                        & ~is_exploit_p
+                # Vectorized terminal BR flush: gather all (done_env, player)
+                # pairs that need pushing in one argwhere, then single push_batch.
+                has_all = (
+                    self.pending_valid[done_indices]
+                    & self.pending_is_br[done_indices]
+                    & (self.exploit_type[done_indices] == 0)
+                )  # (d, num_players)
+                pairs = np.argwhere(has_all)  # (k, 2): col0=local idx, col1=player
+                if len(pairs) > 0:
+                    di = pairs[:, 0]
+                    pi = pairs[:, 1]
+                    sel_env = done_indices[di]
+                    n_sel = len(pairs)
+                    self.br_buffer.push_batch(
+                        obs=self.pending_obs[sel_env, pi],
+                        action_history=self.pending_ah[sel_env, pi],
+                        history_length=self.pending_ah_len[sel_env, pi],
+                        actions=self.pending_action[sel_env, pi],
+                        rewards=rewards_batch[sel_env, pi],
+                        next_obs=self._term_zero_obs[:n_sel],
+                        next_action_history=self._term_zero_ah[:n_sel],
+                        next_history_length=self._term_zero_ah_len[:n_sel],
+                        next_legal_mask=self._term_zero_mask[:n_sel],
+                        dones=np.ones(n_sel, dtype=np.float32),
+                        legal_mask=self.pending_mask[sel_env, pi],
                     )
-                    if has_p.any():
-                        sel = done_indices[has_p]
-                        n_sel = len(sel)
-                        self.br_buffer.push_batch(
-                            obs=self.pending_obs[sel, p],
-                            action_history=self.pending_ah[sel, p],
-                            history_length=self.pending_ah_len[sel, p],
-                            actions=self.pending_action[sel, p],
-                            rewards=rewards_batch[sel, p],
-                            next_obs=self._term_zero_obs[:n_sel],
-                            next_action_history=self._term_zero_ah[:n_sel],
-                            next_history_length=self._term_zero_ah_len[:n_sel],
-                            next_legal_mask=self._term_zero_mask[:n_sel],
-                            dones=np.ones(n_sel, dtype=np.float32),
-                            legal_mask=self.pending_mask[sel, p],
-                        )
                 # Clear pending for done envs
                 self.pending_valid[done_indices] = False
 
