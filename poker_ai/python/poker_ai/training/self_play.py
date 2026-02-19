@@ -501,8 +501,8 @@ class SelfPlayWorker:
         Profiles are sampled from 6 archetypes + uniform random.
         """
         profiles = np.empty((n, 6), dtype=np.float32)
-        # Pick archetype for each: 0-5 = named, 6 = uniform random
-        archetypes = np.random.randint(0, 7, size=n)
+        # Pick archetype for each: 0-6 = named, 7 = uniform random
+        archetypes = np.random.randint(0, 8, size=n)
 
         for i in range(n):
             a = archetypes[i]
@@ -548,6 +548,13 @@ class SelfPlayWorker:
                 ftb = np.random.uniform(0.55, 0.80)
                 cbet = np.random.uniform(0.50, 0.75)
                 wtsd = np.random.uniform(0.25, 0.40)
+            elif a == 6:  # Calling station (punishes preflop shoves)
+                vpip = np.random.uniform(0.55, 0.85)
+                pfr_r = np.random.uniform(0.05, 0.20)
+                agg = np.random.uniform(0.05, 0.20)
+                ftb = np.random.uniform(0.05, 0.20)
+                cbet = np.random.uniform(0.15, 0.35)
+                wtsd = np.random.uniform(0.45, 0.65)
             else:         # Uniform random
                 vpip = np.random.uniform(0.10, 0.80)
                 pfr_r = np.random.uniform(0.10, 0.90)
