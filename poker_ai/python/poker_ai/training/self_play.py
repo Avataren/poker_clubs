@@ -347,11 +347,14 @@ class SelfPlayWorker:
 
     @staticmethod
     def _tag_action(obs: np.ndarray, mask: np.ndarray) -> int:
-        """Tight-aggressive action based on hand strength and pot odds."""
+        """Tight-aggressive action based on hand strength and pot odds.
+
+        obs is static_obs (582-dim): cards [0,364) + game_state [364,530) + hand_strength [530,582).
+        """
         phase = int(np.argmax(obs[364:370]))
         to_call_ratio = float(obs[376])
-        hand_rank = float(obs[HAND_STRENGTH_START])
-        preflop_strength = float(obs[HAND_STRENGTH_START + 1])
+        hand_rank = float(obs[530])        # hand_strength[0] in static layout
+        preflop_strength = float(obs[531])  # hand_strength[1] in static layout
 
         strength = preflop_strength if phase == 0 else max(hand_rank, 0.6 * preflop_strength)
 
