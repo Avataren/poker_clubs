@@ -296,9 +296,9 @@ impl PlayerStats {
         }
     }
 
-    /// Sample size indicator (saturates at 100 hands).
+    /// Sample size indicator (log-scale, useful up to ~10 000 hands).
     pub fn sample_size(&self) -> f32 {
-        (self.hands_played as f32 / 100.0).min(1.0)
+        (self.hands_played as f32 + 1.0).log2() / 10_001f32.log2()
     }
 
     /// Encode as 15 floats for observation vector.

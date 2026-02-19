@@ -201,7 +201,7 @@ impl SeatStats {
         }
     }
     fn encode(&self) -> [f32; STATS_PER_OPPONENT] {
-        let sample_size = (self.hands_played as f32 / 100.0).min(1.0);
+        let sample_size = (self.hands_played as f32 + 1.0).log2() / 10_001f32.log2();
         [
             self.vpip as f32, self.pfr as f32, self.aggression as f32,
             self.fold_to_bet as f32, sample_size,
@@ -1584,16 +1584,17 @@ mod tests {
         assert!((obs0[OPP_STATS_OFFSET + 4] - 0.0).abs() < 0.01,
             "sample_size should start at 0.0 (new player)");
 
-        // Play 10 hands — sample_size should be 10/100 = 0.1
+        // Play 10 hands — sample_size should be log2(11)/log2(10001) ≈ 0.26
         for _ in 0..10 {
             simulate_preflop_raise_call(&mut table, &mut tracker);
         }
 
         let obs10 = build_full_obs(&table, 0, &mut tracker);
         let ss_10 = obs10[OPP_STATS_OFFSET + 4];
+        let expected = (11f32).log2() / (10_001f32).log2();
         assert!(
-            (ss_10 - 0.1).abs() < 0.02,
-            "sample_size after 10 hands should be ~0.1, got {ss_10}"
+            (ss_10 - expected).abs() < 0.02,
+            "sample_size after 10 hands should be ~{expected:.3}, got {ss_10}"
         );
     }
 
