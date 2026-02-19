@@ -29,10 +29,6 @@ cp "$ENGINE_DIR/target/release/libpoker_ai_engine.so" "$SO_NAME"
 # Verify the new .so has expected methods
 python -c "
 from poker_ai.engine import BatchPokerEnv
-mod = BatchPokerEnv.__module__
-import importlib, inspect
-spec = importlib.util.find_spec('poker_ai.engine')
-print(f'Loaded from: {spec.origin if spec else \"unknown\"}')
 assert hasattr(BatchPokerEnv, 'reset_player_stats'), \
     'Engine .so is stale — reset_player_stats missing'
 print('Engine OK')
