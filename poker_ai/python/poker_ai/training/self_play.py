@@ -26,6 +26,15 @@ _STATIC_COLS = np.concatenate([
     np.arange(HAND_STRENGTH_START, HAND_STRENGTH_END),
 ])
 
+# Offsets within the 582-dim static_obs (after extraction via _STATIC_COLS).
+# Cards [0, 364) are unchanged; game_state keeps its original start;
+# hand_strength is rebased from [658,710) → [cards+game_state, ...).
+_S_PHASE_START = GAME_STATE_START                                     # 364
+_S_PHASE_END = _S_PHASE_START + 6                                     # 370
+_S_TO_CALL = GAME_STATE_START + 12                                    # 376
+_S_HAND_RANK = COMMUNITY_END + (GAME_STATE_END - GAME_STATE_START)    # 530
+_S_PREFLOP_STR = _S_HAND_RANK + 1                                    # 531
+
 
 def extract_static_features_batch(obs_batch: np.ndarray) -> np.ndarray:
     """Vectorized: extract static features from (n, 710) -> (n, 582)."""
@@ -370,10 +379,10 @@ class SelfPlayWorker:
 
         obs is static_obs (582-dim): cards [0,364) + game_state [364,530) + hand_strength [530,582).
         """
-        phase = int(np.argmax(obs[364:370]))
-        to_call_ratio = float(obs[376])
-        hand_rank = float(obs[530])        # hand_strength[0] in static layout
-        preflop_strength = float(obs[531])  # hand_strength[1] in static layout
+        phase = int(np.argmax(obs[_S_PHASE_START:_S_PHASE_END]))
+        to_call_ratio = float(obs[_S_TO_CALL])
+        hand_rank = float(obs[_S_HAND_RANK])
+        preflop_strength = float(obs[_S_PREFLOP_STR])
 
         strength = preflop_strength if phase == 0 else max(hand_rank, 0.6 * preflop_strength)
 
@@ -415,10 +424,10 @@ class SelfPlayWorker:
         Returns: (k,) action indices.
         """
         k = obs.shape[0]
-        phase = np.argmax(obs[:, 364:370], axis=1)  # (k,)
-        to_call = obs[:, 376]                         # (k,)
-        hand_rank = obs[:, 530]                        # (k,)
-        preflop_str = obs[:, 531]                      # (k,)
+        phase = np.argmax(obs[:, _S_PHASE_START:_S_PHASE_END], axis=1)  # (k,)
+        to_call = obs[:, _S_TO_CALL]                         # (k,)
+        hand_rank = obs[:, _S_HAND_RANK]                        # (k,)
+        preflop_str = obs[:, _S_PREFLOP_STR]                      # (k,)
 
         is_preflop = phase == 0
         strength = np.where(is_preflop, preflop_str, np.maximum(hand_rank, 0.6 * preflop_str))
@@ -559,10 +568,10 @@ class SelfPlayWorker:
         Returns: (actions (k,), new_was_aggressor (k,))
         """
         k = obs.shape[0]
-        phase = np.argmax(obs[:, 364:370], axis=1)  # (k,)
-        to_call = obs[:, 376]                         # (k,)
-        hand_rank = obs[:, 530]
-        preflop_str = obs[:, 531]
+        phase = np.argmax(obs[:, _S_PHASE_START:_S_PHASE_END], axis=1)  # (k,)
+        to_call = obs[:, _S_TO_CALL]                         # (k,)
+        hand_rank = obs[:, _S_HAND_RANK]
+        preflop_str = obs[:, _S_PREFLOP_STR]
 
         is_preflop = phase == 0
         strength = np.where(is_preflop, preflop_str, np.maximum(hand_rank, 0.6 * preflop_str))
