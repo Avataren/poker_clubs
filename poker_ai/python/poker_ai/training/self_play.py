@@ -295,18 +295,17 @@ class SelfPlayWorker:
 
                 if script_mask.any():
                     # Weight TAG (5) higher: ~50% TAG, ~17% each for types 1-3
-                    scripted = np.random.choice(
-                        [1, 2, 3, 5, 5, 5], size=(n, self.num_players)
-                    )
+                    # Map: 0→1, 1→2, 2→3, 3→5, 4→5, 5→5
+                    _MAP = np.array([1, 2, 3, 5, 5, 5], dtype=np.int8)
+                    scripted = _MAP[np.random.randint(0, 6, size=(n, self.num_players))]
                     types[script_mask] = scripted[script_mask]
                 if hist_mask.any():
                     types[hist_mask] = 4
                     self._load_historical_opponent()
             else:
                 # No pool yet — all scripted
-                new_types = np.random.choice(
-                    [1, 2, 3, 5, 5, 5], size=(n, self.num_players)
-                )
+                _MAP = np.array([1, 2, 3, 5, 5, 5], dtype=np.int8)
+                new_types = _MAP[np.random.randint(0, 6, size=(n, self.num_players))]
                 types[new_exploit] = new_types[new_exploit]
 
             # Duration: 50-200 hands (uniform), matching EMA effective window
@@ -387,6 +386,75 @@ class SelfPlayWorker:
                 return 1
         legal = np.where(mask)[0]
         return int(legal[0]) if len(legal) > 0 else 1
+
+    @staticmethod
+    def _tag_actions_vectorized(obs: np.ndarray, masks: np.ndarray) -> np.ndarray:
+        """Vectorized TAG actions for a batch of seats.
+
+        obs: (k, 582) static_obs, masks: (k, 9) legal action masks.
+        Returns: (k,) action indices.
+        """
+        k = obs.shape[0]
+        phase = np.argmax(obs[:, 364:370], axis=1)  # (k,)
+        to_call = obs[:, 376]                         # (k,)
+        hand_rank = obs[:, 530]                        # (k,)
+        preflop_str = obs[:, 531]                      # (k,)
+
+        is_preflop = phase == 0
+        strength = np.where(is_preflop, preflop_str, np.maximum(hand_rank, 0.6 * preflop_str))
+
+        actions = np.ones(k, dtype=np.intp)  # default: call
+
+        # Tier 1: strength >= 0.72 — raise big
+        t1 = strength >= 0.72
+        if t1.any():
+            m = masks[t1]
+            a = np.full(t1.sum(), 1, dtype=np.intp)
+            for act in (6, 5, 4, 3, 2, 7, 1):
+                need = a == 1
+                a[need & m[:, act]] = act
+            actions[t1] = a
+
+        # Tier 2: 0.58-0.72 — raise cheap or call
+        t2 = (strength >= 0.58) & ~t1
+        if t2.any():
+            m = masks[t2]
+            tc = to_call[t2]
+            a = np.ones(t2.sum(), dtype=np.intp)
+            cheap = tc <= 0.20
+            for act in (4, 3, 2, 1):
+                need = (a == 1) & cheap
+                a[need & m[:, act]] = act
+            # not cheap or no raise found: call if possible, else fold
+            still_default = a == 1
+            a[still_default & m[:, 1]] = 1
+            a[still_default & ~m[:, 1] & m[:, 0]] = 0
+            actions[t2] = a
+
+        # Tier 3: 0.48-0.58 — call only if very cheap
+        t3 = (strength >= 0.48) & ~t1 & ~t2
+        if t3.any():
+            m = masks[t3]
+            tc = to_call[t3]
+            a = np.where(m[:, 0], 0, 1)  # default fold if possible
+            can_cheap_call = (tc <= 0.08) & m[:, 1]
+            a[can_cheap_call] = 1
+            # if can't fold, call
+            a[~m[:, 0] & m[:, 1]] = 1
+            actions[t3] = a
+
+        # Tier 4: < 0.48 — fold unless near-free
+        t4 = ~t1 & ~t2 & ~t3
+        if t4.any():
+            m = masks[t4]
+            tc = to_call[t4]
+            a = np.where(m[:, 0], 0, 1)  # default fold
+            can_cheap_call = (tc <= 0.02) & m[:, 1]
+            a[can_cheap_call] = 1
+            a[~m[:, 0] & m[:, 1]] = 1
+            actions[t4] = a
+
+        return actions
 
     def run_episodes(self, epsilon: float, eta: float | None = None) -> int:
         """Run continuous self-play until at least num_envs episodes complete.
@@ -472,10 +540,47 @@ class SelfPlayWorker:
                     actions_gpu[scripted_idx] = 1
                 actions_np[:] = actions_gpu.cpu().numpy()
 
-            # Override actions for scripted exploit bot seats
-            for ei in scripted_idx:
-                etype = int(self.exploit_type[ei, players[ei]])
-                actions_np[ei] = self._exploit_action(etype, self.pre_mask[ei], self.static_obs[ei])
+            # Override actions for scripted exploit bot seats (vectorized)
+            if len(scripted_idx) > 0:
+                s_types = self.exploit_type[scripted_idx, players[scripted_idx]]
+                s_masks = self.pre_mask[scripted_idx]  # (k, 9)
+                s_actions = np.ones(len(scripted_idx), dtype=np.intp)  # default: call
+
+                # Type 1: always-raise — biggest raise available
+                t1 = s_types == 1
+                if t1.any():
+                    m1 = s_masks[t1]
+                    a1 = np.ones(t1.sum(), dtype=np.intp)  # fallback call
+                    for a in (7, 6, 5, 4, 3, 2, 8):
+                        need = a1 == 1  # still need assignment (haven't found raise)
+                        hits = need & m1[:, a]
+                        a1[hits] = a
+                    # fold if can't call
+                    no_call = (a1 == 1) & ~m1[:, 1] & m1[:, 0]
+                    a1[no_call] = 0
+                    s_actions[t1] = a1
+
+                # Type 2: calling-station — always call
+                t2 = s_types == 2
+                if t2.any():
+                    m2 = s_masks[t2]
+                    a2 = np.where(m2[:, 1], 1, 0)
+                    s_actions[t2] = a2
+
+                # Type 3: tight-fold — fold if facing bet, else check
+                t3 = s_types == 3
+                if t3.any():
+                    m3 = s_masks[t3]
+                    s_actions[t3] = np.where(m3[:, 0], 0, 1)
+
+                # Type 5: TAG — hand-strength based
+                t5 = s_types == 5
+                if t5.any():
+                    s_actions[t5] = self._tag_actions_vectorized(
+                        self.static_obs[scripted_idx[t5]], s_masks[t5]
+                    )
+
+                actions_np[scripted_idx] = s_actions
 
             pre_players = self.pre_players  # safe copy from above
 
