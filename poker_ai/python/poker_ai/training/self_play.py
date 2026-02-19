@@ -341,6 +341,14 @@ class SelfPlayWorker:
                     self.param_profiles[env_indices[ei], si] = profiles[idx]
                 self.param_was_aggressor[env_indices] &= ~new_param  # reset
 
+            # Reset HUD stats for all newly assigned bots so the network
+            # trains on the full sample_size=0→1.0 ramp-up trajectory.
+            new_coords = np.argwhere(new_exploit)
+            if len(new_coords) > 0:
+                reset_envs = env_indices[new_coords[:, 0]].tolist()
+                reset_seats = new_coords[:, 1].tolist()
+                self.env.reset_player_stats(reset_envs, reset_seats)
+
         self.exploit_type[env_indices] = types
         self.exploit_remaining[env_indices] = remaining
 

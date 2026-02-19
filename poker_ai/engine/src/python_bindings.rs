@@ -5,7 +5,7 @@ use rand_chacha::ChaCha20Rng;
 use std::mem::size_of_val;
 use std::slice;
 
-use crate::game_state::SimTable;
+use crate::game_state::{PlayerStats, SimTable};
 
 /// Observation vector size: 364 (cards) + 86 (game state) + 128 (history placeholder) + 52 (hand strength)
 const OBS_SIZE: usize = 710;
@@ -406,6 +406,17 @@ impl BatchPokerEnv {
             0
         } else {
             self.envs[0].0.num_players
+        }
+    }
+
+    /// Reset HUD stats for specific seats in specific environments.
+    /// Simulates a new unknown player arriving at the table.
+    fn reset_player_stats(&mut self, env_indices: Vec<usize>, seat_indices: Vec<usize>) {
+        for (&env_idx, &seat) in env_indices.iter().zip(seat_indices.iter()) {
+            let (table, _) = &mut self.envs[env_idx];
+            if seat < table.player_stats.len() {
+                table.player_stats[seat] = PlayerStats::new();
+            }
         }
     }
 }
