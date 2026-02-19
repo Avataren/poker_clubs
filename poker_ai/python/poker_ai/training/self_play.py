@@ -152,11 +152,21 @@ class SelfPlayWorker:
         # Diverse opponent tracking: which seats use fixed exploit strategies
         self.exploit_prob = config.exploit_opponent_prob
         # Per-env per-seat: 0=learning, 1=always-raise, 2=calling-station,
-        # 3=tight-fold, 4=historical checkpoint opponent
+        # 3=tight-fold, 4=historical checkpoint opponent,
+        # 5=TAG, 6=parametric (randomized profile)
         self.exploit_type = np.zeros((config.num_envs, config.num_players), dtype=np.int8)
         # Remaining hands before exploit bot reverts to learning agent.
         # Exploit bots persist for 50-200 hands so EMA stats can reflect their behavior.
         self.exploit_remaining = np.zeros((config.num_envs, config.num_players), dtype=np.int32)
+        # Parametric bot profiles: 6 floats per env/seat
+        # [vpip, pfr_ratio, aggression, fold_to_bet, cbet_freq, wtsd]
+        self.param_profiles = np.zeros(
+            (config.num_envs, config.num_players, 6), dtype=np.float32
+        )
+        # Track whether parametric bot was preflop aggressor (for c-bet logic)
+        self.param_was_aggressor = np.zeros(
+            (config.num_envs, config.num_players), dtype=bool
+        )
         self._initialized = False
 
     def _get_history(self, env: int, player: int) -> tuple[np.ndarray, int]:
@@ -253,7 +263,8 @@ class SelfPlayWorker:
 
         Types: 1=always-raise, 2=calling-station, 3=tight-fold,
                4=historical checkpoint opponent (Pluribus-inspired),
-               5=TAG (tight-aggressive, hand-strength based).
+               5=TAG (tight-aggressive, hand-strength based),
+               6=parametric (randomized coherent profile).
         When the checkpoint pool has entries, ~50% of new stints use type 4.
         """
         n = len(env_indices)
@@ -288,29 +299,38 @@ class SelfPlayWorker:
                 self._checkpoint_pool is not None and len(self._checkpoint_pool) > 1
             )
             if pool_available:
-                # 50% historical, 50% scripted (types 1-3, 5)
+                # 50% historical, 50% scripted (types 1-3, 5, 6)
                 type_rolls = np.random.random(new_exploit.shape)
                 hist_mask = new_exploit & (type_rolls < 0.5)
                 script_mask = new_exploit & ~hist_mask
 
                 if script_mask.any():
-                    # Weight TAG (5) higher: ~50% TAG, ~17% each for types 1-3
-                    # Map: 0→1, 1→2, 2→3, 3→5, 4→5, 5→5
-                    _MAP = np.array([1, 2, 3, 5, 5, 5], dtype=np.int8)
-                    scripted = _MAP[np.random.randint(0, 6, size=(n, self.num_players))]
+                    # Weight: ~30% parametric(6), ~30% TAG(5), ~10% each types 1-3
+                    # Map: 0→1, 1→2, 2→3, 3→5, 4→5, 5→5, 6→6, 7→6, 8→6, 9→6
+                    _MAP = np.array([1, 2, 3, 5, 5, 5, 6, 6, 6, 6], dtype=np.int8)
+                    scripted = _MAP[np.random.randint(0, 10, size=(n, self.num_players))]
                     types[script_mask] = scripted[script_mask]
                 if hist_mask.any():
                     types[hist_mask] = 4
                     self._load_historical_opponent()
             else:
                 # No pool yet — all scripted
-                _MAP = np.array([1, 2, 3, 5, 5, 5], dtype=np.int8)
-                new_types = _MAP[np.random.randint(0, 6, size=(n, self.num_players))]
+                _MAP = np.array([1, 2, 3, 5, 5, 5, 6, 6, 6, 6], dtype=np.int8)
+                new_types = _MAP[np.random.randint(0, 10, size=(n, self.num_players))]
                 types[new_exploit] = new_types[new_exploit]
 
             # Duration: 50-200 hands (uniform), matching EMA effective window
             new_duration = np.random.randint(50, 201, size=(n, self.num_players))
             remaining[new_exploit] = new_duration[new_exploit]
+
+            # Sample profiles for newly assigned parametric bots (type 6)
+            new_param = new_exploit & (types == 6)
+            if new_param.any():
+                param_coords = np.argwhere(new_param)
+                profiles = self._sample_parametric_profiles(len(param_coords))
+                for idx, (ei, si) in enumerate(param_coords):
+                    self.param_profiles[env_indices[ei], si] = profiles[idx]
+                self.param_was_aggressor[env_indices] &= ~new_param  # reset
 
         self.exploit_type[env_indices] = types
         self.exploit_remaining[env_indices] = remaining
@@ -456,6 +476,251 @@ class SelfPlayWorker:
 
         return actions
 
+    @staticmethod
+    def _sample_parametric_profiles(n: int) -> np.ndarray:
+        """Sample n coherent parametric bot profiles.
+
+        Returns (n, 6) array: [vpip, pfr_ratio, aggression, fold_to_bet, cbet_freq, wtsd].
+        Profiles are sampled from 6 archetypes + uniform random.
+        """
+        profiles = np.empty((n, 6), dtype=np.float32)
+        # Pick archetype for each: 0-5 = named, 6 = uniform random
+        archetypes = np.random.randint(0, 7, size=n)
+
+        for i in range(n):
+            a = archetypes[i]
+            if a == 0:    # Nit
+                vpip = np.random.uniform(0.10, 0.18)
+                pfr_r = np.random.uniform(0.70, 0.90)
+                agg = np.random.uniform(0.15, 0.35)
+                ftb = np.random.uniform(0.50, 0.80)
+                cbet = np.random.uniform(0.40, 0.70)
+                wtsd = np.random.uniform(0.20, 0.35)
+            elif a == 1:  # TAG
+                vpip = np.random.uniform(0.18, 0.28)
+                pfr_r = np.random.uniform(0.65, 0.85)
+                agg = np.random.uniform(0.40, 0.65)
+                ftb = np.random.uniform(0.35, 0.55)
+                cbet = np.random.uniform(0.55, 0.80)
+                wtsd = np.random.uniform(0.28, 0.42)
+            elif a == 2:  # LAG
+                vpip = np.random.uniform(0.28, 0.40)
+                pfr_r = np.random.uniform(0.60, 0.80)
+                agg = np.random.uniform(0.55, 0.80)
+                ftb = np.random.uniform(0.20, 0.40)
+                cbet = np.random.uniform(0.60, 0.90)
+                wtsd = np.random.uniform(0.30, 0.50)
+            elif a == 3:  # Loose-passive (fish)
+                vpip = np.random.uniform(0.40, 0.70)
+                pfr_r = np.random.uniform(0.10, 0.30)
+                agg = np.random.uniform(0.10, 0.30)
+                ftb = np.random.uniform(0.15, 0.40)
+                cbet = np.random.uniform(0.20, 0.45)
+                wtsd = np.random.uniform(0.35, 0.55)
+            elif a == 4:  # Maniac
+                vpip = np.random.uniform(0.50, 0.80)
+                pfr_r = np.random.uniform(0.55, 0.80)
+                agg = np.random.uniform(0.70, 0.95)
+                ftb = np.random.uniform(0.10, 0.25)
+                cbet = np.random.uniform(0.70, 0.95)
+                wtsd = np.random.uniform(0.35, 0.55)
+            elif a == 5:  # Rock (super-tight, passive postflop)
+                vpip = np.random.uniform(0.08, 0.14)
+                pfr_r = np.random.uniform(0.50, 0.75)
+                agg = np.random.uniform(0.20, 0.40)
+                ftb = np.random.uniform(0.55, 0.80)
+                cbet = np.random.uniform(0.50, 0.75)
+                wtsd = np.random.uniform(0.25, 0.40)
+            else:         # Uniform random
+                vpip = np.random.uniform(0.10, 0.80)
+                pfr_r = np.random.uniform(0.10, 0.90)
+                agg = np.random.uniform(0.10, 0.90)
+                ftb = np.random.uniform(0.10, 0.80)
+                cbet = np.random.uniform(0.20, 0.90)
+                wtsd = np.random.uniform(0.20, 0.60)
+
+            profiles[i] = [vpip, pfr_r, agg, ftb, cbet, wtsd]
+        return profiles
+
+    @staticmethod
+    def _parametric_actions_vectorized(
+        obs: np.ndarray,
+        masks: np.ndarray,
+        profiles: np.ndarray,
+        was_aggressor: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Vectorized parametric bot actions.
+
+        obs: (k, 582) static_obs
+        masks: (k, 9) legal action masks
+        profiles: (k, 6) [vpip, pfr_ratio, aggression, fold_to_bet, cbet_freq, wtsd]
+        was_aggressor: (k,) bool — was preflop aggressor (for c-bet)
+
+        Returns: (actions (k,), new_was_aggressor (k,))
+        """
+        k = obs.shape[0]
+        phase = np.argmax(obs[:, 364:370], axis=1)  # (k,)
+        to_call = obs[:, 376]                         # (k,)
+        hand_rank = obs[:, 530]
+        preflop_str = obs[:, 531]
+
+        is_preflop = phase == 0
+        strength = np.where(is_preflop, preflop_str, np.maximum(hand_rank, 0.6 * preflop_str))
+
+        vpip = profiles[:, 0]
+        pfr_ratio = profiles[:, 1]
+        aggression = profiles[:, 2]
+        fold_to_bet = profiles[:, 3]
+        cbet_freq = profiles[:, 4]
+        # wtsd = profiles[:, 5]  # used implicitly via fold_to_bet on later streets
+
+        actions = np.ones(k, dtype=np.intp)  # default: call/check
+        new_aggressor = was_aggressor.copy()
+        rng = np.random.random(k)
+        rng2 = np.random.random(k)
+
+        # --- Preflop logic ---
+        pf = is_preflop
+        if pf.any():
+            # Decide whether to voluntarily enter pot
+            # Adjust vpip threshold by hand strength: play better hands more often
+            enter_threshold = vpip[pf] * (0.5 + strength[pf])  # [0, vpip*1.5]
+            enter = rng[pf] < enter_threshold
+
+            # Among those entering: raise vs call
+            will_raise = enter & (rng2[pf] < pfr_ratio[pf])
+            will_call = enter & ~will_raise
+
+            # Among those NOT entering: fold if facing bet, else check
+            no_enter = ~enter
+
+            pf_idx = np.where(pf)[0]
+            m = masks[pf]
+            a = np.ones(pf.sum(), dtype=np.intp)
+
+            # Raise: pick a size based on aggression
+            raise_mask = will_raise
+            if raise_mask.any():
+                rm = m[raise_mask]
+                ra = np.ones(raise_mask.sum(), dtype=np.intp)
+                agg_vals = aggression[pf][raise_mask]
+                # Higher aggression → bigger raises
+                # agg < 0.3 → min raise(2), 0.3-0.6 → 0.5x-1x(3-5), >0.6 → 1.5x-2x(6-7)
+                for act, lo, hi in [(7, 0.75, 1.0), (6, 0.55, 0.75),
+                                     (5, 0.40, 0.55), (4, 0.25, 0.40),
+                                     (3, 0.15, 0.25), (2, 0.0, 0.15)]:
+                    want = (ra == 1) & (agg_vals >= lo) & (agg_vals < hi)
+                    ra[want & rm[:, act]] = act
+                # Fallback: any raise
+                still = ra == 1
+                for act in (3, 4, 5, 2, 6, 7):
+                    ra[still & rm[:, act]] = act
+                    still = ra == 1
+                # Last resort: call
+                ra[still & rm[:, 1]] = 1
+                a[raise_mask] = ra
+                new_aggressor[pf_idx[raise_mask]] = True
+
+            # Call
+            if will_call.any():
+                cm = m[will_call]
+                a[will_call] = np.where(cm[:, 1], 1, 0)
+
+            # No enter: fold or check
+            if no_enter.any():
+                nm = m[no_enter]
+                a[no_enter] = np.where(nm[:, 0], 0, 1)  # fold if possible, else check
+
+            actions[pf] = a
+
+        # --- Postflop logic ---
+        post = ~is_preflop
+        if post.any():
+            facing_bet = masks[post][:, 0]  # fold available = facing bet
+            m = masks[post]
+            a = np.ones(post.sum(), dtype=np.intp)
+            s = strength[post]
+            agg = aggression[post]
+            ftb = fold_to_bet[post]
+            cb = cbet_freq[post]
+            was_agg = was_aggressor[np.where(post)[0]]
+            r1 = rng[post]
+            r2 = rng2[post]
+
+            # C-bet opportunity: was preflop aggressor, on flop, facing no bet
+            is_flop = phase[post] == 1
+            cbet_opp = was_agg & is_flop & ~facing_bet
+            do_cbet = cbet_opp & (r1 < cb)
+            if do_cbet.any():
+                cm = m[do_cbet]
+                ca = np.ones(do_cbet.sum(), dtype=np.intp)
+                # Pick bet size based on aggression
+                for act in (5, 4, 3, 2, 6):
+                    need = ca == 1
+                    ca[need & cm[:, act]] = act
+                a[do_cbet] = ca
+
+            # Facing a bet (not c-bet situation)
+            fb = facing_bet & ~do_cbet
+            if fb.any():
+                fm = m[fb]
+                fs = s[fb]
+                ff = ftb[fb]
+                fa = agg[fb]
+                fr1 = r1[fb]
+                fr2 = r2[fb]
+                act = np.ones(fb.sum(), dtype=np.intp)
+
+                # Fold probability: fold_to_bet scaled inversely by hand strength
+                fold_prob = ff * (1.0 - fs)
+                do_fold = (fr1 < fold_prob) & fm[:, 0]
+                act[do_fold] = 0
+
+                # Among non-folders: raise vs call based on aggression * strength
+                not_folding = ~do_fold
+                raise_prob = fa * fs
+                do_raise = not_folding & (fr2 < raise_prob)
+                if do_raise.any():
+                    rm = fm[do_raise]
+                    ra = np.ones(do_raise.sum(), dtype=np.intp)
+                    for act_r in (5, 4, 3, 2, 6, 7):
+                        need = ra == 1
+                        ra[need & rm[:, act_r]] = act_r
+                    ra[ra == 1] = np.where(rm[ra == 1][:, 1], 1, 0)[:]  # fallback call
+                    act[do_raise] = ra
+
+                # Remaining: call if possible
+                still = not_folding & ~do_raise
+                act[still] = np.where(fm[still][:, 1], 1, 0)
+
+                a[fb] = act
+
+            # Not facing bet and not c-betting: check or bet
+            no_bet = ~facing_bet & ~do_cbet
+            if no_bet.any():
+                nm = m[no_bet]
+                ns = s[no_bet]
+                na = agg[no_bet]
+                nr = r1[no_bet]
+                act = np.ones(no_bet.sum(), dtype=np.intp)  # default check
+
+                # Bet probability: aggression * strength
+                bet_prob = na * ns * 0.7
+                do_bet = nr < bet_prob
+                if do_bet.any():
+                    bm = nm[do_bet]
+                    ba = np.ones(do_bet.sum(), dtype=np.intp)
+                    for act_b in (4, 3, 2, 5, 6):
+                        need = ba == 1
+                        ba[need & bm[:, act_b]] = act_b
+                    act[do_bet] = ba
+
+                a[no_bet] = act
+
+            actions[post] = a
+
+        return actions, new_aggressor
+
     def run_episodes(self, epsilon: float, eta: float | None = None) -> int:
         """Run continuous self-play until at least num_envs episodes complete.
 
@@ -499,7 +764,7 @@ class SelfPlayWorker:
             # Check which current actors are exploit bots
             cur_exploit = self.exploit_type[env_idx, players]
             is_exploit = cur_exploit > 0
-            is_scripted = (cur_exploit >= 1) & (cur_exploit <= 3) | (cur_exploit == 5)
+            is_scripted = (cur_exploit >= 1) & (cur_exploit <= 3) | (cur_exploit == 5) | (cur_exploit == 6)
             is_historical = cur_exploit == 4
             is_learning = ~is_exploit
             as_idx = np.where(is_as & is_learning)[0]
@@ -579,6 +844,20 @@ class SelfPlayWorker:
                     s_actions[t5] = self._tag_actions_vectorized(
                         self.static_obs[scripted_idx[t5]], s_masks[t5]
                     )
+
+                # Type 6: Parametric — profile-driven decisions
+                t6 = s_types == 6
+                if t6.any():
+                    t6_env_idx = scripted_idx[t6]
+                    t6_players = players[t6_env_idx]
+                    t6_profiles = self.param_profiles[t6_env_idx, t6_players]
+                    t6_was_agg = self.param_was_aggressor[t6_env_idx, t6_players]
+                    t6_actions, t6_new_agg = self._parametric_actions_vectorized(
+                        self.static_obs[t6_env_idx], s_masks[t6],
+                        t6_profiles, t6_was_agg,
+                    )
+                    s_actions[t6] = t6_actions
+                    self.param_was_aggressor[t6_env_idx, t6_players] = t6_new_agg
 
                 actions_np[scripted_idx] = s_actions
 
@@ -682,6 +961,7 @@ class SelfPlayWorker:
                 self.ah_arrays[done_indices] = 0.0
                 self.ah_lens[done_indices] = 0
                 self.ah_pos[done_indices] = 0
+                self.param_was_aggressor[done_indices] = False
                 self.prev_obs[done_indices] = reset_obs
                 self.prev_mask[done_indices] = reset_masks
                 self.prev_player[done_indices] = reset_players
