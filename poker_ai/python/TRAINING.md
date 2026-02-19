@@ -223,42 +223,46 @@ fundamentals — it needs to learn multi-way dynamics: tighter ranges, position
 importance, pot odds with multiple callers.
 
 ```bash
-python scripts/train.py \
-  --num-players 6 \
-  --device cuda --async --train-ahead 4 --sync-every 15 \
-  --num-envs 512 \
-  --batch-size 8192 \
-  --eta-start 0.1 \
-  --eta-end 0.4 \
-  --eta-ramp-steps 100000000 \
-  --br-lr 0.0001 --br-train-steps 24 \
-  --as-lr 0.0001 --as-train-steps 12 \
-  --br-buffer-size 2000000 \
-  --as-buffer-size 3000000 \
-  --epsilon-start 0.04 \
-  --epsilon-end 0.003 \
-  --epsilon-decay-steps 100000000 \
-  --lr-warmup-steps 2000000 \
-  --lr-min-factor 0.01 \
-  --tau 0.005 \
-  --eval-every 2500000 \
-  --eval-hands 3000 \
-  --checkpoint-every 5000000 \
-  --save-buffers \
-  --episodes 50000000 \
-  --checkpoint-dir checkpoints/6max \
-  --log-dir logs/6max \
-  --resume checkpoints/hu/checkpoint_best.pt
+./scripts/train.sh \
+    --device cuda \
+    --async \
+    --num-players 6 \
+    --train-ahead 3 \
+    --sync-every 15 \
+    --num-envs 2048 \
+    --batch-size 8192 \
+    --eta-start 0.2 \
+    --eta-end 0.5 \
+    --eta-ramp-steps 200000000 \
+    --br-lr 0.00005 \
+    --br-train-steps 16 \
+    --as-lr 0.00005 \
+    --as-train-steps 8 \
+    --br-buffer-size 1000000 \
+    --as-buffer-size 8000000 \
+    --epsilon-start 0.08 \
+    --epsilon-end 0.003 \
+    --epsilon-decay-steps 400000000 \
+    --lr-warmup-steps 4000000 \
+    --lr-min-factor 0.01 \
+    --exploit-opponent-prob 0.05 \
+    --eval-every 750000 \
+    --checkpoint-every 1000000 \
+    --episodes 200000000 \
+    --checkpoint-dir checkpoints/6max_v1 \
+    --log-dir logs/6max_v1 \
+    --resume checkpoints/hu_v2/checkpoint_latest.pt \
+    --restart-schedules \
+    --no-load-buffers
 ```
 
 **Key differences from heads-up:**
-- `--num-envs 512`: hands have more steps (more players acting), so fewer envs
-  needed to keep GPU busy
-- `--epsilon-start 0.04`: lower starting exploration since the model already
-  understands basic poker
-- `--episodes 50000000`: fewer total episodes needed (fine-tuning, not from scratch)
-- `--eval-hands 3000`: each hand takes longer with 6 players
-- `--lr-warmup-steps 2000000`: shorter warmup for fine-tuning
+- `--num-players 6`: 6-max tables
+- `--restart-schedules`: reset epsilon/eta/LR schedules for the new domain
+- `--no-load-buffers`: HU experience isn't useful for 6-max
+- `--br-lr / --as-lr 0.00005`: halved LR for fine-tuning (preserve HU knowledge)
+- `--eta-start 0.2 → 0.5`: more average-strategy play (multi-way needs less exploitation)
+- `--episodes 200000000`: fine-tuning pass
 
 **What to watch:**
 - The model may initially regress (heads-up habits don't all transfer)
