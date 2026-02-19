@@ -252,7 +252,8 @@ class SelfPlayWorker:
         exploit opponent matches exploit_opponent_prob.
 
         Types: 1=always-raise, 2=calling-station, 3=tight-fold,
-               4=historical checkpoint opponent (Pluribus-inspired).
+               4=historical checkpoint opponent (Pluribus-inspired),
+               5=TAG (tight-aggressive, hand-strength based).
         When the checkpoint pool has entries, ~50% of new stints use type 4.
         """
         n = len(env_indices)
@@ -287,20 +288,25 @@ class SelfPlayWorker:
                 self._checkpoint_pool is not None and len(self._checkpoint_pool) > 1
             )
             if pool_available:
-                # 50% historical, 50% scripted (types 1-3)
+                # 50% historical, 50% scripted (types 1-3, 5)
                 type_rolls = np.random.random(new_exploit.shape)
                 hist_mask = new_exploit & (type_rolls < 0.5)
                 script_mask = new_exploit & ~hist_mask
 
                 if script_mask.any():
-                    scripted = np.random.randint(1, 4, size=(n, self.num_players))
+                    # Weight TAG (5) higher: ~50% TAG, ~17% each for types 1-3
+                    scripted = np.random.choice(
+                        [1, 2, 3, 5, 5, 5], size=(n, self.num_players)
+                    )
                     types[script_mask] = scripted[script_mask]
                 if hist_mask.any():
                     types[hist_mask] = 4
                     self._load_historical_opponent()
             else:
                 # No pool yet — all scripted
-                new_types = np.random.randint(1, 4, size=(n, self.num_players))
+                new_types = np.random.choice(
+                    [1, 2, 3, 5, 5, 5], size=(n, self.num_players)
+                )
                 types[new_exploit] = new_types[new_exploit]
 
             # Duration: 50-200 hands (uniform), matching EMA effective window
@@ -320,8 +326,7 @@ class SelfPlayWorker:
             self._historical_net.eval()
         self._historical_net.load_state_dict(sd)
 
-    @staticmethod
-    def _exploit_action(exploit_type: int, mask: np.ndarray) -> int:
+    def _exploit_action(self, exploit_type: int, mask: np.ndarray, obs: np.ndarray | None = None) -> int:
         """Pick action for a fixed exploit strategy.
         Actions: 0=fold, 1=call/check, 2=min, 3=0.5x, 4=0.75x, 5=1x, 6=1.5x, 7=2x, 8=allin
         """
@@ -336,7 +341,49 @@ class SelfPlayWorker:
             if mask[0]:  # fold available means facing a bet
                 return 0
             return 1  # check
+        elif exploit_type == 5 and obs is not None:  # TAG: hand-strength based
+            return self._tag_action(obs, mask)
         return 1  # default: call
+
+    @staticmethod
+    def _tag_action(obs: np.ndarray, mask: np.ndarray) -> int:
+        """Tight-aggressive action based on hand strength and pot odds."""
+        phase = int(np.argmax(obs[364:370]))
+        to_call_ratio = float(obs[376])
+        hand_rank = float(obs[HAND_STRENGTH_START])
+        preflop_strength = float(obs[HAND_STRENGTH_START + 1])
+
+        strength = preflop_strength if phase == 0 else max(hand_rank, 0.6 * preflop_strength)
+
+        if strength >= 0.72:
+            for a in (6, 5, 4, 3, 2, 7, 1):
+                if mask[a]:
+                    return a
+        elif strength >= 0.58:
+            if to_call_ratio <= 0.20:
+                for a in (4, 3, 2, 1):
+                    if mask[a]:
+                        return a
+            if mask[1]:
+                return 1
+            if mask[0]:
+                return 0
+        elif strength >= 0.48:
+            if to_call_ratio <= 0.08 and mask[1]:
+                return 1
+            if mask[0]:
+                return 0
+            if mask[1]:
+                return 1
+        else:
+            if to_call_ratio <= 0.02 and mask[1]:
+                return 1
+            if mask[0]:
+                return 0
+            if mask[1]:
+                return 1
+        legal = np.where(mask)[0]
+        return int(legal[0]) if len(legal) > 0 else 1
 
     def run_episodes(self, epsilon: float, eta: float | None = None) -> int:
         """Run continuous self-play until at least num_envs episodes complete.
@@ -381,7 +428,7 @@ class SelfPlayWorker:
             # Check which current actors are exploit bots
             cur_exploit = self.exploit_type[env_idx, players]
             is_exploit = cur_exploit > 0
-            is_scripted = (cur_exploit >= 1) & (cur_exploit <= 3)
+            is_scripted = (cur_exploit >= 1) & (cur_exploit <= 3) | (cur_exploit == 5)
             is_historical = cur_exploit == 4
             is_learning = ~is_exploit
             as_idx = np.where(is_as & is_learning)[0]
@@ -425,7 +472,7 @@ class SelfPlayWorker:
             # Override actions for scripted exploit bot seats
             for ei in scripted_idx:
                 etype = int(self.exploit_type[ei, players[ei]])
-                actions_np[ei] = self._exploit_action(etype, self.pre_mask[ei])
+                actions_np[ei] = self._exploit_action(etype, self.pre_mask[ei], self.static_obs[ei])
 
             pre_players = self.pre_players  # safe copy from above
 
