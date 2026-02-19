@@ -11,14 +11,15 @@ echo "=== Building Rust engine ==="
 ENGINE_DIR="../engine"
 PYVER=$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")
 SO_NAME="poker_ai/engine.cpython-${PYVER}-x86_64-linux-gnu.so"
+SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
 
-# Remove old .so so Python never imports a stale version
+# Remove ALL stale engine .so files (local + site-packages)
 rm -f "$SO_NAME"
-# Clear Python import caches for the engine module
-find poker_ai -name '*.pyc' -path '*/engine*' -delete 2>/dev/null || true
+rm -f "$SITE_PACKAGES"/engine.cpython-*.so 2>/dev/null || true
+# Clear Python import caches
 find poker_ai -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Force cargo to recompile the bindings (touch ensures mtime changes)
+# Force cargo to recompile the bindings
 touch "$ENGINE_DIR/src/python_bindings.rs"
 PYO3_PYTHON="$(which python)" cargo build --release --manifest-path "$ENGINE_DIR/Cargo.toml"
 
@@ -28,6 +29,10 @@ cp "$ENGINE_DIR/target/release/libpoker_ai_engine.so" "$SO_NAME"
 # Verify the new .so has expected methods
 python -c "
 from poker_ai.engine import BatchPokerEnv
+mod = BatchPokerEnv.__module__
+import importlib, inspect
+spec = importlib.util.find_spec('poker_ai.engine')
+print(f'Loaded from: {spec.origin if spec else \"unknown\"}')
 assert hasattr(BatchPokerEnv, 'reset_player_stats'), \
     'Engine .so is stale — reset_player_stats missing'
 print('Engine OK')
