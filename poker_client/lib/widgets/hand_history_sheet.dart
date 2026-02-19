@@ -155,24 +155,42 @@ class _HandDetail extends StatelessWidget {
     final streets = ['preflop', 'flop', 'turn', 'river'];
     final actionsByStreet = hand.actionsByStreet;
     final communityByStreet = hand.communityByStreet;
+    final activeStreets = streets
+        .where((s) =>
+            actionsByStreet.containsKey(s) || communityByStreet.containsKey(s))
+        .toList();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Players
           _PlayersSection(players: hand.players),
           const SizedBox(height: 8),
-          // Streets
-          for (final street in streets)
-            if (actionsByStreet.containsKey(street) ||
-                communityByStreet.containsKey(street))
-              _StreetSection(
-                street: street,
-                actions: actionsByStreet[street] ?? [],
-                communityCards: communityByStreet[street] ?? [],
-              ),
+          // Streets as horizontal columns
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (int i = 0; i < activeStreets.length; i++) ...[
+                  if (i > 0)
+                    Container(
+                      width: 1,
+                      color: Colors.white12,
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                    ),
+                  Expanded(
+                    child: _StreetColumn(
+                      street: activeStreets[i],
+                      actions: actionsByStreet[activeStreets[i]] ?? [],
+                      communityCards:
+                          communityByStreet[activeStreets[i]] ?? [],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -246,12 +264,12 @@ class _PlayersSection extends StatelessWidget {
   }
 }
 
-class _StreetSection extends StatelessWidget {
+class _StreetColumn extends StatelessWidget {
   final String street;
   final List<HandHistoryAction> actions;
   final List<PokerCard> communityCards;
 
-  const _StreetSection({
+  const _StreetColumn({
     required this.street,
     required this.actions,
     required this.communityCards,
@@ -259,48 +277,65 @@ class _StreetSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                street.toUpperCase(),
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
-              if (communityCards.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                ...communityCards.map(
-                  (c) => Padding(
-                    padding: const EdgeInsets.only(right: 2),
-                    child: _MiniCard(card: c),
-                  ),
-                ),
-              ],
-            ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          street.toUpperCase(),
+          style: const TextStyle(
+            color: Colors.white54,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
           ),
-          const SizedBox(height: 2),
-          for (final a in actions)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Text(
-                a.displayText,
-                style: TextStyle(
-                  color: _actionColor(a.actionType),
-                  fontSize: 11,
-                ),
+        ),
+        if (communityCards.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 4),
+            child: Row(
+              children: communityCards
+                  .map((c) => Padding(
+                        padding: const EdgeInsets.only(right: 2),
+                        child: _MiniCard(card: c),
+                      ))
+                  .toList(),
+            ),
+          ),
+        if (communityCards.isEmpty) const SizedBox(height: 4),
+        for (final a in actions)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 1),
+            child: Text(
+              _shortAction(a),
+              style: TextStyle(
+                color: _actionColor(a.actionType),
+                fontSize: 10,
               ),
             ),
-        ],
-      ),
+          ),
+      ],
     );
+  }
+
+  String _shortAction(HandHistoryAction a) {
+    switch (a.actionType) {
+      case 'fold':
+        return '${a.playerName} folds';
+      case 'check':
+        return '${a.playerName} ✓';
+      case 'call':
+        return '${a.playerName} calls \$${a.amount}';
+      case 'raise':
+        return '${a.playerName} ↑\$${a.amount}';
+      case 'allin':
+        return '${a.playerName} ALL-IN \$${a.amount}';
+      case 'post_sb':
+        return '${a.playerName} SB \$${a.amount}';
+      case 'post_bb':
+        return '${a.playerName} BB \$${a.amount}';
+      default:
+        return '${a.playerName} ${a.actionType}';
+    }
   }
 
   Color _actionColor(String type) {
