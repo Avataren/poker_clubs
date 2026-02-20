@@ -34,7 +34,6 @@ class _GameScreenState extends State<GameScreen> {
   late WebSocketService _wsService;
   final _soundService = SoundService();
   GameState? _gameState;
-  GameState? _previousGameState;
   final _buyinController = TextEditingController(text: '5000');
   final _topUpController = TextEditingController(text: '5000');
   final List<_TableFeedEntry> _eventFeed = <_TableFeedEntry>[];
@@ -68,7 +67,6 @@ class _GameScreenState extends State<GameScreen> {
       setState(() {
         final wasSeated = _isSeated;
         final wasTableClosed = _isTableClosed;
-        _previousGameState = _gameState;
         _gameState = gameState;
         _updateTableClosedState(gameState);
         _checkIfSeated();
@@ -190,16 +188,19 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _playActionSounds(GameState newState) {
+    // _gameState is still the previous state here — setState hasn't run yet.
+    final prevState = _gameState;
+
     // Play shuffle sound when entering PreFlop phase
-    if (_previousGameState?.phase != 'PreFlop' && newState.phase == 'PreFlop') {
+    if (prevState?.phase != 'PreFlop' && newState.phase == 'PreFlop') {
       print('DEBUG: Playing shuffle sound - entering PreFlop');
     }
 
     // Detect player actions by comparing states
-    if (_previousGameState == null) return;
+    if (prevState == null) return;
 
     for (final player in newState.players) {
-      final prevPlayer = _previousGameState!.players
+      final prevPlayer = prevState.players
           .where((p) => p.userId == player.userId)
           .firstOrNull;
 
@@ -297,7 +298,7 @@ class _GameScreenState extends State<GameScreen> {
   void _showAddBotDialog() {
     String botType = 'onnx'; // Default to ONNX models
     String scriptedStrategy = 'balanced';
-    String onnxPersonality = 'onnx_shark'; // Default to Shark
+    String onnxPersonality = 'onnx_gto';
 
     showDialog(
       context: context,
@@ -329,12 +330,12 @@ class _GameScreenState extends State<GameScreen> {
                   value: onnxPersonality,
                   isExpanded: true,
                   items: const [
-                    DropdownMenuItem(value: 'onnx_shark', child: Text('Shark')),
                     DropdownMenuItem(value: 'onnx_gto', child: Text('GTO')),
                     DropdownMenuItem(value: 'onnx_pro', child: Text('Pro')),
                     DropdownMenuItem(value: 'onnx_nit', child: Text('Nit')),
                     DropdownMenuItem(value: 'onnx_calling_station', child: Text('Calling Station')),
                     DropdownMenuItem(value: 'onnx_maniac', child: Text('Maniac')),
+                    DropdownMenuItem(value: 'onnx_shark', child: Text('Shark')),
                   ],
                   onChanged: (value) {
                     setDialogState(() => onnxPersonality = value!);

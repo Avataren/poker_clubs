@@ -35,7 +35,7 @@ class NFSPConfig:
     br_lr: float = 1e-4      # best response learning rate
     as_lr: float = 1e-4      # average strategy learning rate (low to stabilize averaging)
     gamma: float = 1.0       # episodic, no discounting
-    huber_delta: float = 10.0  # Huber loss beta — squared error for <10 BB, linear above
+    huber_delta: float = 1.0   # Huber loss beta in BB units — squared for <1 BB error, linear above
 
     # Replay buffers
     br_buffer_size: int = 2_000_000   # circular buffer for RL (~250k hands of recent experience)
@@ -89,7 +89,7 @@ class NFSPConfig:
     # strategy instead of the learning network. Exposes the model to extreme
     # playstyles (always-raise, calling-station, tight-fold) so it can learn
     # adaptive counter-strategies from the opponent stats features.
-    exploit_opponent_prob: float = 0.05  # 5% of opponent seats use fixed strategy
+    exploit_opponent_prob: float = 0.10  # 10% of opponent seats use fixed strategy
 
     # Paths
     checkpoint_dir: str = "checkpoints"

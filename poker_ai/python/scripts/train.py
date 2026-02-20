@@ -141,7 +141,8 @@ def main():
         trainer = NFSPTrainer(config)
 
     if args.resume:
-        trainer.load_checkpoint(args.resume, load_buffers=not args.no_load_buffers)
+        trainer.load_checkpoint(args.resume, load_buffers=not args.no_load_buffers,
+                                pool_dir=args.checkpoint_dir)
         if args.restart_schedules:
             trainer.restart_schedules(reset_optimizers=args.reset_optimizers)
         if args.bootstrap_as:

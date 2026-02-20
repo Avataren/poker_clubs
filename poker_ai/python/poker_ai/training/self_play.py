@@ -31,7 +31,7 @@ _STATIC_COLS = np.concatenate([
 # hand_strength is rebased from [658,710) → [cards+game_state, ...).
 _S_PHASE_START = GAME_STATE_START                                     # 364
 _S_PHASE_END = _S_PHASE_START + 6                                     # 370
-_S_TO_CALL = GAME_STATE_START + 12                                    # 376
+_S_TO_CALL = GAME_STATE_START + 9                                     # 373 (to_call/pot ratio)
 _S_HAND_RANK = COMMUNITY_END + (GAME_STATE_END - GAME_STATE_START)    # 530
 _S_PREFLOP_STR = _S_HAND_RANK + 1                                    # 531
 
@@ -978,7 +978,7 @@ class SelfPlayWorker:
                         action_history=self.pending_ah[sel_env, pi],
                         history_length=self.pending_ah_len[sel_env, pi],
                         actions=self.pending_action[sel_env, pi],
-                        rewards=rewards_batch[sel_env, pi],
+                        rewards=rewards_batch[sel_env, pi] / self.config.big_blind,
                         next_obs=self._term_zero_obs[:n_sel],
                         next_action_history=self._term_zero_ah[:n_sel],
                         next_history_length=self._term_zero_ah_len[:n_sel],

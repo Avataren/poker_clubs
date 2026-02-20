@@ -139,6 +139,26 @@ class CheckpointPool:
         if loaded > 0:
             print(f"  Checkpoint pool: loaded {loaded} historical opponents from disk")
 
+    def purge_incompatible(self, bad_sd: dict):
+        """Remove all pool entries whose first-layer shape matches bad_sd.
+
+        Called when load_state_dict fails due to an obs-size change so that
+        stale checkpoints (all saved before the architecture change) are
+        dropped and the pool starts fresh with new snapshots.
+        """
+        sentinel_key = next(iter(bad_sd))
+        bad_shape = bad_sd[sentinel_key].shape
+        before = len(self._pool)
+        self._pool = deque(
+            (sd for sd in self._pool
+             if sd.get(sentinel_key, torch.empty(0)).shape != bad_shape),
+            maxlen=self._pool.maxlen,
+        )
+        after = len(self._pool)
+        if before != after:
+            print(f"  Checkpoint pool: purged {before - after} incompatible entries "
+                  f"({after} remaining)")
+
     def __len__(self) -> int:
         return len(self._pool)
 from poker_ai.env.poker_env import PokerEnv, BatchPokerEnv
@@ -634,7 +654,8 @@ class NFSPTrainer:
             # Terminal states have no bootstrap term; avoid (-inf * 0) -> NaN.
             next_q = torch.where(dones > 0.5, torch.zeros_like(next_q), next_q)
             target = rewards + self.config.gamma * next_q
-            target = target.clamp(-10000, 10000)
+            # Clamp in BB units: max loss = -100 BB (bust), max win = +500 BB (6-way pot)
+            target = target.clamp(-110, 510)
 
         loss = F.smooth_l1_loss(q_taken, target, beta=self.config.huber_delta)
 
@@ -1427,8 +1448,12 @@ class NFSPTrainer:
         blind_pos_names = {"SB", "BB"}
 
         for hand_idx in range(num_hands):
-            hero_seat = hand_idx % num_players
-            # Dealer advances each reset; starts at 0, first advance → 1
+            # Hero is fixed at seat 0; dealer advances each reset so hero cycles
+            # through all positions (CO→MP→UTG→BB→SB→BTN→CO→...).
+            # Previously hero_seat = hand_idx % num_players caused dealer and
+            # hero_seat to increment in lockstep, keeping rel-pos always CO.
+            hero_seat = 0
+            # Dealer after env.reset(): starts at 0, first advance → 1
             dealer = (hand_idx + 1) % num_players
             hero_pos_name = _seat_to_position_name(hero_seat, dealer, num_players)
 
@@ -1830,7 +1855,7 @@ class NFSPTrainer:
         elapsed = time.time() - t0
         print(f"  AS buffer bootstrapped: {len(self.as_buffer):,} samples ({elapsed:.1f}s)")
 
-    def load_checkpoint(self, path: str, load_buffers: bool = True):
+    def load_checkpoint(self, path: str, load_buffers: bool = True, pool_dir: str | None = None):
         checkpoint = torch.load(path, map_location=self.device, weights_only=True)
 
         # Detect old checkpoint format (pre-dueling: has value_head, no value_stream)
@@ -1879,9 +1904,11 @@ class NFSPTrainer:
         self._schedule_step_offset = checkpoint.get("schedule_step_offset", 0)
         print(f"Loaded checkpoint from episode {checkpoint['episode']:,}")
 
-        # Pre-populate checkpoint pool from historical checkpoints on disk
-        ckpt_dir = Path(path).parent
-        self.checkpoint_pool.load_from_directory(str(ckpt_dir))
+        # Pre-populate checkpoint pool from historical checkpoints on disk.
+        # Use pool_dir if provided (e.g. new checkpoint dir when resuming from
+        # a different run), otherwise fall back to the resume checkpoint's dir.
+        pool_search_dir = pool_dir if pool_dir is not None else str(Path(path).parent)
+        self.checkpoint_pool.load_from_directory(pool_search_dir)
 
         # Try to load saved buffers from the same checkpoint directory
         if load_buffers:
