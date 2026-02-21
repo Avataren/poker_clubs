@@ -1006,8 +1006,10 @@ class NFSPTrainer:
     def _evaluate_multiway(self, eval_model, episode: int):
         """Multiway evaluation: vs TAG table with positional and HUD stats."""
         num_players = self.config.num_players
-        # Use more hands for multiway (higher variance)
-        num_hands = max(self.config.eval_hands, 3000)
+        # Scale eval hands with table size: each position gets ~num_hands/num_players hands.
+        # Target ~500 hands per position minimum for reasonable CI width.
+        min_hands = 500 * num_players
+        num_hands = max(self.config.eval_hands, min_hands)
         pos_names = _get_position_names(num_players)
 
         vs_tag = self._eval_multiway_vs(eval_model, "tag", num_hands=num_hands)
@@ -1097,8 +1099,10 @@ class NFSPTrainer:
         # - raises strong hands with larger sizes when available.
         phase_oh = obs[364:370]
         phase = int(np.argmax(phase_oh))  # 0=preflop
-        # Game state: 364+6(phase)+1(stack)+1(pot_bb)+1(spr)+1(pos)+1(opp)+1(can_act) = 376
-        to_call_ratio = float(obs[376])  # to_call/pot normalized to [0, 1] from [0, 5]
+        # Game state layout from GAME_STATE_START=364:
+        # [364..370) phase(6), [370] stack_ratio, [371] pot/BB, [372] SPR,
+        # [373] to_call/pot, [374] position, [375] num_opponents, [376] can_act_count
+        to_call_ratio = float(obs[373])  # to_call/pot normalized to [0, 1] from [0, 5]
         hand_rank = float(obs[HAND_STRENGTH_START])      # postflop normalized hand rank
         preflop_strength = float(obs[HAND_STRENGTH_START + 1])
 
