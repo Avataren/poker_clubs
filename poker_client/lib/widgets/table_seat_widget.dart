@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../models/card.dart';
 import '../models/game_state.dart';
+import '../models/hud_stats.dart';
 import '../models/player.dart';
 import 'avatar_sprite.dart';
 import 'card_widget.dart';
@@ -19,7 +20,7 @@ class _SeatVisualLayout {
   }
 
   static double cardWidthForTable(double tableWidth) {
-    final baseCardWidth = (tableWidth * 0.058).clamp(28.0, 42.0).toDouble();
+    final baseCardWidth = (tableWidth * 0.082).clamp(40.0, 62.0).toDouble();
     return baseCardWidth * playerScale;
   }
 
@@ -37,7 +38,7 @@ class _SeatVisualLayout {
 
   static double seatVerticalOffset(double tableHeight) => tableHeight * 0.015;
 
-  static double avatarSize(double seatSize) => seatSize * 0.58;
+  static double avatarSize(double seatSize) => seatSize * 0.80;
 
   static double avatarTop(double seatSize) => seatSize * 0.18;
 
@@ -136,6 +137,7 @@ class TableSeatWidget extends StatelessWidget {
   final String? lastAction;
   final String? avatarUrl;
   final bool isTournament;
+  final PlayerHudStats? hudStats;
 
   const TableSeatWidget({
     super.key,
@@ -158,6 +160,7 @@ class TableSeatWidget extends StatelessWidget {
     this.lastAction,
     this.avatarUrl,
     this.isTournament = false,
+    this.hudStats,
   });
 
   bool get _hasCards {
@@ -208,8 +211,8 @@ class TableSeatWidget extends StatelessWidget {
         player!.isWinner &&
         player!.shownCards != null;
 
-    final usernameFontSize = (seatSize * 0.14).clamp(12.0, 24.0);
-    final stackFontSize = (seatSize * 0.13).clamp(11.0, 22.0);
+    final usernameFontSize = (seatSize * 0.14).clamp(12.0, 30.0);
+    final stackFontSize = (seatSize * 0.13).clamp(11.0, 28.0);
     final badgeFontSize = (seatSize * 0.11).clamp(10.0, 20.0);
     final avatarSize = _SeatVisualLayout.avatarSize(seatSize);
     final frameWidth = _SeatVisualLayout.frameWidth(seatSize, cardWidth);
@@ -289,10 +292,15 @@ class TableSeatWidget extends StatelessWidget {
               left: 0,
               right: 0,
               child: Center(
-                child: _buildNamePlate(
-                  usernameFontSize,
-                  stackFontSize,
-                  avatarSize,
+                child: GestureDetector(
+                  onTap: (hudStats != null && hudStats!.hands > 0)
+                      ? () => _showHudDialog(context)
+                      : null,
+                  child: _buildNamePlate(
+                    usernameFontSize,
+                    stackFontSize,
+                    avatarSize,
+                  ),
                 ),
               ),
             ),
@@ -383,6 +391,33 @@ class TableSeatWidget extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showHudDialog(BuildContext context) {
+    final stats = hudStats!;
+    final name = player?.username ?? 'Player';
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1a2744),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(
+          name,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+        content: _HudPopupContent(stats: stats),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close', style: TextStyle(color: Colors.blueAccent)),
+          ),
+        ],
       ),
     );
   }
@@ -700,6 +735,13 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
   bool _animatingPot = false;
   final Map<String, int> _winnerPots = {}; // Map of userId to pot amount won
 
+  // HUD stats tracked from observed actions (session-only)
+  final Map<String, PlayerHudStats> _hudStats = {};
+  final Map<String, String?> _prevLastAction = {};
+  final Set<String> _handCountedThisHand = {};
+  final Set<String> _vpipThisHand = {};  // prevent double-counting on re-raises
+  final Set<String> _pfrThisHand = {};
+
   // Card dealing animation
   final Map<String, int> _dealingCardsTo =
       {}; // Map of player ID to card number (1 or 2) being dealt
@@ -856,6 +898,50 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           );
         }
       });
+    }
+
+    // HUD stats: detect new hand start and individual action changes.
+    {
+      final isNewHand =
+          _lastPhase != 'PreFlop' && widget.gamePhase == 'PreFlop';
+      if (isNewHand) {
+        _handCountedThisHand.clear();
+        _vpipThisHand.clear();
+        _pfrThisHand.clear();
+      }
+      for (final player in widget.players) {
+        if (isNewHand && !player.isEliminated && !player.isSittingOut) {
+          if (!_handCountedThisHand.contains(player.userId)) {
+            _hudStats.putIfAbsent(player.userId, PlayerHudStats.new).hands++;
+            _handCountedThisHand.add(player.userId);
+          }
+        }
+        final prevAction = _prevLastAction[player.userId];
+        final currAction = player.lastAction;
+        if (currAction != null && currAction != prevAction) {
+          final stats =
+              _hudStats.putIfAbsent(player.userId, PlayerHudStats.new);
+          final isPreflop = widget.gamePhase == 'PreFlop';
+          final lower = currAction.toLowerCase();
+          final isRaise = lower.contains('raise') || lower.contains('all');
+          final isCall = lower.contains('call');
+          // VPIP/PFR: count at most once per hand (player may act multiple
+          // times preflop, e.g. limp then face a 3-bet and call/re-raise).
+          if (isPreflop && (isRaise || isCall) &&
+              !_vpipThisHand.contains(player.userId)) {
+            stats.vpipCount++;
+            _vpipThisHand.add(player.userId);
+          }
+          if (isPreflop && isRaise &&
+              !_pfrThisHand.contains(player.userId)) {
+            stats.pfrCount++;
+            _pfrThisHand.add(player.userId);
+          }
+          if (isRaise) stats.totalRaises++;
+          if (isCall) stats.totalCalls++;
+        }
+        _prevLastAction[player.userId] = player.lastAction;
+      }
     }
 
     _lastPhase = widget.gamePhase;
@@ -1141,7 +1227,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
 
   List<Widget> _buildPotDisplay(Offset centerOffset, double tableWidth) {
     final pots = widget.pots;
-    final fontSize = (tableWidth * 0.025).clamp(10.0, 16.0);
+    final fontSize = (tableWidth * 0.032).clamp(13.0, 22.0);
 
     // Build pot text
     String potText;
@@ -1382,6 +1468,7 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           lastAction: player?.lastAction,
           avatarUrl: player?.avatarUrl,
           isTournament: widget.tournamentId != null,
+          hudStats: player != null ? _hudStats[player.userId] : null,
         ),
       ),
     );
@@ -1505,6 +1592,82 @@ class _PokerTableWidgetState extends State<PokerTableWidget> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HUD popup content widget
+// ---------------------------------------------------------------------------
+
+class _HudPopupContent extends StatelessWidget {
+  final PlayerHudStats stats;
+
+  const _HudPopupContent({required this.stats});
+
+  String _pct(double v) => '${(v * 100).toStringAsFixed(0)}%';
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = [
+      ('Hands', stats.hands.toString(), 'Hands observed this session'),
+      ('VPIP', _pct(stats.vpip), 'Voluntarily put \$ in pot preflop'),
+      ('PFR', _pct(stats.pfr), 'Preflop raise %'),
+      (
+        'AF',
+        stats.af.toStringAsFixed(1),
+        'Aggression factor (raises / calls)',
+      ),
+    ];
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(color: Colors.white24, height: 16),
+        ...rows.map(
+          (row) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: 5),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 52,
+                  child: Text(
+                    row.$1,
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    row.$2,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    row.$3,
+                    style: const TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const Divider(color: Colors.white24, height: 16),
+        const Text(
+          'Session data only',
+          style: TextStyle(color: Colors.white24, fontSize: 11),
+        ),
+      ],
     );
   }
 }

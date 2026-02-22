@@ -996,7 +996,7 @@ class _GameScreenState extends State<GameScreen> {
     final cardTop = (sceneHeight - tableHeight) / 2 + tableHeight * 0.36;
 
     // Calculate card dimensions with proper aspect ratio (1.4:1)
-    final cardWidth = (tableWidth * 0.105).clamp(52.0, 80.0);
+    final cardWidth = (tableWidth * 0.145).clamp(72.0, 110.0);
     final cardHeight = cardWidth * 1.4;
 
     return Transform.translate(

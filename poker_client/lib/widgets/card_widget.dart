@@ -81,9 +81,9 @@ class CardWidget extends StatelessWidget {
   }
 
   Widget _buildFaceUp(double cardWidth, double cardHeight) {
-    final rankFontSize = (cardWidth * 0.26).clamp(8.0, 18.0);
-    final suitFontSize = (cardWidth * 0.22).clamp(7.0, 15.0);
-    final centerSuitSize = (cardWidth * 0.45).clamp(14.0, 32.0);
+    final rankFontSize = (cardWidth * 0.28).clamp(8.0, 30.0);
+    final suitFontSize = (cardWidth * 0.24).clamp(7.0, 24.0);
+    final centerSuitSize = (cardWidth * 0.50).clamp(14.0, 56.0);
 
     return Stack(
       children: [

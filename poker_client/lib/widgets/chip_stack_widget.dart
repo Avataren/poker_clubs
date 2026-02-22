@@ -54,7 +54,7 @@ class ChipStackWidget extends StatelessWidget {
               '\$$amount',
               style: TextStyle(
                 color: textColor,
-                fontSize: 11 * scale,
+                fontSize: 14 * scale,
                 fontWeight: FontWeight.bold,
               ),
             ),
