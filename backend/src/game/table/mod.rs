@@ -281,7 +281,7 @@ impl PokerTable {
         self.hand_action_history.clear();
     }
 
-    pub(crate) fn record_hand_action(&mut self, actor_idx: usize, action_idx: usize) {
+    pub(crate) fn record_hand_action(&mut self, actor_idx: usize, action_idx: usize, bet_ratio: f32) {
         if actor_idx >= self.players.len() || action_idx >= 9 {
             return;
         }
@@ -291,8 +291,16 @@ impl PokerTable {
             rec[0] = actor_idx as f32 / (self.players.len() - 1) as f32;
         }
         rec[1 + action_idx] = 1.0; // one-hot over 9 actions
-        rec[10] = (action_idx as f32 / 8.0).min(1.0); // rough bet ratio
+        rec[10] = bet_ratio.min(10.0).max(0.0); // actual bet/pot ratio, matches training encoding
         self.hand_action_history.push(rec);
+    }
+
+    /// Test-only helper: record an action using action_idx as a rough bet_ratio approximation.
+    /// Use `record_hand_action` with an explicit bet_ratio in production code.
+    #[cfg(test)]
+    pub(crate) fn record_hand_action_approx(&mut self, actor_idx: usize, action_idx: usize) {
+        let bet_ratio = action_idx as f32 / 8.0;
+        self.record_hand_action(actor_idx, action_idx, bet_ratio);
     }
 
     /// Set the tournament ID for this table

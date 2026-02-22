@@ -213,7 +213,21 @@ impl PokerTable {
             pot_before_action,
             stack_before_action,
         ) {
-            self.record_hand_action(actor_idx, action_idx);
+            // Compute actual bet/pot ratio to match training engine encoding.
+            // Training uses: chips_added_by_player / pot_before_action.
+            let bet_ratio = if pot_before_action > 0 {
+                let chips_added = match &action {
+                    PlayerAction::Fold | PlayerAction::Check => 0,
+                    PlayerAction::Call => to_call_before,
+                    PlayerAction::Raise(amount) => to_call_before + amount, // to_call + raise_size
+                    PlayerAction::AllIn => stack_before_action,
+                    PlayerAction::ShowCards(_) => 0,
+                };
+                (chips_added as f32 / pot_before_action as f32).min(10.0)
+            } else {
+                0.0
+            };
+            self.record_hand_action(actor_idx, action_idx, bet_ratio);
         }
 
         // Record last action for display
