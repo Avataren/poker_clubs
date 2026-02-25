@@ -1106,19 +1106,48 @@ impl SimTable {
         // --- Placeholder for history hidden state (128 floats at [530..658)) - already zeroed ---
 
         // --- Hand strength features (52 floats at [658..710)) ---
+        //
+        //  [658]      hand_rank.normalized()           (0 preflop; postflop from rs_poker)
+        //  [659]      preflop_strength(N)              multi-way equity, constant across streets
+        //  [660..666) board_texture                    flush_draw, straight_draw, paired, trips,
+        //                                              high_card, num_community_cards
+        //  [666..668) hero draw potential              [flush_draw, straight_draw] (hero contributes)
+        //  [668..677) hand category one-hot            high_card…straight_flush (9 classes, 0 preflop)
+        //  [677]      stack / (200 BB) clamped         explicit stack-depth signal
+        //  [678..710) reserved (32 zeros)
+
+        // Stack in BB — always useful regardless of hole cards
+        features[677] = (stack / self.big_blind.max(1) as f32).min(200.0) / 200.0;
+
         if seat < self.hole_cards.len() && !self.hole_cards.is_empty() {
+            let hole = &self.hole_cards[seat];
             let total_cards = 2 + self.community_cards.len();
+
+            // [658] Current made-hand rank (postflop only)
             if total_cards >= 5 {
-                let hand_rank = evaluate_hand(&self.hole_cards[seat], &self.community_cards);
+                let hand_rank = evaluate_hand(hole, &self.community_cards);
                 features[658] = hand_rank.normalized();
+                // [668..677) Hand category one-hot: 0=high_card … 8=straight_flush
+                let cat = hand_rank.rank_value as usize;
+                if cat < 9 {
+                    features[668 + cat] = 1.0;
+                }
             }
-            // Preflop strength
+
+            // [659] Preflop hand equity scaled to num_opponents (constant across streets)
             let num_opponents = (self.num_players.saturating_sub(1)) as u8;
             features[659] = crate::hand_eval_features::preflop_strength(
-                self.hole_cards[seat][0],
-                self.hole_cards[seat][1],
-                num_opponents,
+                hole[0], hole[1], num_opponents,
             );
+
+            // [660..666) Board texture
+            let bt = crate::hand_eval_features::board_texture(&self.community_cards);
+            features[660..666].copy_from_slice(&bt);
+
+            // [666..668) Hero draw potential
+            let draws = crate::hand_eval_features::hero_draws(hole, &self.community_cards);
+            features[666] = draws[0]; // flush draw
+            features[667] = draws[1]; // straight draw
         }
     }
 

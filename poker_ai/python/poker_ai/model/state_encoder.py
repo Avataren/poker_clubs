@@ -1,6 +1,6 @@
 """State encoding utilities.
 
-The Rust engine produces 630 floats directly. This module provides
+The Rust engine produces 710 floats directly. This module provides
 utilities for when you need to manipulate or inspect the encoding
 on the Python side.
 """
@@ -10,7 +10,15 @@ on the Python side.
 # [104..364)   = Community cards (5 x 52 one-hot, zero-padded)
 # [364..530)   = Game state (166 floats: phase, ratios, position, opponents, opponent stats)
 # [530..658)   = History hidden state placeholder (128 zeros, filled by Python)
-# [658..710)   = Hand strength features (52 floats)
+# [658..710)   = Hand strength features (52 floats):
+#   [658]        hand_rank.normalized()       0 preflop; postflop rs_poker rank in [0,1]
+#   [659]        preflop_strength(N)          HU equity scaled to N opponents, constant across streets
+#   [660..666)   board_texture (6)            flush_draw, straight_draw, paired, trips, high_card, n_cards
+#   [666..668)   hero draw potential (2)      flush_draw, straight_draw (hero contributes ≥1 card)
+#   [668..677)   hand category one-hot (9)    high_card, one_pair, two_pair, trips, straight,
+#                                             flush, full_house, quads, straight_flush  (all 0 preflop)
+#   [677]        stack / (200 BB) clamped     explicit short/deep-stack signal
+#   [678..710)   reserved (32 zeros)
 
 HOLE_CARDS_START = 0
 HOLE_CARDS_END = 104

@@ -236,6 +236,77 @@ pub fn preflop_strength(c1: Card, c2: Card, num_opponents: u8) -> f32 {
     hu_equity / (hu_equity + n * (1.0 - hu_equity))
 }
 
+/// Hero's draw potential given hole cards and current community cards.
+///
+/// Returns `[flush_draw, straight_draw]`, each in `[0.0, 1.0]`:
+///
+/// | Value | Flush meaning          | Straight meaning          |
+/// |-------|------------------------|---------------------------|
+/// | 0.00  | no draw, not suited    | no draw                   |
+/// | 0.25  | suited preflop         | backdoor (3-card) draw    |
+/// | 0.50  | backdoor flush draw    | gutshot (4-out) draw      |
+/// | 1.00  | 4-flush draw or made   | OESD (8-out) or made str. |
+///
+/// Hero must contribute at least one card to each draw.
+pub fn hero_draws(hole: &[Card; 2], community: &[Card]) -> [f32; 2] {
+    [flush_draw_score(hole, community), straight_draw_score(hole, community)]
+}
+
+fn flush_draw_score(hole: &[Card; 2], community: &[Card]) -> f32 {
+    let mut best = 0.0f32;
+    for suit in 0u8..4 {
+        let hole_count  = hole.iter().filter(|c| c.suit == suit).count();
+        if hole_count == 0 { continue; } // hero must contribute
+        let board_count = community.iter().filter(|c| c.suit == suit).count();
+        let total = hole_count + board_count;
+        let score = match total {
+            4.. => 1.0,  // 4-flush draw or made flush
+            3   => 0.5,  // backdoor flush draw
+            2 if community.is_empty() => 0.25, // suited hand, preflop
+            _   => 0.0,
+        };
+        best = best.max(score);
+    }
+    best
+}
+
+fn straight_draw_score(hole: &[Card; 2], community: &[Card]) -> f32 {
+    // Rank bitmap: bit k is set when rank k appears in hero+community.
+    // Bit 1 = ace-low alias so A2345 straights are handled uniformly.
+    let mut rank_bits = 0u32;
+    for c in hole.iter().chain(community.iter()) {
+        rank_bits |= 1u32 << c.rank;
+        if c.rank == 14 { rank_bits |= 1u32 << 1; }
+    }
+    let mut hero_bits = 0u32;
+    for c in hole.iter() {
+        hero_bits |= 1u32 << c.rank;
+        if c.rank == 14 { hero_bits |= 1u32 << 1; }
+    }
+
+    let mut best = 0.0f32;
+    // 10 possible 5-rank windows: A2345 (start=1) … TJQKA (start=10)
+    for start in 1u32..=10 {
+        let window = 0b1_1111u32 << start; // bits [start, start+4]
+        if hero_bits & window == 0 { continue; } // hero not in this window
+        let present = rank_bits & window;
+        let score = match present.count_ones() {
+            5 => 1.0, // made straight
+            4 => {
+                // OESD when the missing card is at either end of the window
+                let missing = window ^ present; // exactly 1 bit
+                let low = 1u32 << start;
+                let high = 1u32 << (start + 4);
+                if missing == low || missing == high { 1.0 } else { 0.5 }
+            }
+            3 => 0.25, // backdoor straight draw
+            _ => 0.0,
+        };
+        best = best.max(score);
+    }
+    best
+}
+
 /// Board texture features (flush draws, straight draws, pairing).
 pub fn board_texture(community: &[Card]) -> [f32; 6] {
     if community.is_empty() {
@@ -473,10 +544,100 @@ mod tests {
 
     #[test]
     fn test_board_texture_flush_draw() {
-        let board = vec![
-            card(2, 0), card(7, 0), card(11, 0), // 3 clubs
-        ];
+        let board = vec![card(2, 0), card(7, 0), card(11, 0)]; // 3 clubs
         let t = board_texture(&board);
         assert_eq!(t[0], 0.5, "3 suited cards = flush draw (0.5)");
+    }
+
+    // ── hero_draws: flush ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_flush_draw_preflop_suited() {
+        let hole = [card(14, 0), card(13, 0)]; // AKcc
+        let d = hero_draws(&hole, &[]);
+        assert_eq!(d[0], 0.25, "suited preflop = 0.25");
+    }
+
+    #[test]
+    fn test_flush_draw_backdoor() {
+        let hole = [card(14, 0), card(13, 0)]; // AKcc
+        let board = vec![card(2, 0), card(7, 1), card(11, 2)]; // one more club on board
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[0], 0.5, "3-flush backdoor = 0.5");
+    }
+
+    #[test]
+    fn test_flush_draw_4flush() {
+        let hole = [card(14, 0), card(9, 0)]; // AcTc
+        let board = vec![card(2, 0), card(7, 0), card(11, 1)]; // two more clubs
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[0], 1.0, "4-flush = 1.0");
+    }
+
+    #[test]
+    fn test_flush_draw_offsuit_no_draw() {
+        let hole = [card(14, 0), card(13, 1)]; // AcKd
+        let board = vec![card(2, 2), card(7, 3), card(11, 2)]; // no matching suits
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[0], 0.0, "no flush draw for offsuit hand on rainbow board");
+    }
+
+    // ── hero_draws: straight ───────────────────────────────────────────────
+
+    #[test]
+    fn test_straight_draw_oesd() {
+        // 6789 needs 5 or T (both ends open)
+        let hole = [card(6, 0), card(7, 1)];
+        let board = vec![card(8, 2), card(9, 3), card(2, 0)];
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[1], 1.0, "6789 = OESD");
+    }
+
+    #[test]
+    fn test_straight_draw_gutshot() {
+        // 5,6,8,9 — needs 7 (middle gap = gutshot)
+        let hole = [card(5, 0), card(9, 1)];
+        let board = vec![card(6, 2), card(8, 3), card(2, 0)];
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[1], 0.5, "5689 = gutshot");
+    }
+
+    #[test]
+    fn test_straight_draw_wheel_oesd() {
+        // A234 needs 5 (high end) — OESD
+        let hole = [card(14, 0), card(2, 1)];
+        let board = vec![card(3, 2), card(4, 3), card(9, 0)];
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[1], 1.0, "A234 = OESD (needs 5 at high end)");
+    }
+
+    #[test]
+    fn test_straight_draw_made_straight() {
+        // JQK A T = royal straight
+        let hole = [card(14, 0), card(13, 1)];
+        let board = vec![card(12, 2), card(11, 3), card(10, 0)];
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[1], 1.0, "TJQKA = made straight → 1.0");
+    }
+
+    #[test]
+    fn test_straight_draw_none() {
+        let hole = [card(2, 0), card(7, 1)]; // 2-7 rainbow, no connected board
+        let board = vec![card(9, 2), card(12, 3), card(14, 0)];
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[1], 0.0, "2-7 on A-9-Q board = no straight draw");
+    }
+
+    #[test]
+    fn test_straight_draw_hero_must_contribute() {
+        // Board has 4 to a straight but hero's cards are irrelevant
+        let hole = [card(2, 0), card(2, 1)]; // pocket deuces — useless for this draw
+        let board = vec![card(6, 2), card(7, 3), card(8, 0), card(9, 1)];
+        // Window 5..9: board has 6,7,8,9 = 4 cards but rank 2 doesn't help
+        // Hero bits: bit 2. Window [5,6,7,8,9]: hero bit 2 NOT in this window → skipped
+        // Window [6,7,8,9,10]: hero not in this window either
+        // Window [4,5,6,7,8]: hero has 2 ≠ 4,5,6,7,8 → skipped
+        let d = hero_draws(&hole, &board);
+        assert_eq!(d[1], 0.0, "board has 4-straight but hero doesn't contribute");
     }
 }
