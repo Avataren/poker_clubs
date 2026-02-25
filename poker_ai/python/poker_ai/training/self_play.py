@@ -29,11 +29,34 @@ _STATIC_COLS = np.concatenate([
 # Offsets within the 582-dim static_obs (after extraction via _STATIC_COLS).
 # Cards [0, 364) are unchanged; game_state keeps its original start;
 # hand_strength is rebased from [658,710) → [cards+game_state, ...).
-_S_PHASE_START = GAME_STATE_START                                     # 364
-_S_PHASE_END = _S_PHASE_START + 6                                     # 370
-_S_TO_CALL = GAME_STATE_START + 9                                     # 373 (to_call/pot ratio)
-_S_HAND_RANK = COMMUNITY_END + (GAME_STATE_END - GAME_STATE_START)    # 530
-_S_PREFLOP_STR = _S_HAND_RANK + 1                                    # 531
+#
+# Game-state layout from GAME_STATE_START=364:
+#   [+0..+5]  phase one-hot (6)
+#   [+6]      stack/initial_stack ratio
+#   [+7]      pot / BB (norm)
+#   [+8]      stack / pot (SPR norm)
+#   [+9]      distance-from-dealer / (n-1)   ← POSITION
+#   [+10]     active opponents / (n-1)
+#   [+11]     can-act count / n
+#   [+12]     to_call / pot (norm)
+#   [+13]     num_players / 9
+#   [+14]     pot odds
+#   [+15]     eff_stack / pot (norm)
+#   [+16]     street_actions / 10            ← STREET ACTIONS
+#   [+17]     total_actions / 30
+#   [+18]     raises_this_street / 4         ← NUM RAISES
+#   [+19]     last_aggressor_is_hero
+#   [+20]     hero_bet / pot (norm)
+#   [+21]     hero_invested / starting_stack
+_S_PHASE_START    = GAME_STATE_START       # 364
+_S_PHASE_END      = _S_PHASE_START + 6    # 370
+_S_POSITION       = GAME_STATE_START + 9  # 373  distance-from-dealer / (n-1)
+_S_TO_CALL        = GAME_STATE_START + 9  # 373  legacy alias (position, kept for compat)
+_S_TO_CALL_ACTUAL = GAME_STATE_START + 12 # 376  to_call / pot (real cost ratio)
+_S_STREET_ACTIONS = GAME_STATE_START + 16 # 380  actions this street / 10
+_S_NUM_RAISES     = GAME_STATE_START + 18 # 382  raises this street / 4
+_S_HAND_RANK      = COMMUNITY_END + (GAME_STATE_END - GAME_STATE_START)  # 530
+_S_PREFLOP_STR    = _S_HAND_RANK + 1     # 531
 
 
 def extract_static_features_batch(obs_batch: np.ndarray) -> np.ndarray:
@@ -397,39 +420,73 @@ class SelfPlayWorker:
 
     @staticmethod
     def _tag_action(obs: np.ndarray, mask: np.ndarray) -> int:
-        """Tight-aggressive action based on hand strength and pot odds.
+        """Tight-aggressive action based on hand strength and position.
 
         obs is static_obs (582-dim): cards [0,364) + game_state [364,530) + hand_strength [530,582).
+
+        _S_TO_CALL / _S_POSITION both read offset +9 from GAME_STATE_START, which encodes
+        distance-from-dealer / (n-1). BTN=0.0, SB=0.2, BB=0.4, UTG=0.6, MP=0.8, CO=1.0.
+        The tier checks that use to_call_ratio therefore act as position filters:
+        BTN/SB raise wider (low position value), CO/UTG/MP are tighter (high value).
+        This is intentional positional awareness, though the naming is historical.
         """
         phase = int(np.argmax(obs[_S_PHASE_START:_S_PHASE_END]))
-        to_call_ratio = float(obs[_S_TO_CALL])
+        to_call_ratio = float(obs[_S_TO_CALL])        # position feature (for range tiers)
+        call_cost     = float(obs[_S_TO_CALL_ACTUAL]) # real to_call/pot (for call/fold cost)
         hand_rank = float(obs[_S_HAND_RANK])
         preflop_strength = float(obs[_S_PREFLOP_STR])
 
         strength = preflop_strength if phase == 0 else max(hand_rank, 0.6 * preflop_strength)
 
+        # ISO-RAISE: attack limpers from late position preflop.
+        # When someone has limped (actions > 0, raises == 0), raise wide from CO/BTN/SB
+        # to deny cheap flops and build the pot with a positional advantage.
+        if phase == 0:
+            position       = float(obs[_S_POSITION])
+            no_raises      = float(obs[_S_NUM_RAISES]) < 0.1       # 0 raises this street
+            someone_acted  = float(obs[_S_STREET_ACTIONS]) > 0.05  # ≥1 action (limp)
+            if no_raises and someone_acted:
+                is_btn_co = position <= 0.05 or position >= 0.90   # BTN (0.0) or CO (1.0)
+                is_sb     = 0.15 <= position <= 0.25               # SB (0.2)
+                if is_btn_co and strength >= 0.45:
+                    # Iso-raise ~top-40% from BTN/CO; prefer 0.8x–1x pot sizing
+                    for a in (5, 6, 4, 3):
+                        if mask[a]:
+                            return a
+                elif is_sb and strength >= 0.58:
+                    # Tighter iso from SB (acts first postflop); ~top-25%
+                    for a in (4, 5, 6):
+                        if mask[a]:
+                            return a
+
         if strength >= 0.72:
+            # Top hands: raise; call if no raise available; fold only if truly forced
             for a in (6, 5, 4, 3, 2, 7, 1):
                 if mask[a]:
                     return a
         elif strength >= 0.58:
-            if to_call_ratio <= 0.20:
+            # Good hands: raise if cheap to re-raise, call up to large bets, fold to shoves
+            if to_call_ratio <= 0.20:          # positionally cheap → re-raise
                 for a in (4, 3, 2, 1):
                     if mask[a]:
                         return a
-            if mask[1]:
+            if call_cost <= 0.60 and mask[1]:  # call unless it's a massive overbet/shove
                 return 1
             if mask[0]:
-                return 0
+                return 0                        # fold to shove/huge raise
+            if mask[1]:
+                return 1
         elif strength >= 0.48:
-            if to_call_ratio <= 0.08 and mask[1]:
+            # Medium hands: call only if genuinely cheap (< half pot)
+            if call_cost <= 0.25 and mask[1]:
                 return 1
             if mask[0]:
                 return 0
             if mask[1]:
                 return 1
         else:
-            if to_call_ratio <= 0.02 and mask[1]:
+            # Weak hands: fold to anything but near-free checks
+            if call_cost <= 0.05 and mask[1]:
                 return 1
             if mask[0]:
                 return 0
@@ -447,7 +504,8 @@ class SelfPlayWorker:
         """
         k = obs.shape[0]
         phase = np.argmax(obs[:, _S_PHASE_START:_S_PHASE_END], axis=1)  # (k,)
-        to_call = obs[:, _S_TO_CALL]                         # (k,)
+        to_call   = obs[:, _S_TO_CALL]           # position feature (for range tiers)
+        call_cost = obs[:, _S_TO_CALL_ACTUAL]    # real to_call/pot (for call/fold cost)
         hand_rank = obs[:, _S_HAND_RANK]                        # (k,)
         preflop_str = obs[:, _S_PREFLOP_STR]                      # (k,)
 
@@ -455,9 +513,43 @@ class SelfPlayWorker:
         strength = np.where(is_preflop, preflop_str, np.maximum(hand_rank, 0.6 * preflop_str))
 
         actions = np.ones(k, dtype=np.intp)  # default: call
+        iso_done = np.zeros(k, dtype=bool)  # track seats whose action is already set
+
+        # ISO-RAISE: attack limpers from late position preflop.
+        # BTN=0.0, CO=1.0 in the position feature at _S_POSITION.
+        iso_cond = is_preflop
+        if iso_cond.any():
+            position    = obs[:, _S_POSITION]           # (k,)
+            no_raises   = obs[:, _S_NUM_RAISES] < 0.1   # (k,)
+            someone_acted = obs[:, _S_STREET_ACTIONS] > 0.05  # (k,)
+            iso_spot = is_preflop & no_raises & someone_acted
+
+            # BTN or CO iso-raise with top ~40%
+            btn_co  = (position <= 0.05) | (position >= 0.90)
+            iso_btn = iso_spot & btn_co & (strength >= 0.45)
+            if iso_btn.any():
+                m = masks[iso_btn]
+                a = np.ones(iso_btn.sum(), dtype=np.intp)
+                for act in (5, 6, 4, 3):
+                    need = a == 1
+                    a[need & m[:, act]] = act
+                actions[iso_btn] = a
+                iso_done[iso_btn] = True
+
+            # SB iso-raise with top ~25%
+            is_sb   = (position >= 0.15) & (position <= 0.25)
+            iso_sb  = iso_spot & is_sb & (strength >= 0.58) & ~iso_done
+            if iso_sb.any():
+                m = masks[iso_sb]
+                a = np.ones(iso_sb.sum(), dtype=np.intp)
+                for act in (4, 5, 6):
+                    need = a == 1
+                    a[need & m[:, act]] = act
+                actions[iso_sb] = a
+                iso_done[iso_sb] = True
 
         # Tier 1: strength >= 0.72 — raise big
-        t1 = strength >= 0.72
+        t1 = (strength >= 0.72) & ~iso_done
         if t1.any():
             m = masks[t1]
             a = np.full(t1.sum(), 1, dtype=np.intp)
@@ -466,41 +558,46 @@ class SelfPlayWorker:
                 a[need & m[:, act]] = act
             actions[t1] = a
 
-        # Tier 2: 0.58-0.72 — raise cheap or call
-        t2 = (strength >= 0.58) & ~t1
+        # Tier 2: 0.58-0.72 — re-raise if positionally cheap, call up to 0.6 pot, fold to shoves
+        t2 = (strength >= 0.58) & ~(strength >= 0.72) & ~iso_done
         if t2.any():
             m = masks[t2]
-            tc = to_call[t2]
+            tc   = to_call[t2]       # position-based range selector
+            cc   = call_cost[t2]     # real call cost (to_call/pot)
             a = np.ones(t2.sum(), dtype=np.intp)
-            cheap = tc <= 0.20
+            cheap = tc <= 0.20       # positionally cheap → re-raise
             for act in (4, 3, 2, 1):
                 need = (a == 1) & cheap
                 a[need & m[:, act]] = act
-            # not cheap or no raise found: call if possible, else fold
+            # call if not expensive (< 60% pot); fold to shoves/overbets
             still_default = a == 1
-            a[still_default & m[:, 1]] = 1
-            a[still_default & ~m[:, 1] & m[:, 0]] = 0
+            can_call = still_default & (cc <= 0.60) & m[:, 1]
+            a[can_call] = 1
+            # fold anything that costs > 60% pot
+            must_fold = still_default & ~can_call & m[:, 0]
+            a[must_fold] = 0
+            # if can't fold either (shouldn't happen), call
+            a[still_default & ~can_call & ~m[:, 0] & m[:, 1]] = 1
             actions[t2] = a
 
-        # Tier 3: 0.48-0.58 — call only if very cheap
-        t3 = (strength >= 0.48) & ~t1 & ~t2
+        # Tier 3: 0.48-0.58 — call only if genuinely cheap (< 25% pot), else fold
+        t3 = (strength >= 0.48) & ~(strength >= 0.58) & ~iso_done
         if t3.any():
             m = masks[t3]
-            tc = to_call[t3]
+            cc = call_cost[t3]
             a = np.where(m[:, 0], 0, 1)  # default fold if possible
-            can_cheap_call = (tc <= 0.08) & m[:, 1]
+            can_cheap_call = (cc <= 0.25) & m[:, 1]
             a[can_cheap_call] = 1
-            # if can't fold, call
-            a[~m[:, 0] & m[:, 1]] = 1
+            a[~m[:, 0] & m[:, 1]] = 1   # if can't fold, call
             actions[t3] = a
 
-        # Tier 4: < 0.48 — fold unless near-free
-        t4 = ~t1 & ~t2 & ~t3
+        # Tier 4: < 0.48 — fold to anything but near-free checks
+        t4 = ~(strength >= 0.48) & ~iso_done
         if t4.any():
             m = masks[t4]
-            tc = to_call[t4]
+            cc = call_cost[t4]
             a = np.where(m[:, 0], 0, 1)  # default fold
-            can_cheap_call = (tc <= 0.02) & m[:, 1]
+            can_cheap_call = (cc <= 0.05) & m[:, 1]
             a[can_cheap_call] = 1
             a[~m[:, 0] & m[:, 1]] = 1
             actions[t4] = a
