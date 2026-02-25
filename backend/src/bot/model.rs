@@ -230,6 +230,12 @@ struct OpponentTracker {
     flop_marked: bool,
     /// Track dealer position for position-aware stats.
     last_dealer: usize,
+    /// Stack snapshot taken at the START of the current hand (before any betting).
+    /// Used to compute chip deltas at hand-end to correctly identify winners.
+    stacks_at_hand_start: Vec<i64>,
+    /// Folded state of each seat at the bot's LAST observation of the previous hand.
+    /// Used as a proxy for "reached showdown" since the bot only observes on its own turns.
+    prev_hand_folded: Vec<bool>,
 }
 
 impl OpponentTracker {
@@ -241,6 +247,8 @@ impl OpponentTracker {
             last_phase: GamePhase::Waiting,
             flop_marked: false,
             last_dealer: 0,
+            stacks_at_hand_start: Vec::new(),
+            prev_hand_folded: Vec::new(),
         }
     }
 
@@ -255,7 +263,11 @@ impl OpponentTracker {
 
         // Detect new hand: if action history got shorter, a new hand started
         if history.len() < self.last_hand_action_count {
-            // Finalize showdown stats for previous hand
+            // Finalize showdown stats for previous hand.
+            // At this point:
+            //   stacks_at_hand_start = stacks at start of the PREVIOUS hand
+            //   table.players[i].stack = stacks at start of THIS hand = result of previous hand
+            //   prev_hand_folded = folded state at bot's last observation of previous hand
             self.finalize_showdown(table);
 
             for s in &mut self.seats[..num_seats] {
@@ -264,6 +276,15 @@ impl OpponentTracker {
             }
             self.actions_seen = 0;
             self.flop_marked = false;
+
+            // Snapshot stacks at the START of the new hand (after pot has been distributed
+            // for the previous hand, before this hand's blinds are posted).
+            while self.stacks_at_hand_start.len() < num_seats {
+                self.stacks_at_hand_start.push(0);
+            }
+            for i in 0..num_seats {
+                self.stacks_at_hand_start[i] = table.players[i].stack;
+            }
 
             // Set position for each seat in the new hand
             let dealer = table.dealer_seat;
@@ -373,27 +394,54 @@ impl OpponentTracker {
         }
         self.actions_seen = history.len();
         self.last_phase = phase;
+
+        // Save current folded states so finalize_showdown() can use them
+        // as a proxy for "who was still in the hand at the bot's last observation."
+        while self.prev_hand_folded.len() < num_seats {
+            self.prev_hand_folded.push(false);
+        }
+        for i in 0..num_seats {
+            self.prev_hand_folded[i] = matches!(table.players[i].state, PlayerState::Folded);
+        }
     }
 
     /// Finalize showdown results from the previous hand.
+    ///
+    /// Called when a new hand is detected. At this moment:
+    ///   - `table.players[i].stack` = stacks at the START of the new hand
+    ///     (i.e. after the previous hand's pot has been distributed)
+    ///   - `self.stacks_at_hand_start[i]` = stacks at the START of the previous hand
+    ///   - `self.prev_hand_folded[i]` = folded state at the bot's last observation
+    ///     of the previous hand (our best proxy for "reached showdown")
     fn finalize_showdown(&mut self, table: &PokerTable) {
         let num_seats = table.players.len().min(self.seats.len());
-        // Check if previous hand ended in showdown by looking at how many
-        // players are still active (not folded). If >1, it was showdown.
-        // The winner detection is approximate since we track from observed data.
-        let active: Vec<usize> = (0..num_seats)
-            .filter(|&i| !matches!(table.players[i].state, PlayerState::Folded))
+
+        // Guard: need stack snapshot from the previous hand's start.
+        if self.stacks_at_hand_start.len() < num_seats {
+            return;
+        }
+
+        // Determine who was still active at the bot's last observation of the
+        // previous hand. ≥2 non-folded players means showdown likely occurred.
+        let prev_not_folded: Vec<usize> = (0..num_seats.min(self.prev_hand_folded.len()))
+            .filter(|&i| !self.prev_hand_folded[i])
             .collect();
-        if active.len() > 1 {
-            // Showdown occurred — determine winners by chip change
-            // (players whose stack increased or stayed same with side pots)
-            for &seat in &active {
-                // Approximate: player with most chips relative to start "won"
-                // This is imperfect but good enough for EMA stats
-                self.seats[seat].record_showdown(
-                    matches!(table.players[seat].state, PlayerState::Active | PlayerState::AllIn)
-                );
-            }
+
+        if prev_not_folded.len() < 2 {
+            // Only one player was left at our last observation → hand ended by fold,
+            // no showdown to record.
+            return;
+        }
+
+        // Compute chip delta for each seat:
+        //   delta > 0  → won chips (won the pot)
+        //   delta < 0  → lost chips (contributed to the pot, didn't win)
+        //   delta == 0 → wasn't in the hand (sat out / already eliminated)
+        for &seat in &prev_not_folded {
+            let delta = table.players[seat].stack - self.stacks_at_hand_start[seat];
+            // In a split pot delta could be 0 for one winner; treat non-negative as win.
+            let won = delta >= 0;
+            self.seats[seat].record_showdown(won);
         }
     }
 
