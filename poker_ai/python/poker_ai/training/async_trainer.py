@@ -374,17 +374,20 @@ class AsyncNFSPTrainer(NFSPTrainer):
                 # Update learning rates
                 self._update_lr()
 
-                # Start prefetchers once buffers have data (lazy init)
+                # Start prefetchers once buffers have data (lazy init).
+                # SamplerCache amortises the random-access cost of sampling
+                # from large buffers (7M+ entries) over cache_factor steps,
+                # reducing DRAM pressure on the self-play thread.
                 if self._br_prefetcher is None and self.use_cuda_transfer and len(self.br_buffer) > self.config.batch_size:
-                    from poker_ai.training.nfsp import BatchPrefetcher
+                    from poker_ai.training.nfsp import BatchPrefetcher, SamplerCache
                     self._br_prefetcher = BatchPrefetcher(
-                        lambda: self.br_buffer.sample_arrays(self.config.batch_size),
+                        SamplerCache(self.br_buffer, self.config.batch_size, cache_factor=8),
                         use_pinned=True,
                     )
                 if self._as_prefetcher is None and self.use_cuda_transfer and len(self.as_buffer) > self.config.batch_size:
-                    from poker_ai.training.nfsp import BatchPrefetcher
+                    from poker_ai.training.nfsp import BatchPrefetcher, SamplerCache
                     self._as_prefetcher = BatchPrefetcher(
-                        lambda: self.as_buffer.sample_arrays(self.config.batch_size),
+                        SamplerCache(self.as_buffer, self.config.batch_size, cache_factor=8),
                         use_pinned=True,
                     )
 

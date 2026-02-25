@@ -23,6 +23,36 @@ from poker_ai.training.reservoir import ReservoirBuffer
 from poker_ai.training.self_play import SelfPlayWorker, extract_static_features_batch, pad_action_history, make_action_record, _STATIC_COLS
 
 
+class SamplerCache:
+    """Amortizes expensive random-access buffer sampling over multiple calls.
+
+    Random reads into a large replay buffer (e.g. 7M entries × 12 GB) cause
+    DRAM cache-miss pressure that degrades the self-play thread's memory
+    bandwidth.  By sampling a mega-batch of `cache_factor × batch_size` rows
+    in one call and then serving sequential slices from it, the number of
+    cache-miss-heavy sample calls drops by cache_factor×, proportionally
+    reducing memory bandwidth contention.
+
+    Thread-safety: intended to be called from a single prefetcher thread.
+    """
+
+    def __init__(self, buffer, batch_size: int, cache_factor: int = 8):
+        self._buffer = buffer
+        self._batch_size = batch_size
+        self._mega_size = batch_size * cache_factor
+        self._cache: tuple | None = None
+        self._cursor = 0
+
+    def __call__(self) -> tuple:
+        if self._cache is None or self._cursor + self._batch_size > len(self._cache[0]):
+            self._cache = self._buffer.sample_arrays(self._mega_size)
+            self._cursor = 0
+        s = slice(self._cursor, self._cursor + self._batch_size)
+        result = tuple(arr[s] for arr in self._cache)
+        self._cursor += self._batch_size
+        return result
+
+
 class BatchPrefetcher:
     """Pre-samples batches in a background thread to overlap CPU/GPU work.
 
@@ -802,12 +832,12 @@ class NFSPTrainer:
             # Start prefetchers once buffers have data (lazy init)
             if self._br_prefetcher is None and self.use_cuda_transfer and len(self.br_buffer) > self.config.batch_size:
                 self._br_prefetcher = BatchPrefetcher(
-                    lambda: self.br_buffer.sample_arrays(self.config.batch_size),
+                    SamplerCache(self.br_buffer, self.config.batch_size, cache_factor=8),
                     use_pinned=True,
                 )
             if self._as_prefetcher is None and self.use_cuda_transfer and len(self.as_buffer) > self.config.batch_size:
                 self._as_prefetcher = BatchPrefetcher(
-                    lambda: self.as_buffer.sample_arrays(self.config.batch_size),
+                    SamplerCache(self.as_buffer, self.config.batch_size, cache_factor=8),
                     use_pinned=True,
                 )
 
