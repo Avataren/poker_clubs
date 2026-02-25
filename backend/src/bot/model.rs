@@ -751,8 +751,9 @@ impl BotStrategy for ModelStrategy {
         if tracing::enabled!(tracing::Level::DEBUG) {
             if let Some(player) = table.players.get(player_idx) {
                 if player.hole_cards.len() >= 2 {
-                    let preflop = preflop_strength(player.hole_cards[0], player.hole_cards[1]);
-                    if preflop > 0.85 {
+                    let num_opp = (table.players.len().saturating_sub(1)) as u8;
+                    let preflop = preflop_strength(player.hole_cards[0], player.hole_cards[1], num_opp);
+                    if preflop > 0.75 {  // threshold adjusted for multi-way scaling
                         tracing::debug!("Strong hand detected: preflop_strength={:.2}", preflop);
                     }
                 }
@@ -1192,6 +1193,14 @@ fn encode_game_state(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) 
     // Total: 6 + 8 + 8 + 24 = 46 (opponent stats appended separately by OpponentTracker)
 }
 
+/// Hand strength block layout (52 floats, matching training engine):
+///   [0]      hand_rank.normalized()       0 preflop; postflop rs_poker rank
+///   [1]      preflop_strength(N)          HU equity scaled to N opponents
+///   [2..8)   board_texture (6)            flush_draw, straight_draw, paired, trips, high_card, n_cards
+///   [8..10)  hero draw potential (2)      flush_draw, straight_draw (hero contributes ≥1 card)
+///   [10..19) hand category one-hot (9)    high_card…straight_flush (all 0 preflop)
+///   [19]     stack / (200 BB) clamped     explicit stack-depth signal
+///   [20..52) reserved zeros
 fn encode_hand_strength(table: &PokerTable, player_idx: usize, out: &mut Vec<f32>) {
     let mut hand = vec![0.0_f32; 52];
     let player = match table.players.get(player_idx) {
@@ -1202,13 +1211,39 @@ fn encode_hand_strength(table: &PokerTable, player_idx: usize, out: &mut Vec<f32
         }
     };
 
+    // [19] Stack in BB — always computed
+    let stack = player.stack.max(0) as f32;
+    let bb = table.big_blind.max(1) as f32;
+    hand[19] = (stack / bb).min(200.0) / 200.0;
+
     if player.hole_cards.len() >= 2 {
-        if player.hole_cards.len() + table.community_cards.len() >= 5 {
-            let rank = evaluate_hand(&player.hole_cards, &table.community_cards);
+        let hole = &player.hole_cards;
+        let community = &table.community_cards;
+        let num_players = table.players.len().max(2);
+        let num_opponents = (num_players - 1) as u8;
+
+        // [0] Current made-hand rank (postflop only)
+        if hole.len() + community.len() >= 5 {
+            let rank = evaluate_hand(hole, community);
             hand[0] = rank.normalized();
+            // [10..19) Hand category one-hot: 0=high_card … 8=straight_flush
+            let cat = rank.rank_value.max(0) as usize;
+            if cat < 9 {
+                hand[10 + cat] = 1.0;
+            }
         }
 
-        hand[1] = preflop_strength(player.hole_cards[0], player.hole_cards[1]);
+        // [1] Preflop hand equity scaled to num_opponents (169-hand lookup)
+        hand[1] = preflop_strength(hole[0], hole[1], num_opponents);
+
+        // [2..8) Board texture
+        let bt = board_texture(community);
+        hand[2..8].copy_from_slice(&bt);
+
+        // [8..10) Hero draw potential
+        let draws = hero_draws(&hole[..2], community);
+        hand[8]  = draws[0]; // flush draw
+        hand[9]  = draws[1]; // straight draw
     }
 
     out.extend_from_slice(&hand);
@@ -1218,43 +1253,159 @@ fn card_index(card: &Card) -> usize {
     (card.suit as usize) * 13 + (card.rank as usize - 2)
 }
 
-fn preflop_strength(c1: Card, c2: Card) -> f32 {
+/// Preflop hand equity vs. a single random opponent, scaled for N opponents.
+/// Uses the standard independent-opponents approximation:
+///   equity_N = hu_equity / (hu_equity + N × (1 − hu_equity))
+/// Covers all 169 canonical hand types (HU equity from PokerStove simulations).
+fn preflop_strength(c1: Card, c2: Card, num_opponents: u8) -> f32 {
     let high = c1.rank.max(c2.rank);
-    let low = c1.rank.min(c2.rank);
+    let low  = c1.rank.min(c2.rank);
     let suited = c1.suit == c2.suit;
-    let pair = c1.rank == c2.rank;
 
-    let tier = if pair {
+    let hu: f32 = if high == low {
         match high {
-            14 | 13 | 12 => 0,
-            11 | 10 => 1,
-            9 | 8 => 2,
-            7 | 6 => 3,
-            5 | 4 => 4,
-            _ => 5,
+            14 => 0.849, 13 => 0.821, 12 => 0.796, 11 => 0.771, 10 => 0.751,
+             9 => 0.717,  8 => 0.690,  7 => 0.663,  6 => 0.634,  5 => 0.603,
+             4 => 0.572,  3 => 0.536,  _ => 0.503,
         }
     } else if suited {
         match (high, low) {
-            (14, 13) => 0,
-            (14, 12) | (14, 11) => 1,
-            (14, 10) | (13, 12) | (13, 11) | (12, 11) => 2,
-            (14, _) | (13, 10) | (12, 10) | (11, 10) | (10, 9) => 3,
-            (13, lo) if lo >= 7 => 4,
-            (_, _) if high - low <= 2 && high >= 7 => 4,
-            _ => 5 + (14 - high) as u8 / 3,
+            (14,13)=>0.662,(14,12)=>0.654,(14,11)=>0.649,(14,10)=>0.643,
+            (14, 9)=>0.627,(14, 8)=>0.623,(14, 7)=>0.621,(14, 6)=>0.617,
+            (14, 5)=>0.625,(14, 4)=>0.621,(14, 3)=>0.616,(14, 2)=>0.610,
+            (13,12)=>0.634,(13,11)=>0.626,(13,10)=>0.619,(13, 9)=>0.601,
+            (13, 8)=>0.588,(13, 7)=>0.582,(13, 6)=>0.576,(13, 5)=>0.570,
+            (13, 4)=>0.565,(13, 3)=>0.560,(13, 2)=>0.555,
+            (12,11)=>0.603,(12,10)=>0.595,(12, 9)=>0.579,(12, 8)=>0.567,
+            (12, 7)=>0.553,(12, 6)=>0.548,(12, 5)=>0.542,(12, 4)=>0.537,
+            (12, 3)=>0.531,(12, 2)=>0.526,
+            (11,10)=>0.579,(11, 9)=>0.562,(11, 8)=>0.548,(11, 7)=>0.533,
+            (11, 6)=>0.520,(11, 5)=>0.513,(11, 4)=>0.507,(11, 3)=>0.501,(11, 2)=>0.495,
+            (10, 9)=>0.548,(10, 8)=>0.533,(10, 7)=>0.518,(10, 6)=>0.503,
+            (10, 5)=>0.488,(10, 4)=>0.482,(10, 3)=>0.476,(10, 2)=>0.469,
+            ( 9, 8)=>0.517,( 9, 7)=>0.502,( 9, 6)=>0.488,( 9, 5)=>0.472,
+            ( 9, 4)=>0.464,( 9, 3)=>0.458,( 9, 2)=>0.452,
+            ( 8, 7)=>0.486,( 8, 6)=>0.471,( 8, 5)=>0.455,( 8, 4)=>0.447,
+            ( 8, 3)=>0.441,( 8, 2)=>0.434,
+            ( 7, 6)=>0.455,( 7, 5)=>0.440,( 7, 4)=>0.424,( 7, 3)=>0.416,( 7, 2)=>0.410,
+            ( 6, 5)=>0.436,( 6, 4)=>0.419,( 6, 3)=>0.411,( 6, 2)=>0.404,
+            ( 5, 4)=>0.420,( 5, 3)=>0.403,( 5, 2)=>0.394,
+            ( 4, 3)=>0.388,( 4, 2)=>0.380,
+            ( 3, 2)=>0.365,
+            _ => 0.40,
         }
     } else {
         match (high, low) {
-            (14, 13) => 1,
-            (14, 12) => 2,
-            (14, 11) | (14, 10) => 3,
-            (13, 12) | (13, 11) | (12, 11) => 4,
-            (13, 10) | (12, 10) | (11, 10) => 5,
-            _ => 6 + (14 - high) as u8 / 2,
+            (14,13)=>0.645,(14,12)=>0.637,(14,11)=>0.629,(14,10)=>0.621,
+            (14, 9)=>0.604,(14, 8)=>0.599,(14, 7)=>0.594,(14, 6)=>0.590,
+            (14, 5)=>0.596,(14, 4)=>0.590,(14, 3)=>0.585,(14, 2)=>0.578,
+            (13,12)=>0.614,(13,11)=>0.606,(13,10)=>0.596,(13, 9)=>0.577,
+            (13, 8)=>0.563,(13, 7)=>0.557,(13, 6)=>0.550,(13, 5)=>0.544,
+            (13, 4)=>0.539,(13, 3)=>0.533,(13, 2)=>0.527,
+            (12,11)=>0.581,(12,10)=>0.570,(12, 9)=>0.553,(12, 8)=>0.540,
+            (12, 7)=>0.525,(12, 6)=>0.519,(12, 5)=>0.513,(12, 4)=>0.507,
+            (12, 3)=>0.502,(12, 2)=>0.497,
+            (11,10)=>0.555,(11, 9)=>0.537,(11, 8)=>0.522,(11, 7)=>0.506,
+            (11, 6)=>0.492,(11, 5)=>0.485,(11, 4)=>0.479,(11, 3)=>0.473,(11, 2)=>0.467,
+            (10, 9)=>0.525,(10, 8)=>0.509,(10, 7)=>0.493,(10, 6)=>0.478,
+            (10, 5)=>0.463,(10, 4)=>0.456,(10, 3)=>0.450,(10, 2)=>0.444,
+            ( 9, 8)=>0.494,( 9, 7)=>0.478,( 9, 6)=>0.463,( 9, 5)=>0.447,
+            ( 9, 4)=>0.439,( 9, 3)=>0.433,( 9, 2)=>0.427,
+            ( 8, 7)=>0.463,( 8, 6)=>0.447,( 8, 5)=>0.430,( 8, 4)=>0.422,
+            ( 8, 3)=>0.416,( 8, 2)=>0.409,
+            ( 7, 6)=>0.431,( 7, 5)=>0.416,( 7, 4)=>0.399,( 7, 3)=>0.391,( 7, 2)=>0.384,
+            ( 6, 5)=>0.410,( 6, 4)=>0.392,( 6, 3)=>0.384,( 6, 2)=>0.377,
+            ( 5, 4)=>0.393,( 5, 3)=>0.376,( 5, 2)=>0.368,
+            ( 4, 3)=>0.360,( 4, 2)=>0.353,
+            ( 3, 2)=>0.337,
+            _ => 0.38,
         }
     };
+    let n = num_opponents.max(1) as f32;
+    hu / (hu + n * (1.0 - hu))
+}
 
-    (0.95 - tier as f32 * 0.10).clamp(0.05, 0.95)
+/// Board texture features (6 floats) — mirrors training engine hand_eval_features::board_texture.
+fn board_texture(community: &[Card]) -> [f32; 6] {
+    if community.is_empty() {
+        return [0.0; 6];
+    }
+    let mut suit_counts = [0u8; 4];
+    let mut rank_counts = [0u8; 15];
+    for c in community {
+        suit_counts[c.suit as usize] += 1;
+        rank_counts[c.rank as usize] += 1;
+    }
+    let max_suit = *suit_counts.iter().max().unwrap_or(&0);
+    let flush_draw = if max_suit >= 4 { 1.0 } else if max_suit >= 3 { 0.5 } else { 0.0 };
+
+    let paired = rank_counts.iter().filter(|&&c| c >= 2).count() as f32;
+    let trips  = rank_counts.iter().filter(|&&c| c >= 3).count() as f32;
+
+    let mut max_consec = 0u8;
+    let mut run = 0u8;
+    for rank in 2..=14usize {
+        if rank_counts[rank] > 0 { run += 1; max_consec = max_consec.max(run); }
+        else { run = 0; }
+    }
+    if rank_counts[14] > 0 {
+        let mut low = 1u8;
+        for rank in 2..=5usize { if rank_counts[rank] > 0 { low += 1; } else { break; } }
+        max_consec = max_consec.max(low);
+    }
+    let straight_draw = if max_consec >= 5 { 1.0 } else if max_consec >= 4 { 0.7 }
+                        else if max_consec >= 3 { 0.3 } else { 0.0 };
+
+    let high_card = community.iter().map(|c| c.rank).max().unwrap_or(0) as f32 / 14.0;
+    let num_cards = community.len() as f32 / 5.0;
+
+    [flush_draw, straight_draw, paired / 5.0, trips / 5.0, high_card, num_cards]
+}
+
+/// Hero draw potential (2 floats) — mirrors training engine hand_eval_features::hero_draws.
+/// Returns [flush_draw, straight_draw]; hero must contribute ≥1 card to each draw.
+fn hero_draws(hole: &[Card], community: &[Card]) -> [f32; 2] {
+    // Flush draw
+    let mut flush = 0.0f32;
+    for suit in 0u8..4 {
+        let hc = hole.iter().filter(|c| c.suit == suit).count();
+        if hc == 0 { continue; }
+        let bc = community.iter().filter(|c| c.suit == suit).count();
+        let score = match hc + bc {
+            4.. => 1.0, 3 => 0.5,
+            2 if community.is_empty() => 0.25,
+            _ => 0.0,
+        };
+        flush = flush.max(score);
+    }
+
+    // Straight draw — rank bitmap with ace-low alias
+    let mut rank_bits = 0u32;
+    for c in hole.iter().chain(community.iter()) {
+        rank_bits |= 1u32 << c.rank;
+        if c.rank == 14 { rank_bits |= 1u32 << 1; }
+    }
+    let mut hero_bits = 0u32;
+    for c in hole.iter() {
+        hero_bits |= 1u32 << c.rank;
+        if c.rank == 14 { hero_bits |= 1u32 << 1; }
+    }
+    let mut straight = 0.0f32;
+    for start in 1u32..=10 {
+        let window = 0b1_1111u32 << start;
+        if hero_bits & window == 0 { continue; }
+        let present = rank_bits & window;
+        let score = match present.count_ones() {
+            5 => 1.0,
+            4 => { let m = window ^ present; let lo = 1u32<<start; let hi = 1u32<<(start+4);
+                   if m==lo || m==hi { 1.0 } else { 0.5 } }
+            3 => 0.25,
+            _ => 0.0,
+        };
+        straight = straight.max(score);
+    }
+
+    [flush, straight]
 }
 
 #[cfg(test)]
