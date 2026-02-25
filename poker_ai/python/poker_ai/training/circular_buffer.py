@@ -139,21 +139,24 @@ class CircularBuffer:
         Returns: (obs, ah, ah_len, actions, rewards, next_obs, next_ah,
                   next_ah_len, next_mask, dones, masks)
         """
+        # Only hold the lock to snapshot size; expensive fancy-indexing is
+        # done outside so push_batch in the self-play thread is not blocked.
         with self._lock:
-            indices = np.random.randint(0, self.size, size=batch_size)
-            return (
-                self.obs[indices].astype(np.float32),
-                self.action_history[indices].astype(np.float32),
-                self.history_length[indices].copy(),
-                self.actions[indices].copy(),
-                self.rewards[indices].astype(np.float32),
-                self.next_obs[indices].astype(np.float32),
-                self.next_action_history[indices].astype(np.float32),
-                self.next_history_length[indices].copy(),
-                self.next_legal_mask[indices].copy(),
-                self.dones[indices].astype(np.float32),
-                self.legal_mask[indices].copy(),
-            )
+            current_size = self.size
+        indices = np.random.randint(0, current_size, size=batch_size)
+        return (
+            self.obs[indices].astype(np.float32),
+            self.action_history[indices].astype(np.float32),
+            self.history_length[indices].copy(),
+            self.actions[indices].copy(),
+            self.rewards[indices].astype(np.float32),
+            self.next_obs[indices].astype(np.float32),
+            self.next_action_history[indices].astype(np.float32),
+            self.next_history_length[indices].copy(),
+            self.next_legal_mask[indices].copy(),
+            self.dones[indices].astype(np.float32),
+            self.legal_mask[indices].copy(),
+        )
 
     def sample(self, batch_size: int) -> list[Transition]:
         """Sample transitions (legacy API)."""

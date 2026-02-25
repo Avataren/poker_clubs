@@ -125,15 +125,21 @@ class ReservoirBuffer:
         Returns float32 arrays for GPU training (stored as float16 internally).
         Returns: (obs, ah, ah_len, actions, masks)
         """
+        # Only hold the lock long enough to snapshot size and generate indices.
+        # The expensive numpy fancy-indexing (random reads across a potentially
+        # multi-GB array) is done outside the lock so push_batch in the
+        # self-play thread is not blocked during sampling.  An occasional stale
+        # read of a slot being concurrently overwritten is harmless for training.
         with self._lock:
-            indices = np.random.randint(0, self.size, size=batch_size)
-            return (
-                self.obs[indices].astype(np.float32),
-                self.action_history[indices].astype(np.float32),
-                self.history_length[indices].copy(),
-                self.actions[indices].copy(),
-                self.legal_mask[indices].copy(),
-            )
+            current_size = self.size
+        indices = np.random.randint(0, current_size, size=batch_size)
+        return (
+            self.obs[indices].astype(np.float32),
+            self.action_history[indices].astype(np.float32),
+            self.history_length[indices].copy(),
+            self.actions[indices].copy(),
+            self.legal_mask[indices].copy(),
+        )
 
     def sample(self, batch_size: int) -> list[SLTransition]:
         """Sample transitions (legacy API)."""
