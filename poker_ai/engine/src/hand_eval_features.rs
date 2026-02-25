@@ -1,22 +1,26 @@
 use crate::card::Card;
 
-/// Preflop hand equity vs. a single random opponent (heads-up equity).
+/// Preflop hand equity scaled for the actual number of opponents.
 ///
 /// Covers all 169 canonical hand types (13 pairs + 78 suited + 78 offsuit).
-/// Values are from PokerStove/Equilab simulations expressed as win-probability
-/// fractions in [0.337, 0.849].  This replaces the old 6-tier coarse system
-/// (0.45–0.95) which collapsed 169 hands into only 6 buckets and caused
-/// premium preflop hands to map numerically to the same range as strong
-/// postflop made hands (flush, full house).
+/// Base values are heads-up equity vs. one random opponent from
+/// PokerStove/Equilab simulations.  These are then scaled to reflect
+/// multi-way equity using the standard independent-opponents approximation:
 ///
-/// Using real equity values gives the network 169 distinct, ordered inputs
-/// that reflect the true relative strength of every starting hand.
-pub fn preflop_strength(c1: Card, c2: Card) -> f32 {
+///   equity_N = hu_equity / (hu_equity + N × (1 − hu_equity))
+///
+/// where N = `num_opponents`.  This recovers the raw HU value when N=1,
+/// and gives sensible multi-way estimates for 6-max (N=5) or 9-max (N=8),
+/// e.g. AA: HU=0.849, 6-max≈0.529, 9-max≈0.399; 72o: HU=0.384, 6-max≈0.111.
+///
+/// This replaces the old 6-tier coarse system (0.45–0.95) which collapsed
+/// 169 hands into only 6 buckets and was not adjusted for player count.
+pub fn preflop_strength(c1: Card, c2: Card, num_opponents: u8) -> f32 {
     let high = c1.rank.max(c2.rank);
     let low  = c1.rank.min(c2.rank);
     let suited = c1.suit == c2.suit;
 
-    if high == low {
+    let hu_equity: f32 = if high == low {
         // ── Pocket pairs ─────────────────────────────────────────────────
         match high {
             14 => 0.849, // AA
@@ -223,7 +227,13 @@ pub fn preflop_strength(c1: Card, c2: Card) -> f32 {
             ( 3,  2) => 0.337, // 32o
             _ => 0.38,
         }
-    }
+    };
+
+    // Scale HU equity to multi-way equity using the independent-opponents
+    // approximation: equity_N = p / (p + N*(1-p))
+    // N=1 → unchanged; N=5 (6-max) → AA 0.849→0.529; N=8 (9-max) → AA 0.849→0.399
+    let n = num_opponents.max(1) as f32;
+    hu_equity / (hu_equity + n * (1.0 - hu_equity))
 }
 
 /// Board texture features (flush draws, straight draws, pairing).
@@ -307,21 +317,21 @@ mod tests {
         Card::new(rank, suit)
     }
 
-    // ── Pocket pair ordering ──────────────────────────────────────────────
+    // ── Pocket pair ordering (6-max) ──────────────────────────────────────
 
     #[test]
     fn test_pairs_descending() {
-        let aa = preflop_strength(card(14, 0), card(14, 1));
-        let kk = preflop_strength(card(13, 0), card(13, 1));
-        let qq = preflop_strength(card(12, 0), card(12, 1));
-        let jj = preflop_strength(card(11, 0), card(11, 1));
-        let tt = preflop_strength(card(10, 0), card(10, 1));
-        let twos = preflop_strength(card(2, 0), card(2, 1));
+        let aa   = preflop_strength(card(14, 0), card(14, 1), 5);
+        let kk   = preflop_strength(card(13, 0), card(13, 1), 5);
+        let qq   = preflop_strength(card(12, 0), card(12, 1), 5);
+        let jj   = preflop_strength(card(11, 0), card(11, 1), 5);
+        let tt   = preflop_strength(card(10, 0), card(10, 1), 5);
+        let twos = preflop_strength(card(2,  0), card(2,  1), 5);
 
-        assert!(aa > kk, "AA > KK");
-        assert!(kk > qq, "KK > QQ");
-        assert!(qq > jj, "QQ > JJ");
-        assert!(jj > tt, "JJ > TT");
+        assert!(aa > kk,   "AA > KK");
+        assert!(kk > qq,   "KK > QQ");
+        assert!(qq > jj,   "QQ > JJ");
+        assert!(jj > tt,   "JJ > TT");
         assert!(tt > twos, "TT > 22");
     }
 
@@ -329,19 +339,16 @@ mod tests {
 
     #[test]
     fn test_suited_beats_offsuit_same_ranks() {
-        // AK
-        let aks = preflop_strength(card(14, 0), card(13, 0));
-        let ako = preflop_strength(card(14, 0), card(13, 1));
+        let aks = preflop_strength(card(14, 0), card(13, 0), 5);
+        let ako = preflop_strength(card(14, 0), card(13, 1), 5);
         assert!(aks > ako, "AKs > AKo: {} vs {}", aks, ako);
 
-        // JT
-        let jts = preflop_strength(card(11, 2), card(10, 2));
-        let jto = preflop_strength(card(11, 2), card(10, 3));
+        let jts = preflop_strength(card(11, 2), card(10, 2), 5);
+        let jto = preflop_strength(card(11, 2), card(10, 3), 5);
         assert!(jts > jto, "JTs > JTo: {} vs {}", jts, jto);
 
-        // 72
-        let s72 = preflop_strength(card(7, 1), card(2, 1));
-        let o72 = preflop_strength(card(7, 1), card(2, 2));
+        let s72 = preflop_strength(card(7, 1), card(2, 1), 5);
+        let o72 = preflop_strength(card(7, 1), card(2, 2), 5);
         assert!(s72 > o72, "72s > 72o: {} vs {}", s72, o72);
     }
 
@@ -349,16 +356,19 @@ mod tests {
 
     #[test]
     fn test_aa_much_stronger_than_72o() {
-        let aa  = preflop_strength(card(14, 0), card(14, 1));
-        let o72 = preflop_strength(card(7, 0), card(2, 1));
-        assert!(aa > o72 + 0.40, "AA equity should be >0.40 above 72o: AA={} 72o={}", aa, o72);
+        // Ordering must hold for HU, 6-max, and 9-max
+        for n in [1u8, 5, 8] {
+            let aa  = preflop_strength(card(14, 0), card(14, 1), n);
+            let o72 = preflop_strength(card(7,  0), card(2,  1), n);
+            assert!(aa > o72, "AA > 72o with {} opponents (AA={:.3} 72o={:.3})", n, aa, o72);
+        }
     }
 
-    // ── Value range ────────────────────────────────────────────────────────
+    // ── Value range across player counts ──────────────────────────────────
 
     #[test]
     fn test_all_values_in_range() {
-        let all_hands = [
+        let all_hands: &[(u8, u8, u8)] = &[
             // Pairs
             (14, 14, 0), (13, 13, 0), (12, 12, 0), (11, 11, 0),
             (10, 10, 0), (9, 9, 0), (8, 8, 0), (7, 7, 0),
@@ -368,13 +378,52 @@ mod tests {
             // Offsuit
             (14, 13, 1), (14, 2, 1), (7, 2, 1), (3, 2, 1),
         ];
-        for (h, l, suit_offset) in all_hands {
-            let v = preflop_strength(card(h, 0), card(l, suit_offset));
-            assert!(
-                v >= 0.30 && v <= 0.90,
-                "preflop_strength({},{},suited={}) = {} out of [0.30,0.90]",
-                h, l, suit_offset == 0, v
-            );
+        for n in [1u8, 5, 8] {
+            for &(h, l, suit_offset) in all_hands {
+                let v = preflop_strength(card(h, 0), card(l, suit_offset), n);
+                assert!(
+                    v > 0.0 && v < 1.0,
+                    "n={} hand ({},{},suited={}) = {} out of (0,1)",
+                    n, h, l, suit_offset == 0, v
+                );
+            }
+        }
+    }
+
+    // ── Multi-way scaling: more opponents → lower equity ──────────────────
+
+    #[test]
+    fn test_multiway_scaling() {
+        let aa_hu   = preflop_strength(card(14, 0), card(14, 1), 1);
+        let aa_6max = preflop_strength(card(14, 0), card(14, 1), 5);
+        let aa_9max = preflop_strength(card(14, 0), card(14, 1), 8);
+
+        // More opponents → lower equity
+        assert!(aa_hu > aa_6max, "AA HU > AA 6-max: {} vs {}", aa_hu, aa_6max);
+        assert!(aa_6max > aa_9max, "AA 6-max > AA 9-max: {} vs {}", aa_6max, aa_9max);
+
+        // HU recovers the base equity
+        assert!((aa_hu - 0.849).abs() < 1e-5, "AA HU should equal base 0.849");
+
+        // Rough sanity: 6-max AA ≈ 0.529
+        assert!((aa_6max - 0.529).abs() < 0.01,
+            "AA 6-max ≈ 0.529, got {:.4}", aa_6max);
+    }
+
+    // ── Ordering preserved across player counts ───────────────────────────
+
+    #[test]
+    fn test_ordering_preserved_multiway() {
+        for n in [1u8, 5, 8] {
+            let aa  = preflop_strength(card(14, 0), card(14, 1), n);
+            let kk  = preflop_strength(card(13, 0), card(13, 1), n);
+            let aks = preflop_strength(card(14, 0), card(13, 0), n);
+            let ako = preflop_strength(card(14, 0), card(13, 1), n);
+            let o72 = preflop_strength(card(7,  0), card(2,  1), n);
+            assert!(aa > kk,  "n={}: AA > KK", n);
+            assert!(kk > aks, "n={}: KK > AKs", n);
+            assert!(aks > ako,"n={}: AKs > AKo", n);
+            assert!(ako > o72,"n={}: AKo > 72o", n);
         }
     }
 
@@ -382,39 +431,33 @@ mod tests {
 
     #[test]
     fn test_card_order_symmetric() {
-        // Passing c1/c2 in either order should give the same result
-        let v1 = preflop_strength(card(14, 0), card(13, 1));
-        let v2 = preflop_strength(card(13, 1), card(14, 0));
-        assert_eq!(v1, v2, "AKo should be symmetric: {} vs {}", v1, v2);
+        let v1 = preflop_strength(card(14, 0), card(13, 1), 5);
+        let v2 = preflop_strength(card(13, 1), card(14, 0), 5);
+        assert_eq!(v1, v2, "AKo should be symmetric");
 
-        let v3 = preflop_strength(card(9, 0), card(9, 1));
-        let v4 = preflop_strength(card(9, 1), card(9, 0));
+        let v3 = preflop_strength(card(9, 0), card(9, 1), 5);
+        let v4 = preflop_strength(card(9, 1), card(9, 0), 5);
         assert_eq!(v3, v4, "99 should be symmetric");
     }
 
-    // ── Specific known values ─────────────────────────────────────────────
+    // ── HU known equity values ────────────────────────────────────────────
 
     #[test]
-    fn test_known_equity_values() {
-        // AA
-        assert_eq!(preflop_strength(card(14, 0), card(14, 1)), 0.849);
-        // 72o (worst hand)
-        assert_eq!(preflop_strength(card(7, 0), card(2, 1)), 0.384);
-        // 32o (absolute worst by rank)
-        assert_eq!(preflop_strength(card(3, 0), card(2, 1)), 0.337);
-        // AKs
-        assert_eq!(preflop_strength(card(14, 0), card(13, 0)), 0.662);
-        // AKo
-        assert_eq!(preflop_strength(card(14, 0), card(13, 1)), 0.645);
+    fn test_known_hu_equity_values() {
+        // At num_opponents=1 the formula returns the raw HU equity unchanged
+        assert_eq!(preflop_strength(card(14, 0), card(14, 1), 1), 0.849); // AA
+        assert_eq!(preflop_strength(card(7,  0), card(2,  1), 1), 0.384); // 72o
+        assert_eq!(preflop_strength(card(3,  0), card(2,  1), 1), 0.337); // 32o
+        assert_eq!(preflop_strength(card(14, 0), card(13, 0), 1), 0.662); // AKs
+        assert_eq!(preflop_strength(card(14, 0), card(13, 1), 1), 0.645); // AKo
     }
 
     // ── A5s wheel bonus ────────────────────────────────────────────────────
 
     #[test]
     fn test_a5s_wheel_bonus() {
-        // A5s (0.625) should beat A6s (0.617) due to wheel potential
-        let a5s = preflop_strength(card(14, 0), card(5, 0));
-        let a6s = preflop_strength(card(14, 0), card(6, 0));
+        let a5s = preflop_strength(card(14, 0), card(5, 0), 5);
+        let a6s = preflop_strength(card(14, 0), card(6, 0), 5);
         assert!(a5s > a6s, "A5s={} should > A6s={} (wheel potential)", a5s, a6s);
     }
 

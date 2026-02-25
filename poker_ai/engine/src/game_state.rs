@@ -1113,9 +1113,11 @@ impl SimTable {
                 features[658] = hand_rank.normalized();
             }
             // Preflop strength
+            let num_opponents = (self.num_players.saturating_sub(1)) as u8;
             features[659] = crate::hand_eval_features::preflop_strength(
                 self.hole_cards[seat][0],
                 self.hole_cards[seat][1],
+                num_opponents,
             );
         }
     }
