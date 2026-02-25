@@ -324,8 +324,13 @@ impl OpponentTracker {
             let is_fold = action_idx == 0;
             let is_call = action_idx == 1;
             let is_raise = action_idx >= 2;
-            let facing_bet = is_fold || is_call || (is_raise && table.current_bet > 0);
             let bet_ratio = (rec[10] as f64).min(10.0);
+            // Use the actual bet_ratio to distinguish calls from checks (check = 0 cost)
+            // and to detect whether a raise was facing a prior bet.
+            // This matches the training engine which computes facing_bet as
+            // (current_bet > player_bets[seat]) at the exact moment of the action.
+            // Note: folds always face a bet (you can only fold when facing a raise/bet).
+            let facing_bet = is_fold || ((is_call || is_raise) && bet_ratio > 0.01);
 
             let stats = &mut self.seats[actor];
             let is_preflop = matches!(phase, GamePhase::PreFlop);
